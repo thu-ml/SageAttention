@@ -52,7 +52,7 @@ Support for `head_dim` values of 64 and 128 is currently available. Extended sup
 ### Example
 We will take [Cogvideo](https://github.com/THUDM/CogVideo/tree/main) as an example:
 
-Once you have set up the environment for cogvideoX's SAT and can generate videos, you can plug SageAttention and play easily by replacing lines 66-73 in CogVideo/sat/sat/transformer_defaults.py:
+Once you have set up the environment for cogvideoX's SAT and can generate videos, you can plug SageAttention and play easily by replacing lines 66-72 in CogVideo/sat/sat/transformer_defaults.py:
 
 
 ```python
