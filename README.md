@@ -32,7 +32,7 @@ Or you can install using pip:  (coming soon)
 pip install sageattention  
 ```
 
-
+> **Note:** SageAttention is currently optimized for RTX4090 and RTX3090 GPUs. Performance improvements may not be significant on other GPU architectures. We will progressively extend support to other GPUs.
 
 
 ## How to use
