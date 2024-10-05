@@ -27,7 +27,7 @@ Compile from source:
 cd sageattention 
 pip install .
 ```
-Or you can install using pip:  (coming soon)  
+Or you can install using pip:  
 ```
 python3 -m pip install sageattention --index-url https://pypi.org/simple/
 ```
