@@ -22,15 +22,17 @@ We recommend to install:
 
 
 ## Installation
-Compile from source:
+Install using pip:  
+```
+pip install sageattention -i https://pypi.org/simple/
+```
+
+Or compiling from source:
 ```
 cd sageattention 
 pip install .
 ```
-Or you can install using pip:  
-```
-pip install sageattention -i https://pypi.org/simple/
-```
+
 
 > **Note:** SageAttention is currently optimized for RTX4090 and RTX3090 GPUs. Performance improvements may not be significant on other GPU architectures. We will progressively extend support to other GPUs.
 
@@ -40,10 +42,10 @@ pip install sageattention -i https://pypi.org/simple/
 from sageattention import sageattn
 attn_output = sageattn(q, k, v, is_causal=False, smooth_k=True)
 ```
-`q, k, v` are FP16 data type with the shape `(batch_size, head_num, seq_len, head_dim)`. The parameter is_causal determines the use of a causal mask. `smooth_k` is a technique we proposed to ensure the accuracy. Disabling `smooth_k` might slightly increase speed, but could compromise accuracy if the distribution of `q, k, v` is irregular.
+`q, k, v` are FP16 type with the shape `(batch_size, head_num, seq_len, head_dim)`. `is_causal` determines the use of a causal mask. `smooth_k` is a technique we proposed to ensure the accuracy. Disabling `smooth_k` might slightly increase speed, but could compromise accuracy if the distribution of `q, k, v` is irregular.
 
-> **Note:** sageattn() is a accurate implementation that integrating smoothing K, INT8 per-block quantization for `q, k`, and a FP16 accumulator for Matmul of $PV$. 
-Support for `head_dim` values of 64 and 128 is currently available. Extended support for values 48, 72, 96, and 256 will be available soon.
+> **Note:** sageattn() is an accurate implementation that integrating smoothing K, INT8 per-block quantization for `q, k`, and a FP16 accumulator for Matmul of $PV$. 
+Support for `head_dim` values of `64` and `128` is currently available. Extended support for values 48, 72, 96, and 256 will be available soon.
 
 
 
