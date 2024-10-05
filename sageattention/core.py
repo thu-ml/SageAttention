@@ -9,7 +9,7 @@ from .attn_qk_int8_per_block_hd64_causal import forward as attn_h64_true
 from .attn_qk_int8_per_block_hd128_causal import forward as attn_h128_true
 
 
-def attention(q, k, v, is_causal=False, smooth_k=True):
+def sageattn(q, k, v, is_causal=False, smooth_k=True):
     q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
     if smooth_k:
         k -= k.mean(dim=-2, keepdim=True)
