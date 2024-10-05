@@ -29,7 +29,7 @@ pip install .
 ```
 Or you can install using pip:  
 ```
-python3 -m pip install sageattention --index-url https://pypi.org/simple/
+pip install sageattention -i https://pypi.org/simple/
 ```
 
 > **Note:** SageAttention is currently optimized for RTX4090 and RTX3090 GPUs. Performance improvements may not be significant on other GPU architectures. We will progressively extend support to other GPUs.
