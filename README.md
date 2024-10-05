@@ -87,7 +87,7 @@ with context:
 
 ![Local Image](./resource/3090_hd64.png)
 
-
+> **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing K.
 
 ### End-to-end performance
 ![Local Image](./resource/real_speedup.png)
