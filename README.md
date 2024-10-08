@@ -52,9 +52,10 @@ Support for `head_dim` values of `64`, `96`, and `128` is currently available. E
 
 
 ### Example
+**We can replace `scaled_dot_product_attention` easily.**  
 We will take [Cogvideo](https://huggingface.co/THUDM/CogVideoX-2b) as an example:
 
-Just add the following codes and run!
+**Just add the following codes and run!**
 ```python
 from sageattention import sageattn
 import torch.nn.functional as F
@@ -66,10 +67,10 @@ Specifically,
 
 ```bash
 cd example
-python sageattn_cogvideo
+python sageattn_cogvideo.py
 ```
 
-You can get a lossless video in `./example` faster than by using `python original_cogvideo`.
+**You can get a lossless video in `./example` faster than by using `python original_cogvideo`.**
 
 
 ## Performance
