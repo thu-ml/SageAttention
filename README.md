@@ -24,7 +24,7 @@ We recommend to install:
 ## Installation
 Install using pip:  
 ```
-pip install sageattention==1.0.0 -i https://pypi.org/simple/
+pip install sageattention==1.0.1 -i https://pypi.org/simple/
 ```
 
 Or compiling from source:
@@ -52,31 +52,24 @@ Support for `head_dim` values of `64`, `96`, and `128` is currently available. E
 
 
 ### Example
-We will take [Cogvideo](https://github.com/THUDM/CogVideo/tree/main) as an example:
+We will take [Cogvideo](https://huggingface.co/THUDM/CogVideoX-2b) as an example:
 
-Once you have set up the environment for cogvideoX's SAT and can generate videos, you can plug SageAttention and play easily by replacing lines 66-72 in CogVideo/sat/sat/transformer_defaults.py:
-
-
-```python
-66 |  with context:
-67 |      attn_output = torch.nn.functional.scaled_dot_product_attention(
-68 |          query_layer, key_layer, value_layer, 
-69 |          attn_mask=None,
-70 |          dropout_p=dropout_p,
-71 |          is_causal=not is_full
-72 |      )
-```
-
-with the following code:
-
+Just add the following codes and run!
 ```python
 from sageattention import sageattn
-with context:
-    attn_output = sageattn(
-        query_layer, key_layer, value_layer, 
-        is_causal=not is_full
-    )
+import torch.nn.functional as F
+
+F.scaled_dot_product_attention = sageattn
 ```
+
+Specifically,
+
+```bash
+cd example
+python sageattn_cogvideo
+```
+
+You can get a lossless video in `./example` faster than by using `python original_cogvideo`.
 
 
 ## Performance

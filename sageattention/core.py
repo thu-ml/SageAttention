@@ -20,7 +20,7 @@ from .attn_qk_int8_per_block_h96_bf16 import forward as attn_h96_false_bf16
 from .attn_qk_int8_per_block_h96_causal_bf16 import forward as attn_h96_true_bf16
 
 
-def sageattn(q, k, v, is_causal=False, smooth_k=True):
+def sageattn(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, smooth_k=True):
     q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
     if smooth_k:
         k -= k.mean(dim=-2, keepdim=True)
