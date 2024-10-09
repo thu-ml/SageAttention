@@ -14,7 +14,7 @@ Jintao Zhang, Jia Wei, Pengle Zhang, Jun Zhu, Jianfei Chen
 `torch>=2.3.0`  
 `triton>=3.0.0` 
 
-We recommend to install: (the kernel will be faster)  
+We recommend to install: (the kernel will be faster a little)  
 `python>=3.11`  
 `torch>=2.4.0`  
 `triton-nightly`
