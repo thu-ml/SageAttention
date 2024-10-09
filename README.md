@@ -69,7 +69,7 @@ cd example
 python sageattn_cogvideo.py
 ```
 
-**You can get a lossless video in `./example` faster than by using `python original_cogvideo`.**
+**You can get a lossless video in** `./example` **faster than by using** `python original_cogvideo.py`
 
 
 ## Performance
