@@ -49,7 +49,7 @@ Support for `head_dim` values of `64`, `96`, and `128` is currently available. E
 
 
 
-## <span style="color: #9B0000;">Plug-and-play Example</span>
+## **Plug-and-play Example**
 
 **We can replace `scaled_dot_product_attention` easily.**  
 We will take [Cogvideo](https://huggingface.co/THUDM/CogVideoX-2b) as an example:
