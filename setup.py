@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='sageattention', 
-    version='1.0.1',  
+    version='1.0.2',  
     author='Jintao Zhang',  
     author_email='jt-zhang6@gmail.com', 
     packages=find_packages(),  

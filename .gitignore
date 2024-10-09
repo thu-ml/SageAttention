@@ -2,3 +2,4 @@
 /build
 /sageattention.egg-info
 *.mp4
+/dist

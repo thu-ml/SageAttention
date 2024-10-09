@@ -23,7 +23,7 @@ We recommend to install: (the kernel will be faster a little)
 ## Installation
 Install using pip:  
 ```
-pip install sageattention==1.0.1 -i https://pypi.org/simple/
+pip install sageattention==1.0.2 -i https://pypi.org/simple/
 ```
 
 Or compiling from source:

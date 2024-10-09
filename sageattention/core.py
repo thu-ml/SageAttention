@@ -21,13 +21,18 @@ from .attn_qk_int8_per_block_h96_causal_bf16 import forward as attn_h96_true_bf1
 
 
 def sageattn(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, smooth_k=True):
-    q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+    dtype = q.dtype
+
+    if dtype == torch.float32 or dtype == torch.float16:
+        q, k, v = q.contiguous().to(torch.float16), k.contiguous().to(torch.float16), v.contiguous().to(torch.float16)
+    else:
+        q, k, v = q.contiguous().to(torch.bfloat16), k.contiguous().to(torch.bfloat16), v.contiguous().to(torch.bfloat16)
+
     if smooth_k:
         k -= k.mean(dim=-2, keepdim=True)
     headdim = q.size(-1)
+
     dtype = q.dtype
-
-
     if dtype == torch.float16:
 
         if headdim==96:
