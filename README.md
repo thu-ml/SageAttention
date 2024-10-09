@@ -14,8 +14,7 @@ Jintao Zhang, Jia Wei, Pengle Zhang, Jun Zhu, Jianfei Chen
 `torch>=2.3.0`  
 `triton>=3.0.0` 
 
-We recommend to install:
-
+We recommend to install: (the kernel will be faster)  
 `python>=3.11`  
 `torch>=2.4.0`  
 `triton-nightly`
@@ -50,8 +49,8 @@ Support for `head_dim` values of `64`, `96`, and `128` is currently available. E
 
 
 
+## <span style="color: #9B0000;">Plug-and-play Example</span>
 
-### Example
 **We can replace `scaled_dot_product_attention` easily.**  
 We will take [Cogvideo](https://huggingface.co/THUDM/CogVideoX-2b) as an example:
 

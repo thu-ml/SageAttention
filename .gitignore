@@ -1,2 +1,4 @@
 /test
-
+/build
+/sageattention.egg-info
+*.mp4
