@@ -23,7 +23,7 @@ python sageattn_cogvideo.py
 
 ---
 
-### Another Example for cogvideoX's SAT
+### Another Example for cogvideoX-2B SAT  (35% end-to-end speedup)
 We will take [Cogvideo SAT](https://github.com/THUDM/CogVideo/tree/main) as an example:
 
 Once you have set up the environment for cogvideoX's SAT and can generate videos, you can plug SageAttention and play easily by replacing lines 67-72 in CogVideo/sat/sat/transformer_defaults.py:
