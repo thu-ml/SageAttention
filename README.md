@@ -12,7 +12,7 @@ Jintao Zhang, Jia Wei, Pengle Zhang, Jun Zhu, Jianfei Chen
 ## Base environment
 `python>=3.9`   
 `torch>=2.3.0`  
-`triton>=3.0.0` 
+`triton>=2.3.0` 
 
 We recommend to install: (the kernel will be faster a little)  
 `python>=3.11`  
