@@ -21,6 +21,8 @@ from .attn_qk_int8_per_block_h96_causal_bf16 import forward as attn_h96_true_bf1
 
 
 def sageattn(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, smooth_k=True):
+    assert q.size(-2)>=128, "seq_len should be not less than 128."
+
     dtype = q.dtype
 
     if dtype == torch.float32 or dtype == torch.float16:
@@ -31,6 +33,8 @@ def sageattn(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None
     if smooth_k:
         k -= k.mean(dim=-2, keepdim=True)
     headdim = q.size(-1)
+
+    assert headdim in [64, 96, 128], "headdim should be in [64, 96, 128]. Other headdim < 128 can be processed by padding with 0."
 
     dtype = q.dtype
     if dtype == torch.float16:
