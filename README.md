@@ -71,6 +71,8 @@ python sageattn_cogvideo.py
 
 **You can get a lossless video in** `./example` **faster than by using** `python original_cogvideo.py`
 
+> **Note:** Not all models use `F.scaled_dot_product_attention`, so maybe you should replace the original Attention by modifying the `Attention Class` of the target model (as shown in another example in `./example`).
+
 
 ## Performance
 ### Speed of Kernels
