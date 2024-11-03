@@ -41,7 +41,7 @@ pip install .
 from sageattention import sageattn
 attn_output = sageattn(q, k, v, is_causal=False, smooth_k=True)
 ```
-`q, k, v` are **FP16/BF16** type with the shape `(batch_size, head_num, seq_len, head_dim)`. `is_causal` determines the use of a causal mask. `smooth_k` is a technique we proposed to ensure the accuracy. Disabling `smooth_k` might slightly increase speed, but could compromise accuracy if the distribution of `q, k, v` is irregular.
+`q, k, v` are **FP16/BF16** type with the shape `(batch_size, head_num, seq_len, head_dim)`. `is_causal` determines the use of a causal mask. `smooth_k` is a technique we proposed to ensure the accuracy. Disabling `smooth_k` might slightly increase speed, but could compromise accuracy if the distribution of `q, k, v` is irregular. In rare cases, setting `smooth_k` to `False` may result in better accuracy.
 
 > **Note:** sageattn() is an accurate implementation that integrating smoothing K, INT8 per-block quantization for `q, k`, and a FP16 accumulator for Matmul of $PV$. 
 Support for `head_dim` values of `64`, `96`, and `128` is currently available. Extended support for values 48, 72, and 256 will be available soon.
