@@ -30,7 +30,39 @@ def quant_per_block_int8_kernel(Input, Output, Scale, L,
     tl.store(output_ptrs, x_int8, mask=offs_n[:, None] < L)
     tl.store(scale_ptrs, scale)
 
-def per_block_int8(q, k, BLKQ=128, BLKK=64, tensor_layout="HND"):
+@triton.jit
+def quant_per_block_int8_fuse_sub_mean_kernel(Input, Output, Scale, Mean, L,
+                                stride_iz, stride_ih, stride_in,
+                                stride_oz, stride_oh, stride_on,
+                                stride_sz, stride_sh,
+                                stride_mz, stride_mh,
+                                sm_scale: tl.constexpr,
+                                C: tl.constexpr, BLK: tl.constexpr):
+    off_blk = tl.program_id(0)
+    off_h = tl.program_id(1)
+    off_b = tl.program_id(2)
+
+    offs_n = off_blk * BLK + tl.arange(0, BLK)
+    offs_k = tl.arange(0, C)
+
+    input_ptrs = Input + off_b * stride_iz + off_h * stride_ih + offs_n[:, None] * stride_in + offs_k[None, :]
+    output_ptrs = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
+    scale_ptrs = Scale + off_b * stride_sz + off_h * stride_sh + off_blk
+    mean_ptrs = Mean + off_b * stride_mz + off_h * stride_mh + offs_k[None, :]
+
+    x = tl.load(input_ptrs, mask=offs_n[:, None] < L)
+    mean = tl.load(mean_ptrs)
+    x -= mean
+    x = x.to(tl.float32)
+    x *= sm_scale
+    scale = tl.max(tl.abs(x)) / 127.
+    x_int8 = x / scale
+    x_int8 += 0.5 * tl.where(x_int8 >= 0, 1, -1)
+    x_int8 = x_int8.to(tl.int8)
+    tl.store(output_ptrs, x_int8, mask=offs_n[:, None] < L)
+    tl.store(scale_ptrs, scale)
+
+def per_block_int8(q, k, km=None, BLKQ=128, BLKK=64, tensor_layout="HND"):
     q_int8 = torch.empty(q.shape, dtype=torch.int8, device=q.device)
     k_int8 = torch.empty(k.shape, dtype=torch.int8, device=k.device)
 
@@ -67,13 +99,23 @@ def per_block_int8(q, k, BLKQ=128, BLKK=64, tensor_layout="HND"):
     )
 
     grid = ((kv_len + BLKK - 1) // BLKK, h_kv, b)
-    quant_per_block_int8_kernel[grid](
-        k, k_int8, k_scale, kv_len,
-        stride_bz_k, stride_h_k, stride_seq_k,
-        stride_bz_ko, stride_h_ko, stride_seq_ko,
-        k_scale.stride(0), k_scale.stride(1),
-        sm_scale=1.0,
-        C=head_dim, BLK=BLKK
-    )
-
+    if km is None:
+        quant_per_block_int8_kernel[grid](
+            k, k_int8, k_scale, kv_len,
+            stride_bz_k, stride_h_k, stride_seq_k,
+            stride_bz_ko, stride_h_ko, stride_seq_ko,
+            k_scale.stride(0), k_scale.stride(1),
+            sm_scale=1.0,
+            C=head_dim, BLK=BLKK
+        )
+    else:
+        quant_per_block_int8_fuse_sub_mean_kernel[grid](
+            k, k_int8, k_scale, km, kv_len,
+            stride_bz_k, stride_h_k, stride_seq_k,
+            stride_bz_ko, stride_h_ko, stride_seq_ko,
+            k_scale.stride(0), k_scale.stride(1),
+            km.stride(0), km.stride(1),
+            sm_scale=1.0,
+            C=head_dim, BLK=BLKK
+        )
     return q_int8, q_scale, k_int8, k_scale
