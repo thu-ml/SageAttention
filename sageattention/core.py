@@ -19,8 +19,10 @@ from .attn_qk_int8_per_block_hd128_causal_bf16 import forward as attn_h128_true_
 from .attn_qk_int8_per_block_h96_bf16 import forward as attn_h96_false_bf16
 from .attn_qk_int8_per_block_h96_causal_bf16 import forward as attn_h96_true_bf16
 
+from .attn_qk_int8_per_block import forward as attn_true
+from .attn_qk_int8_per_block_causal import forward as attn_false
 
-def sageattn(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, smooth_k=True):
+def sageattn_old(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, smooth_k=True):
     assert q.size(-2)>=128, "seq_len should be not less than 128."
 
     dtype = q.dtype
@@ -92,5 +94,31 @@ def sageattn(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None
             elif headdim==128:
                 o = attn_h128_true_bf16(q_int8, k_int8, v, q_scale, k_scale)
 
+
+    return o
+
+def sageattn(q, k, v, tensor_layout="HND", attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, smooth_k=True):
+
+    dtype = q.dtype
+
+    headdim = q.size(-1)
+
+    if headdim == 96 or (q.dtype != torch.float16 and q.dtype != torch.bfloat16):
+        sageattn_old(q, k, v, attn_mask, dropout_p, is_causal, scale, smooth_k)
+
+    seq_dim = 1 if tensor_layout == "NHD" else 2
+
+    if smooth_k:
+        k -= k.mean(dim=seq_dim, keepdim=True)
+
+    if dtype == torch.bfloat16:
+        v = v.to(torch.float16)
+
+    q_int8, q_scale, k_int8, k_scale = per_block_int8(q, k, tensor_layout=tensor_layout)
+
+    if is_causal:
+        o = attn_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
+    else:
+        o = attn_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
 
     return o
