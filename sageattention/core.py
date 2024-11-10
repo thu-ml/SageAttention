@@ -109,12 +109,14 @@ def sageattn(q, k, v, tensor_layout="HND", attn_mask=None, dropout_p=0.0, is_cau
     seq_dim = 1 if tensor_layout == "NHD" else 2
 
     if smooth_k:
-        k -= k.mean(dim=seq_dim, keepdim=True)
+        km = k.mean(dim=seq_dim)
+    else:
+        km = None
 
     if dtype == torch.bfloat16:
         v = v.to(torch.float16)
 
-    q_int8, q_scale, k_int8, k_scale = per_block_int8(q, k, tensor_layout=tensor_layout)
+    q_int8, q_scale, k_int8, k_scale = per_block_int8(q, k, km, tensor_layout=tensor_layout)
 
     if is_causal:
         o = attn_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
