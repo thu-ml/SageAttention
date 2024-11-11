@@ -12,12 +12,73 @@ from .attn_qk_int8_per_block_causal import forward as attn_false
 from .attn_qk_int8_block_varlen import forward as attn_false_varlen
 from .attn_qk_int8_per_block_causal_varlen import forward as attn_true_varlen
 
-def sageattn(q, k, v, tensor_layout="HND", attn_mask=None, dropout_p=0.0, is_causal=False, sm_scale=None, smooth_k=True):
+from typing import Any, List, Literal, Optional, Tuple, Union
+
+def sageattn(
+    q: torch.Tensor, 
+    k: torch.Tensor, 
+    v: torch.Tensor, 
+    tensor_layout: str ="HND", 
+    is_causal=False, 
+    sm_scale: Optional[float] = None, 
+    smooth_k: bool =True,
+    **kwargs: Any,
+) -> torch.Tensor:
+    """
+
+    Parameters
+    ----------
+    q : torch.Tensor
+        The query tensor. Shape:
+        - If `tensor_layout` is "HND": ``[batch_size, num_qo_heads, qo_len, head_dim]``.
+        - If `tensor_layout` is "NHD": ``[batch_size, qo_len, num_qo_heads, head_dim]``.
+
+    k : torch.Tensor
+        The key tensor. Shape:
+        - If `tensor_layout` is "HND": ``[batch_size, num_kv_heads, kv_len, head_dim]``.
+        - If `tensor_layout` is "NHD": ``[batch_size, kv_len, num_kv_heads, head_dim]``.
+
+    v : torch.Tensor
+        The value tensor. Shape:
+        - If `tensor_layout` is "HND": ``[batch_size, num_kv_heads, kv_len, head_dim]``.
+        - If `tensor_layout` is "NHD": ``[batch_size, kv_len, num_kv_heads, head_dim]``.
+
+    tensor_layout : str
+        The tensor layout, either "HND" or "NHD".
+        Default: "HND".
+
+    is_causal : bool
+        Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len.
+        Default: False.
+
+    sm_scale : Optional[float]
+        The scale used in softmax, if not provided, will be set to ``1.0 / sqrt(head_dim)``.
+
+    smooth_k : bool
+        Whether to smooth the key tensor by subtracting the mean along the sequence dimension.
+        Default: True.
+
+    Returns
+    -------
+    torch.Tensor
+        The output tensor. Shape:
+        - If `tensor_layout` is "HND": ``[batch_size, num_qo_heads, qo_len, head_dim]``.
+        - If `tensor_layout` is "NHD": ``[batch_size, qo_len, num_qo_heads, head_dim]``.
+
+    Note
+    ----
+    - ``num_qo_heads`` must be divisible by ``num_kv_heads``. 
+    - The tensors `q`, `k`, and `v` must have the dtype ``torch.float16`` or ``torch.bfloat16``
+    - All tensors must be on the same cuda device.
+    """
 
     dtype = q.dtype
 
     headdim = q.size(-1)
     assert headdim in [64, 96, 128], "headdim should be in [64, 96, 128]."
+
+    # assert last dim is contiguous
+    assert q.stride(-1) == 1 and k.stride(-1) == 1 and v.stride(-1) == 1, "Last dim of qkv must be contiguous."
 
     seq_dim = 1 if tensor_layout == "NHD" else 2
 
@@ -46,12 +107,77 @@ def sageattn(q, k, v, tensor_layout="HND", attn_mask=None, dropout_p=0.0, is_cau
 
     return o
 
-def sageattn_varlen(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, attn_mask=None, dropout_p=0.0, is_causal=False, sm_scale=None, smooth_k=True):
+def sageattn_varlen(
+    q: torch.Tensor, 
+    k: torch.Tensor, 
+    v: torch.Tensor, 
+    cu_seqlens_q: torch.Tensor, 
+    cu_seqlens_k: torch.Tensor, 
+    max_seqlen_q: int, 
+    max_seqlen_k: int, 
+    is_causal: bool=False,
+    sm_scale: Optional[float]=None, 
+    smooth_k: bool=True,
+    **kwargs: Any,
+) -> torch.Tensor:
+    """
+
+    Parameters
+    ----------
+    q : torch.Tensor
+        The query tensor, shape: ``[cu_seqlens_q[-1], num_qo_heads, head_dim]``.
+
+    k : torch.Tensor
+        The key tensor, shape: ``[cu_seqlens_k[-1], num_kv_heads, head_dim]``.
+
+    v : torch.Tensor
+        The value tensor, shape: ``[cu_seqlens_k[-1], num_kv_heads, head_dim]``.
+
+    cu_seqlens_q : torch.Tensor
+        The cumulative sequence lengths for the query sequences in the batch, used to index into `q`. 
+        Shape: ``[batch_size + 1]``, where each entry represents the cumulative length of sequences up to that batch index.
+
+    cu_seqlens_k : torch.Tensor
+        The cumulative sequence lengths for the key and value sequences in the batch, used to index into `k` and `v`. 
+        Shape: ``[batch_size + 1]``, where each entry represents the cumulative length of sequences up to that batch index.
+
+    max_seqlen_q : int
+        The maximum sequence length for the query tensor in the batch.
+    
+    max_seqlen_k : int
+        The maximum sequence length for the key and value tensors in the batch.
+
+    is_causal : bool
+        Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len for each sequence.
+        Default: False.
+    
+    sm_scale : Optional[float]
+        The scale used in softmax, if not provided, will be set to ``1.0 / sqrt(head_dim)``.
+
+    smooth_k : bool
+        Whether to smooth the key tensor by subtracting the mean along the sequence dimension.
+        Default: True.
+
+    Returns
+    -------
+    torch.Tensor
+        The output tensor, shape: ``[cu_seqlens_q[-1], num_qo_heads, head_dim]``.
+
+    Note
+    ----
+    - ``num_qo_heads`` must be divisible by ``num_kv_heads``.
+    - The tensors `q`, `k`, and `v` must have the dtype ``torch.float16`` or ``torch.bfloat16``
+    - The tensors `cu_seqlens_q` and `cu_seqlens_k` must have the dtype ``torch.int32`` or ``torch.int64``.
+    - All tensors must be on the same cuda device.
+    """
     
     dtype = q.dtype
 
     head_dim = q.size(-1)
     assert head_dim in [64, 128], "varlen only support head_dim [64, 128]."
+
+    assert q.stride(-1) == 1 and k.stride(-1) == 1 and v.stride(-1) == 1, "Last dim of qkv must be contiguous."
+    assert cu_seqlens_q.is_contiguous() and cu_seqlens_k.is_contiguous(), "cu_seqlens_q and cu_seqlens_k must be contiguous."
 
     if dtype == torch.bfloat16:
         v = v.to(torch.float16)
