@@ -6,6 +6,7 @@ import triton.language as tl
 def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
                     K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn, 
                     start_m,  
+                    H: tl.constexpr,
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  
                     ):
@@ -32,17 +33,20 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
         acc += tl.dot(p, v, out_dtype=tl.float16)   
         m_i = m_ij
         K_ptrs += BLOCK_N * stride_kn
-        K_scale_ptr += 1
+        K_scale_ptr += H
         V_ptrs += BLOCK_N * stride_vn
     return acc, l_i
 
 @triton.jit
-def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,  
-              stride_qz, stride_qh, stride_qn,
-              stride_kz, stride_kh, stride_kn,  
-              stride_vz, stride_vh, stride_vn,  
-              stride_oz, stride_oh, stride_on,  
-              qo_len, kv_len, H: tl.constexpr, num_kv_groups: tl.constexpr,
+def _attn_fwd(Q, K, V, 
+              cu_seqlens_q, cu_seqlens_k,
+              Q_scale, K_scale, cu_seqlens_q_scale, cu_seqlens_k_scale,
+              Out,  
+              stride_qh, stride_qn,
+              stride_kh, stride_kn,  
+              stride_vh, stride_vn,  
+              stride_oh, stride_on,  
+              H: tl.constexpr, num_kv_groups: tl.constexpr,
               HEAD_DIM: tl.constexpr,  
               BLOCK_M: tl.constexpr,  
               BLOCK_N: tl.constexpr,  
@@ -53,18 +57,34 @@ def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,
     off_z = tl.program_id(2).to(tl.int64)
     off_h = tl.program_id(1).to(tl.int64)
 
-    q_scale_offset = (off_z * H + off_h) * tl.cdiv(qo_len, BLOCK_M)
-    k_scale_offset = (off_z * (H // num_kv_groups) + off_h // num_kv_groups) * tl.cdiv(kv_len, BLOCK_N)  
-    
+    cu_seqlens_q_start = tl.load(cu_seqlens_q + off_z)
+    cu_seqlens_q_end = tl.load(cu_seqlens_q + off_z + 1)
+
+    qo_len = cu_seqlens_q_end - cu_seqlens_q_start
+
+    if (start_m * BLOCK_M) >= qo_len:
+        return
+
+    cu_seq_lens_q_scale_start = tl.load(cu_seqlens_q_scale + off_z)
+    cu_seq_lens_k_scale_start = tl.load(cu_seqlens_k_scale + off_z)    
+
+    q_scale_offset = cu_seq_lens_q_scale_start * H + off_h + start_m * H
+    k_scale_offset = cu_seq_lens_k_scale_start * (H // num_kv_groups) + off_h // num_kv_groups
+
+    cu_seqlens_k_start = tl.load(cu_seqlens_k + off_z)
+    cu_seqlens_k_end = tl.load(cu_seqlens_k + off_z + 1)
+
+    kv_len = cu_seqlens_k_end - cu_seqlens_k_start
+
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
     offs_k = tl.arange(0, HEAD_DIM)
-    Q_ptrs = Q + (off_z * stride_qz + off_h * stride_qh) + offs_m[:, None] * stride_qn + offs_k[None, :]
-    Q_scale_ptr = Q_scale + q_scale_offset + start_m
-    K_ptrs = K + (off_z * stride_kz + (off_h // num_kv_groups) * stride_kh) + offs_n[None, :] * stride_kn + offs_k[:, None] 
+    Q_ptrs = Q + (cu_seqlens_q_start * stride_qn + off_h * stride_qh) + offs_m[:, None] * stride_qn + offs_k[None, :]
+    Q_scale_ptr = Q_scale + q_scale_offset
+    K_ptrs = K + (cu_seqlens_k_start * stride_kn + (off_h // num_kv_groups) * stride_kh) + offs_n[None, :] * stride_kn + offs_k[:, None] 
     K_scale_ptr = K_scale + k_scale_offset
-    V_ptrs = V + (off_z * stride_vz + (off_h // num_kv_groups) * stride_vh) + offs_n[:, None] * stride_vn + offs_k[None, :]
-    O_block_ptr = Out + (off_z * stride_oz + off_h * stride_oh) + offs_m[:, None] * stride_on + offs_k[None, :]
+    V_ptrs = V + (cu_seqlens_k_start * stride_vn + (off_h // num_kv_groups) * stride_vh) + offs_n[:, None] * stride_vn + offs_k[None, :]
+    O_block_ptr = Out + (cu_seqlens_q_start * stride_on + off_h * stride_oh) + offs_m[:, None] * stride_on + offs_k[None, :]
     
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
@@ -74,49 +94,36 @@ def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,
     q_scale = tl.load(Q_scale_ptr)
     acc, l_i = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
                                     start_m,  
+                                    H // num_kv_groups,
                                     BLOCK_M, HEAD_DIM, BLOCK_N,  
                                     4 - STAGE, offs_m, offs_n 
                                     )
     acc = acc / l_i[:, None]
     tl.store(O_block_ptr, acc.to(Out.type.element_ty), mask = (offs_m[:, None] < qo_len))
 
-def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.float16):
+def forward(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale, output_dtype=torch.float16):
     BLOCK_M = 128
     BLOCK_N = 64
     stage = 1
 
     o = torch.empty(q.shape, dtype=output_dtype, device=q.device)
 
-    if tensor_layout == "HND":
-        b, h_qo, qo_len, head_dim = q.shape
-        _, h_kv, kv_len, _ = k.shape
+    b = cu_seqlens_q.shape[0] - 1
+    _, h_qo, head_dim = q.shape
+    _, h_kv, _ = k.shape
 
-        stride_bz_q, stride_h_q, stride_seq_q = q.stride(0), q.stride(1), q.stride(2)
-        stride_bz_k, stride_h_k, stride_seq_k = k.stride(0), k.stride(1), k.stride(2)
-        stride_bz_v, stride_h_v, stride_seq_v = v.stride(0), v.stride(1), v.stride(2)
-        stride_bz_o, stride_h_o, stride_seq_o = o.stride(0), o.stride(1), o.stride(2)
-    elif tensor_layout == "NHD":
-        b, qo_len, h_qo, head_dim = q.shape
-        _, kv_len, h_kv, _ = k.shape
-
-        stride_bz_q, stride_h_q, stride_seq_q = q.stride(0), q.stride(2), q.stride(1)
-        stride_bz_k, stride_h_k, stride_seq_k = k.stride(0), k.stride(2), k.stride(1)
-        stride_bz_v, stride_h_v, stride_seq_v = v.stride(0), v.stride(2), v.stride(1)
-        stride_bz_o, stride_h_o, stride_seq_o = o.stride(0), o.stride(2), o.stride(1)
-    else:
-        raise ValueError(f"tensor_layout {tensor_layout} not supported")
-    
     HEAD_DIM_K = head_dim
     num_kv_groups = h_qo // h_kv
 
-    grid = (triton.cdiv(qo_len, BLOCK_M), h_qo, b)
+    grid = (triton.cdiv(max_seqlen_q, BLOCK_M), h_qo, b)
     _attn_fwd[grid](
-        q, k, v, q_scale, k_scale, o,  
-        stride_bz_q, stride_h_q, stride_seq_q, 
-        stride_bz_k, stride_h_k, stride_seq_k,  
-        stride_bz_v, stride_h_v, stride_seq_v,  
-        stride_bz_o, stride_h_o, stride_seq_o,
-        qo_len, kv_len,
+        q, k, v, cu_seqlens_q, cu_seqlens_k,
+        q_scale, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale,
+        o,  
+        q.stride(1), q.stride(0), 
+        k.stride(1), k.stride(0),  
+        v.stride(1), v.stride(0), 
+        o.stride(1), o.stride(0),
         h_qo, num_kv_groups,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, HEAD_DIM=HEAD_DIM_K,  
         STAGE=stage,  
