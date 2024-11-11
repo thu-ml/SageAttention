@@ -4,3 +4,4 @@
 *.mp4
 /dist
 /test
+__pycache__
