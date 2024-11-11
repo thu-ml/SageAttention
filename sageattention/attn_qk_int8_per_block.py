@@ -49,11 +49,11 @@ def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,
               STAGE: tl.constexpr
               ):
     start_m = tl.program_id(0)
-    off_hz = tl.program_id(1)
-    
-    off_z = (off_hz // H).to(tl.int64)
-    off_h = (off_hz % H).to(tl.int64)
-    q_scale_offset = off_hz * tl.cdiv(qo_len, BLOCK_M)
+
+    off_z = tl.program_id(2).to(tl.int64)
+    off_h = tl.program_id(1).to(tl.int64)
+
+    q_scale_offset = (off_z * H + off_h) * tl.cdiv(qo_len, BLOCK_M)
     k_scale_offset = (off_z * (H // num_kv_groups) + off_h // num_kv_groups) * tl.cdiv(kv_len, BLOCK_N)  
     
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -109,7 +109,7 @@ def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.f
     HEAD_DIM_K = head_dim
     num_kv_groups = h_qo // h_kv
 
-    grid = (triton.cdiv(qo_len, BLOCK_M), b * h_qo, 1)
+    grid = (triton.cdiv(qo_len, BLOCK_M), h_qo, b)
     _attn_fwd[grid](
         q, k, v, q_scale, k_scale, o,  
         stride_bz_q, stride_h_q, stride_seq_q, 
