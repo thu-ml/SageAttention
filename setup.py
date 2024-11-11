@@ -3,14 +3,14 @@ from setuptools import setup, find_packages
 setup(
     name='sageattention', 
     version='1.0.3',  
-    author='Jintao Zhang',  
-    author_email='jt-zhang6@gmail.com', 
+    author='Jintao Zhang, Haofeng Huang',
+    author_email='jt-zhang6@gmail.com, huanghf22@mails.tsinghua.edu.cn', 
     packages=find_packages(),  
     description='Accurate and efficient 8-bit plug-and-play attention.',  
     long_description=open('README.md').read(),  
     long_description_content_type='text/markdown', 
-    url='https://github.com/jt-zhang/SageAttention', 
-    license='MIT',  
+    url='https://github.com/thu-ml/SageAttention', 
+    license='BSD 3-Clause License',  
     python_requires='>=3.9', 
     classifiers=[  
         'Development Status :: 3 - Alpha', 
