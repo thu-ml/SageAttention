@@ -9,6 +9,11 @@ Jintao Zhang, Jia Wei, Pengle Zhang, Jun Zhu, Jianfei Chen
 
 ![Local Image](./resource/intro.png)
 
+
+## Project Updates
+- **News** 2024-11-11: Support for different sequence length between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shape, and `group-query attention` is available now.
+
+
 ## Base environment
 `python>=3.9`   
 `torch>=2.3.0`  
@@ -39,12 +44,13 @@ pip install .
 ## How to use
 ```python
 from sageattention import sageattn
-attn_output = sageattn(q, k, v, is_causal=False, smooth_k=True)
+attn_output = sageattn(q, k, v, tensor_layout="HND", is_causal=False, smooth_k=True)
 ```
-`q, k, v` are **FP16/BF16** type with the shape `(batch_size, head_num, seq_len, head_dim)`. `is_causal` determines the use of a causal mask. `smooth_k` is a technique we proposed to ensure the accuracy. Disabling `smooth_k` might slightly increase speed, but could compromise accuracy if the distribution of `q, k, v` is irregular. In rare cases, setting `smooth_k` to `False` may result in better accuracy.
+`q, k, v` are **FP16/BF16** type with the shape `(batch_size, head_num, seq_len, head_dim)` using default `tensor_layout="HND"`. For shape `(batch_size, seq_len, head_num, head_dim)`, set `tensor_layout="NHD"`. `is_causal` determines the use of a causal mask. `smooth_k` is a technique we proposed to ensure the accuracy. Disabling `smooth_k` might slightly increase speed, but could compromise accuracy if the distribution of `q, k, v` is irregular. In rare cases, setting `smooth_k` to `False` may result in better accuracy.
 
 > **Note:** sageattn() is an accurate implementation that integrating smoothing K, INT8 per-block quantization for `q, k`, and a FP16 accumulator for Matmul of $PV$. 
 Support for `head_dim` values of `64`, `96`, and `128` is currently available. Extended support for values 48, 72, and 256 will be available soon.
+Support for different sequence length between `q` and `k,v` and `group-query attention` is available.
 
 
 
