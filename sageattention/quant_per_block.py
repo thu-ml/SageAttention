@@ -7,7 +7,7 @@ def quant_per_block_int8_kernel(Input, Output, Scale, L,
                                 stride_iz, stride_ih, stride_in,
                                 stride_oz, stride_oh, stride_on,
                                 stride_sz, stride_sh,
-                                sm_scale: tl.constexpr,
+                                sm_scale,
                                 C: tl.constexpr, BLK: tl.constexpr):
     off_blk = tl.program_id(0)
     off_h = tl.program_id(1)
@@ -30,39 +30,7 @@ def quant_per_block_int8_kernel(Input, Output, Scale, L,
     tl.store(output_ptrs, x_int8, mask=offs_n[:, None] < L)
     tl.store(scale_ptrs, scale)
 
-@triton.jit
-def quant_per_block_int8_fuse_sub_mean_kernel(Input, Output, Scale, Mean, L,
-                                stride_iz, stride_ih, stride_in,
-                                stride_oz, stride_oh, stride_on,
-                                stride_sz, stride_sh,
-                                stride_mz, stride_mh,
-                                sm_scale: tl.constexpr,
-                                C: tl.constexpr, BLK: tl.constexpr):
-    off_blk = tl.program_id(0)
-    off_h = tl.program_id(1)
-    off_b = tl.program_id(2)
-
-    offs_n = off_blk * BLK + tl.arange(0, BLK)
-    offs_k = tl.arange(0, C)
-
-    input_ptrs = Input + off_b * stride_iz + off_h * stride_ih + offs_n[:, None] * stride_in + offs_k[None, :]
-    output_ptrs = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
-    scale_ptrs = Scale + off_b * stride_sz + off_h * stride_sh + off_blk
-    mean_ptrs = Mean + off_b * stride_mz + off_h * stride_mh + offs_k[None, :]
-
-    x = tl.load(input_ptrs, mask=offs_n[:, None] < L)
-    mean = tl.load(mean_ptrs)
-    x -= mean
-    x = x.to(tl.float32)
-    x *= sm_scale
-    scale = tl.max(tl.abs(x)) / 127.
-    x_int8 = x / scale
-    x_int8 += 0.5 * tl.where(x_int8 >= 0, 1, -1)
-    x_int8 = x_int8.to(tl.int8)
-    tl.store(output_ptrs, x_int8, mask=offs_n[:, None] < L)
-    tl.store(scale_ptrs, scale)
-
-def per_block_int8(q, k, BLKQ=128, BLKK=64, tensor_layout="HND"):
+def per_block_int8(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
     q_int8 = torch.empty(q.shape, dtype=torch.int8, device=q.device)
     k_int8 = torch.empty(k.shape, dtype=torch.int8, device=k.device)
 
@@ -88,13 +56,16 @@ def per_block_int8(q, k, BLKQ=128, BLKK=64, tensor_layout="HND"):
     q_scale = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
     k_scale = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, 1), device=q.device, dtype=torch.float32)
 
+    if sm_scale is None:
+        sm_scale = head_dim**-0.5
+
     grid = ((qo_len + BLKQ - 1) // BLKQ, h_qo, b)
     quant_per_block_int8_kernel[grid](
         q, q_int8, q_scale, qo_len,
         stride_bz_q, stride_h_q, stride_seq_q,
         stride_bz_qo, stride_h_qo, stride_seq_qo,
         q_scale.stride(0), q_scale.stride(1),
-        sm_scale=(head_dim**-0.5 * 1.44269504),
+        sm_scale=(sm_scale * 1.44269504),
         C=head_dim, BLK=BLKQ
     )
 
