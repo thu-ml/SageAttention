@@ -20,7 +20,8 @@ def sageattn(q, k, v, tensor_layout="HND", attn_mask=None, dropout_p=0.0, is_cau
     seq_dim = 1 if tensor_layout == "NHD" else 2
 
     if smooth_k:
-        km = k.mean(dim=seq_dim)
+        km = k.mean(dim=seq_dim, keepdim=True)
+        k -= km
     else:
         km = None
 
@@ -28,13 +29,13 @@ def sageattn(q, k, v, tensor_layout="HND", attn_mask=None, dropout_p=0.0, is_cau
         v = v.to(torch.float16)
 
     if headdim == 96:
-        q_int8, q_scale, k_int8, k_scale = per_block_int8_hd96(q, k)
+        q_int8, q_scale, k_int8, k_scale = per_block_int8_hd96(q, k, tensor_layout=tensor_layout)
         if is_causal:
-            return attn_h96_true(q_int8, k_int8, v, q_scale, k_scale)
+            return attn_h96_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
         else:
-            return attn_h96_false(q_int8, k_int8, v, q_scale, k_scale)
+            return attn_h96_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
 
-    q_int8, q_scale, k_int8, k_scale = per_block_int8(q, k, km, tensor_layout=tensor_layout)
+    q_int8, q_scale, k_int8, k_scale = per_block_int8(q, k, tensor_layout=tensor_layout)
 
     if is_causal:
         o = attn_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)

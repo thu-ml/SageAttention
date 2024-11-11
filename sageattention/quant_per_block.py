@@ -62,7 +62,7 @@ def quant_per_block_int8_fuse_sub_mean_kernel(Input, Output, Scale, Mean, L,
     tl.store(output_ptrs, x_int8, mask=offs_n[:, None] < L)
     tl.store(scale_ptrs, scale)
 
-def per_block_int8(q, k, km=None, BLKQ=128, BLKK=64, tensor_layout="HND"):
+def per_block_int8(q, k, BLKQ=128, BLKK=64, tensor_layout="HND"):
     q_int8 = torch.empty(q.shape, dtype=torch.int8, device=q.device)
     k_int8 = torch.empty(k.shape, dtype=torch.int8, device=k.device)
 
@@ -99,23 +99,13 @@ def per_block_int8(q, k, km=None, BLKQ=128, BLKK=64, tensor_layout="HND"):
     )
 
     grid = ((kv_len + BLKK - 1) // BLKK, h_kv, b)
-    if km is None:
-        quant_per_block_int8_kernel[grid](
-            k, k_int8, k_scale, kv_len,
-            stride_bz_k, stride_h_k, stride_seq_k,
-            stride_bz_ko, stride_h_ko, stride_seq_ko,
-            k_scale.stride(0), k_scale.stride(1),
-            sm_scale=1.0,
-            C=head_dim, BLK=BLKK
-        )
-    else:
-        quant_per_block_int8_fuse_sub_mean_kernel[grid](
-            k, k_int8, k_scale, km, kv_len,
-            stride_bz_k, stride_h_k, stride_seq_k,
-            stride_bz_ko, stride_h_ko, stride_seq_ko,
-            k_scale.stride(0), k_scale.stride(1),
-            km.stride(0), km.stride(1),
-            sm_scale=1.0,
-            C=head_dim, BLK=BLKK
-        )
+    quant_per_block_int8_kernel[grid](
+        k, k_int8, k_scale, kv_len,
+        stride_bz_k, stride_h_k, stride_seq_k,
+        stride_bz_ko, stride_h_ko, stride_seq_ko,
+        k_scale.stride(0), k_scale.stride(1),
+        sm_scale=1.0,
+        C=head_dim, BLK=BLKK
+    )
+
     return q_int8, q_scale, k_int8, k_scale
