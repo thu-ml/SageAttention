@@ -147,7 +147,7 @@ setup(
     version='2.0.0',  
     author='SageAttention team',
     license='Apache 2.0 License',  
-    description='Accurate and efficient quantized plug-and-play attention.',  
+    description='Accurate and efficient plug-and-play low-bit attention.',  
     long_description=open('README.md').read(),  
     long_description_content_type='text/markdown', 
     url='https://github.com/thu-ml/SageAttention', 
