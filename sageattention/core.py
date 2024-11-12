@@ -18,15 +18,15 @@ import torch
 import triton
 import triton.language as tl
 
-from .quant_per_block import per_block_int8
-from .quant_per_block_varlen import per_block_int8 as per_block_int8_varlen
-from .quant_per_block_hd96 import per_block_int8_hd96
-from .attn_qk_int8_per_block_h96 import forward as attn_h96_false
-from .attn_qk_int8_per_block_h96_causal import forward as attn_h96_true
-from .attn_qk_int8_per_block import forward as attn_true
-from .attn_qk_int8_per_block_causal import forward as attn_false
-from .attn_qk_int8_block_varlen import forward as attn_false_varlen
-from .attn_qk_int8_per_block_causal_varlen import forward as attn_true_varlen
+from .triton.quant_per_block import per_block_int8
+from .triton.quant_per_block_varlen import per_block_int8 as per_block_int8_varlen
+from .triton.quant_per_block_hd96 import per_block_int8_hd96
+from .triton.attn_qk_int8_per_block_h96 import forward as attn_h96_false
+from .triton.attn_qk_int8_per_block_h96_causal import forward as attn_h96_true
+from .triton.attn_qk_int8_per_block import forward as attn_true
+from .triton.attn_qk_int8_per_block_causal import forward as attn_false
+from .triton.attn_qk_int8_block_varlen import forward as attn_false_varlen
+from .triton.attn_qk_int8_per_block_causal_varlen import forward as attn_true_varlen
 
 from typing import Any, List, Literal, Optional, Tuple, Union
 

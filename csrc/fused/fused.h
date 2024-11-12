@@ -30,3 +30,11 @@ void quant_per_block_int8_cuda(
                 torch::Tensor scale,
                 int block_size,
                 int tensor_layout);
+
+void quant_per_block_int8_fuse_sub_mean_cuda(
+                torch::Tensor input,
+                torch::Tensor mean,
+                torch::Tensor output,
+                torch::Tensor scale,
+                int block_size,
+                int tensor_layout);
