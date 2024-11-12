@@ -454,3 +454,87 @@ void quant_per_block_int8_fuse_sub_mean_cuda(
     });
   });
 }
+
+// use block size 128 and warp_block size 32
+void quant_per_warp_int8_cuda(
+                torch::Tensor input,
+                torch::Tensor output,
+                torch::Tensor scale,
+                float sm_scale,
+                int tensor_layout)
+{
+  CHECK_CUDA(input);
+  CHECK_CUDA(output);
+  CHECK_CUDA(scale);
+  
+  CHECK_DTYPE(output, torch::kInt8);
+  CHECK_DTYPE(scale, torch::kFloat);
+
+  CHECK_LASTDIM_CONTIGUOUS(input);
+  CHECK_CONTIGUOUS(output);
+  CHECK_CONTIGUOUS(scale);
+
+  CHECK_DIMS(input, 4);
+  CHECK_DIMS(output, 4);
+  CHECK_DIMS(scale, 3);
+
+  const int batch_size = input.size(0);
+  const int head_dim = input.size(3);
+
+  int stride_bz_input = input.stride(0);
+  int stride_bz_output = output.stride(0);
+
+  int num_tokens, num_heads;
+  int stride_seq_input, stride_h_input, stride_seq_output, stride_h_output;
+
+  if (tensor_layout == 0)
+  {
+    num_tokens = input.size(1);
+    num_heads = input.size(2);
+    stride_seq_input = input.stride(1);
+    stride_h_input = input.stride(2);
+    stride_seq_output = output.stride(1);
+    stride_h_output = output.stride(2);
+  }
+  else
+  {
+    num_tokens = input.size(2);
+    num_heads = input.size(1);
+    stride_seq_input = input.stride(2);
+    stride_h_input = input.stride(1);
+    stride_seq_output = output.stride(2);
+    stride_h_output = output.stride(1);
+  }
+
+  auto input_dtype = input.scalar_type();
+
+  constexpr int BLOCK_SIZE = 128;
+  constexpr int WARP_BLOCK_SIZE = 32;
+
+  DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(input_dtype, c_type, {
+    DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
+
+      CHECK_SHAPE(output, input.size(0), input.size(1), input.size(2), input.size(3));
+      CHECK_SHAPE(scale, batch_size, num_heads, (num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE * (BLOCK_SIZE / WARP_BLOCK_SIZE));
+
+      dim3 grid((num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE * (BLOCK_SIZE / WARP_BLOCK_SIZE), num_heads, batch_size);
+
+      constexpr int num_pack_per_thread = (WARP_BLOCK_SIZE * (HEAD_DIM / 8) + 1023) / 1024;
+
+      dim3 block(WARP_BLOCK_SIZE * (HEAD_DIM / 8) / num_pack_per_thread);
+
+      QuantInt8Kernel<HEAD_DIM, WARP_BLOCK_SIZE, num_pack_per_thread, true, false, c_type><<<grid, block>>>(
+        reinterpret_cast<c_type*>(input.data_ptr()),
+        nullptr,
+        output.data_ptr<int8_t>(),
+        reinterpret_cast<float*>(scale.data_ptr()),
+        sm_scale,
+        num_tokens,
+        stride_bz_input, stride_seq_input, stride_h_input,
+        0, 0,
+        stride_bz_output, stride_seq_output, stride_h_output,
+        scale.stride(0), scale.stride(1)
+      );
+    });
+  });
+}
