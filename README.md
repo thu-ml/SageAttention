@@ -4,7 +4,7 @@ This repository provides the official implementation of SageAttention.
 
 **SageAttention: Accurate 8-Bit Attention for Plug-and-play Inference Acceleration**  
 Paper: https://arxiv.org/abs/2410.02367  
-Jintao Zhang, Jia Wei, Haofeng Huang, Pengle Zhang, Jun Zhu, Jianfei Chen
+Jintao Zhang, Jia Wei, Pengle Zhang, Jun Zhu, Jianfei Chen
 
 
 ![Local Image](./resource/intro.png)
@@ -12,7 +12,7 @@ Jintao Zhang, Jia Wei, Haofeng Huang, Pengle Zhang, Jun Zhu, Jianfei Chen
 
 ## Project Updates
 - **News** 2024-11-12: Support for `sageattn_varlen` is available now.
-- **News** 2024-11-11: Support for different sequence length between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
+- **News** 2024-11-11: Support for different sequence length between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shape, and `group-query attention` is available now.
 
 
 ## Base environment
@@ -105,7 +105,7 @@ If you use this code or find our work valuable, please cite:
 ```
 @misc{zhang2024sageattentionaccurate8bitattention,
       title={SageAttention: Accurate 8-Bit Attention for Plug-and-play Inference Acceleration}, 
-      author={Jintao Zhang and Jia wei and Haofeng Huang and Pengle Zhang and Jun Zhu and Jianfei Chen},
+      author={Jintao Zhang and Jia wei and Pengle Zhang and Jun Zhu and Jianfei Chen},
       year={2024},
       eprint={2410.02367},
       archivePrefix={arXiv},

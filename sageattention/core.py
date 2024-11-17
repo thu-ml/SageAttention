@@ -1,16 +1,41 @@
+"""
+Copyright (c) 2024 by SageAttention team.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+"""
+
 import torch
 import triton
 import triton.language as tl
 
-from .quant_per_block import per_block_int8
-from .quant_per_block_varlen import per_block_int8 as per_block_int8_varlen
-from .quant_per_block_hd96 import per_block_int8_hd96
-from .attn_qk_int8_per_block_h96 import forward as attn_h96_false
-from .attn_qk_int8_per_block_h96_causal import forward as attn_h96_true
-from .attn_qk_int8_per_block import forward as attn_false
-from .attn_qk_int8_per_block_causal import forward as attn_true
-from .attn_qk_int8_block_varlen import forward as attn_false_varlen
-from .attn_qk_int8_per_block_causal_varlen import forward as attn_true_varlen
+from .triton.quant_per_block import per_block_int8 as per_block_int8_triton
+from .triton.quant_per_block_varlen import per_block_int8 as per_block_int8_varlen_triton
+from .triton.quant_per_block_hd96 import per_block_int8_hd96
+from .triton.attn_qk_int8_per_block_h96 import forward as attn_h96_false
+from .triton.attn_qk_int8_per_block_h96_causal import forward as attn_h96_true
+from .triton.attn_qk_int8_per_block import forward as attn_false
+from .triton.attn_qk_int8_per_block_causal import forward as attn_true
+from .triton.attn_qk_int8_block_varlen import forward as attn_false_varlen
+from .triton.attn_qk_int8_per_block_causal_varlen import forward as attn_true_varlen
+
+from ._qattn import qk_int8_sv_f16_accum_f32_attn_per_warp
+from ._qattn import qk_int8_sv_f16_accum_f16_attn_per_warp, qk_int8_sv_f16_accum_f16_fuse_v_mean_attn_per_warp
+from ._qattn import qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp, qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn_per_warp
+
+from .quant import per_block_int8 as per_block_int8_cuda
+from .quant import per_warp_int8
+from .quant import sub_mean
+from .quant import per_channel_fp8
 
 from typing import Any, List, Literal, Optional, Tuple, Union
 
@@ -18,10 +43,10 @@ def sageattn(
     q: torch.Tensor, 
     k: torch.Tensor, 
     v: torch.Tensor, 
-    tensor_layout: str ="HND", 
+    tensor_layout: str = "HND", 
     is_causal=False, 
     sm_scale: Optional[float] = None, 
-    smooth_k: bool =True,
+    smooth_k: bool = True,
     **kwargs: Any,
 ) -> torch.Tensor:
     """
@@ -70,6 +95,7 @@ def sageattn(
     - ``num_qo_heads`` must be divisible by ``num_kv_heads``. 
     - The tensors `q`, `k`, and `v` must have the dtype ``torch.float16`` or ``torch.bfloat16``
     - All tensors must be on the same cuda device.
+    - `smooth_k` will introduce slight overhead but will improve the accuracy under most circumstances.
     """
 
     dtype = q.dtype
@@ -84,7 +110,6 @@ def sageattn(
 
     if smooth_k:
         km = k.mean(dim=seq_dim, keepdim=True)
-        k -= km
     else:
         km = None
 
@@ -92,13 +117,13 @@ def sageattn(
         v = v.to(torch.float16)
 
     if headdim == 96:
-        q_int8, q_scale, k_int8, k_scale = per_block_int8_hd96(q, k, sm_scale=sm_scale, tensor_layout=tensor_layout)
+        q_int8, q_scale, k_int8, k_scale = per_block_int8_hd96(q, k, km=km, sm_scale=sm_scale, tensor_layout=tensor_layout)
         if is_causal:
             return attn_h96_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
         else:
             return attn_h96_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
 
-    q_int8, q_scale, k_int8, k_scale = per_block_int8(q, k, sm_scale=sm_scale, tensor_layout=tensor_layout)
+    q_int8, q_scale, k_int8, k_scale = per_block_int8_triton(q, k, km=km, sm_scale=sm_scale, tensor_layout=tensor_layout)
 
     if is_causal:
         o = attn_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
@@ -115,9 +140,9 @@ def sageattn_varlen(
     cu_seqlens_k: torch.Tensor, 
     max_seqlen_q: int, 
     max_seqlen_k: int, 
-    is_causal: bool=False,
-    sm_scale: Optional[float]=None, 
-    smooth_k: bool=True,
+    is_causal: bool = False,
+    sm_scale: Optional[float] = None, 
+    smooth_k: bool = True,
     **kwargs: Any,
 ) -> torch.Tensor:
     """
@@ -169,6 +194,7 @@ def sageattn_varlen(
     - The tensors `q`, `k`, and `v` must have the dtype ``torch.float16`` or ``torch.bfloat16``
     - The tensors `cu_seqlens_q` and `cu_seqlens_k` must have the dtype ``torch.int32`` or ``torch.int64``.
     - All tensors must be on the same cuda device.
+    - `smooth_k` will introduce slight overhead but will improve the accuracy under most circumstances.
     """
     
     dtype = q.dtype
@@ -186,7 +212,7 @@ def sageattn_varlen(
         km = k.mean(dim=0, keepdim=True) # ! km is calculated on the all the batches. Calculate over each individual sequence requires dedicated kernel.
         k -= km
 
-    q_int8, q_scale, k_int8, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale = per_block_int8_varlen(q, k, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, sm_scale=sm_scale)
+    q_int8, q_scale, k_int8, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale = per_block_int8_varlen_triton(q, k, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, sm_scale=sm_scale)
 
     if is_causal:
         o = attn_true_varlen(q_int8, k_int8, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale, output_dtype=dtype)
@@ -194,3 +220,244 @@ def sageattn_varlen(
         o = attn_false_varlen(q_int8, k_int8, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale, output_dtype=dtype)
 
     return o
+
+def sageattn_qk_int8_pv_fp16_cuda(
+    q: torch.Tensor, 
+    k: torch.Tensor, 
+    v: torch.Tensor,
+    tensor_layout: str = "HND",
+    is_causal: bool = False,
+    sm_scale: Optional[float] = None,
+    pv_accum_dtype: str = "fp16",
+    smooth_k: bool = True,
+    smooth_v: bool = True,
+    return_lse: bool = False,
+    **kwargs: Any,
+):
+    """
+
+    Parameters
+    ----------
+    q : torch.Tensor
+        The query tensor. Shape:
+        - If `tensor_layout` is "HND": ``[batch_size, num_qo_heads, qo_len, head_dim]``.
+        - If `tensor_layout` is "NHD": ``[batch_size, qo_len, num_qo_heads, head_dim]``.
+
+    k : torch.Tensor
+        The key tensor. Shape:
+        - If `tensor_layout` is "HND": ``[batch_size, num_kv_heads, kv_len, head_dim]``.
+        - If `tensor_layout` is "NHD": ``[batch_size, kv_len, num_kv_heads, head_dim]``.
+
+    v : torch.Tensor
+        The value tensor. Shape:
+        - If `tensor_layout` is "HND": ``[batch_size, num_kv_heads, kv_len, head_dim]``.
+        - If `tensor_layout` is "NHD": ``[batch_size, kv_len, num_kv_heads, head_dim]``.
+
+    tensor_layout : str
+        The tensor layout, either "HND" or "NHD".
+        Default: "HND".
+
+    is_causal : bool
+        Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len.
+        Default: False.
+
+    sm_scale : Optional[float]
+        The scale used in softmax, if not provided, will be set to ``1.0 / sqrt(head_dim)``.
+
+    pv_accum_dtype : str
+        The dtype of the accumulation of the product of the value tensor and the attention weights, either "fp16" or "fp32".
+        Default: "fp16".
+
+    smooth_k : bool
+        Whether to smooth the key tensor by subtracting the mean along the sequence dimension.
+        Default: True.
+    
+    smooth_v : bool
+        Whether to smooth the value tensor by subtracting the mean along the sequence dimension.
+        Default: True.
+
+    return_lse : bool
+        Whether to return the log sum of the exponentiated attention weights. Used for cases like Ring Attention.
+        Default: False.
+
+    Returns
+    -------
+    torch.Tensor
+        The output tensor. Shape:
+        - If `tensor_layout` is "HND": ``[batch_size, num_qo_heads, qo_len, head_dim]``.
+        - If `tensor_layout` is "NHD": ``[batch_size, qo_len, num_qo_heads, head_dim]``.
+
+    torch.Tensor
+        The logsumexp of each row of the matrix QK^T * scaling (e.g., log of the softmax normalization factor).
+        Shape: ``[batch_size, num_qo_heads, qo_len]``.
+        Only returned if `return_lse` is True.
+
+    Note
+    ----
+    - ``num_qo_heads`` must be divisible by ``num_kv_heads``. 
+    - The tensors `q`, `k`, and `v` must have the dtype ``torch.float16`` or ``torch.bfloat16``
+    - All tensors must be on the same cuda device.
+    - `smooth_k` will introduce slight overhead but will improve the accuracy under most circumstances.
+    - `smooth_v` will introduce slight overhead but will improve the accuracy under some circumstances, as observed in CogVideoX.
+    """
+
+    assert not return_lse or not smooth_k, "currently return_lse and smooth_k cannot be used together."
+
+    dtype = q.dtype
+
+    _tensor_layout = 0 if tensor_layout == "NHD" else 1
+    _is_caual = 1 if is_causal else 0
+    _return_lse = 1 if return_lse else 0
+
+    head_dim = q.size(-1)
+    assert head_dim in [64, 128], "sageattn_qk_int8_pv_fp16_cuda only support head_dim [64, 128]."
+
+    # assert last dim is contiguous
+    assert q.stride(-1) == 1 and k.stride(-1) == 1 and v.stride(-1) == 1, "Last dim of qkv must be contiguous."
+
+    if sm_scale is None:
+        sm_scale = head_dim**-0.5
+
+    seq_dim = 1 if _tensor_layout == 0 else 2
+
+    if smooth_k:
+        km = k.mean(dim=seq_dim, keepdim=True)
+    else:
+        km = None
+
+    q_int8, q_scale, k_int8, k_scale = per_warp_int8(q, k, km, tensor_layout=tensor_layout)
+
+    o = torch.empty(q.size(), dtype=dtype, device=q.device)
+
+    if pv_accum_dtype == 'fp32':
+        v = v.to(torch.float16)
+        lse = qk_int8_sv_f16_accum_f32_attn_per_warp(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
+    elif pv_accum_dtype == "fp16":
+        if smooth_v:
+            smoothed_v, vm = sub_mean(v, tensor_layout=tensor_layout)
+            lse = qk_int8_sv_f16_accum_f16_fuse_v_mean_attn_per_warp(q_int8, k_int8, smoothed_v, o, q_scale, k_scale, vm, _tensor_layout, _is_caual, sm_scale, _return_lse)
+        else:
+            v = v.to(torch.float16)
+            lse = qk_int8_sv_f16_accum_f16_attn_per_warp(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
+    else:
+        raise ValueError(f"Unsupported pv_accum_dtype: {pv_accum_dtype}")
+    
+    if return_lse:
+        return o, lse
+    else:
+        return o
+
+def sageattn_qk_int8_pv_fp8_cuda(
+    q: torch.Tensor, 
+    k: torch.Tensor, 
+    v: torch.Tensor,
+    tensor_layout: str = "HND",
+    is_causal: bool = False,
+    sm_scale: Optional[float] = None,
+    smooth_k: bool = True,
+    smooth_v: bool = True,
+    return_lse: bool = False,
+    **kwargs: Any,
+):
+    """
+
+    Parameters
+    ----------
+    q : torch.Tensor
+        The query tensor. Shape:
+        - If `tensor_layout` is "HND": ``[batch_size, num_qo_heads, qo_len, head_dim]``.
+        - If `tensor_layout` is "NHD": ``[batch_size, qo_len, num_qo_heads, head_dim]``.
+
+    k : torch.Tensor
+        The key tensor. Shape:
+        - If `tensor_layout` is "HND": ``[batch_size, num_kv_heads, kv_len, head_dim]``.
+        - If `tensor_layout` is "NHD": ``[batch_size, kv_len, num_kv_heads, head_dim]``.
+
+    v : torch.Tensor
+        The value tensor. Shape:
+        - If `tensor_layout` is "HND": ``[batch_size, num_kv_heads, kv_len, head_dim]``.
+        - If `tensor_layout` is "NHD": ``[batch_size, kv_len, num_kv_heads, head_dim]``.
+
+    tensor_layout : str
+        The tensor layout, either "HND" or "NHD".
+        Default: "HND".
+
+    is_causal : bool
+        Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len.
+        Default: False.
+
+    sm_scale : Optional[float]
+        The scale used in softmax, if not provided, will be set to ``1.0 / sqrt(head_dim)``.
+
+    smooth_k : bool
+        Whether to smooth the key tensor by subtracting the mean along the sequence dimension.
+        Default: True.
+    
+    smooth_v : bool
+        Whether to smooth the value tensor by subtracting the mean along the sequence dimension.
+        Default: True.
+
+    return_lse : bool
+        Whether to return the log sum of the exponentiated attention weights. Used for cases like Ring Attention.
+        Default: False.
+
+    Returns
+    -------
+    torch.Tensor
+        The output tensor. Shape:
+        - If `tensor_layout` is "HND": ``[batch_size, num_qo_heads, qo_len, head_dim]``.
+        - If `tensor_layout` is "NHD": ``[batch_size, qo_len, num_qo_heads, head_dim]``.
+
+            torch.Tensor
+        The logsumexp of each row of the matrix QK^T * scaling (e.g., log of the softmax normalization factor).
+        Shape: ``[batch_size, num_qo_heads, qo_len]``.
+        Only returned if `return_lse` is True.
+
+    Note
+    ----
+    - ``num_qo_heads`` must be divisible by ``num_kv_heads``. 
+    - The tensors `q`, `k`, and `v` must have the dtype ``torch.float16`` or ``torch.bfloat16``
+    - All tensors must be on the same cuda device.
+    - `smooth_k` will introduce slight overhead but will improve the accuracy under most circumstances.
+    - `smooth_v` will introduce little overhead but will improve the accuracy under some circumstances, as observed in CogVideoX.
+    """
+
+    assert not return_lse or not smooth_k, "currently return_lse and smooth_k cannot be used together."
+
+    dtype = q.dtype
+
+    _tensor_layout = 0 if tensor_layout == "NHD" else 1
+    _is_caual = 1 if is_causal else 0
+    _return_lse = 1 if return_lse else 0
+
+    head_dim = q.size(-1)
+    assert head_dim in [64, 128], "sageattn_qk_int8_pv_fp16_cuda only support head_dim [64, 128]."
+
+    # assert last dim is contiguous
+    assert q.stride(-1) == 1 and k.stride(-1) == 1 and v.stride(-1) == 1, "Last dim of qkv must be contiguous."
+
+    if sm_scale is None:
+        sm_scale = head_dim**-0.5
+
+    seq_dim = 1 if _tensor_layout == 0 else 2
+
+    if smooth_k:
+        km = k.mean(dim=seq_dim, keepdim=True)
+    else:
+        km = None
+
+    q_int8, q_scale, k_int8, k_scale = per_warp_int8(q, k, km, tensor_layout=tensor_layout)
+
+    o = torch.empty(q.size(), dtype=dtype, device=q.device)
+
+    v_fp8, v_scale, vm = per_channel_fp8(v, tensor_layout=tensor_layout, smooth_v=smooth_v)
+
+    if smooth_v:
+        lse = qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn_per_warp(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, vm, _tensor_layout, _is_caual, sm_scale, _return_lse)
+    else:
+        lse = qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
+
+    if return_lse:
+        return o, lse
+    else:
+        return o
