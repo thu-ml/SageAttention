@@ -84,15 +84,27 @@ python sageattn_cogvideo.py
 
 ## Performance
 ### Speed of Kernels
+
+
+![Local Image](./resource/A800_hd128.png)
+
+![Local Image](./resource/A100_hd128.png)
+
+![Local Image](./resource/A6000_hd128.png)
+
+![Local Image](./resource/3090_hd64.png)
+
+![Local Image](./resource/3090_hd128.png)
+
 ![Local Image](./resource/4090_hd64.png)
 
 ![Local Image](./resource/4090_hd128.png)
 
-![Local Image](./resource/3090_hd64.png)
+![Local Image](./resource/L20_hd64.png)
 
-![Local Image](./resource/3090_hd64.png)
+![Local Image](./resource/L20_hd128.png)
 
-> **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing K.
+> **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing.
 
 ### End-to-end performance
 ![Local Image](./resource/real_speedup.png)
