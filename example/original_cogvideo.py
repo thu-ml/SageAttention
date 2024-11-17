@@ -9,10 +9,9 @@ pipe = CogVideoXPipeline.from_pretrained(
     torch_dtype=torch.float16
 )
 
-pipe.enable_model_cpu_offload()
-pipe.enable_sequential_cpu_offload()
 pipe.vae.enable_slicing()
 pipe.vae.enable_tiling()
+
 video = pipe(
     prompt=prompt,
     num_videos_per_prompt=1,

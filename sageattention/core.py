@@ -55,9 +55,10 @@ def sageattn(
     is_causal: bool = False,
     sm_scale: Optional[float] = None,
     return_lse: bool = False,
+    **kwargs: Any,
 ):
     """
-    Automatically selects the appropriate implementation of the SageAttention operation based on the GPU compute capability.
+    Automatically selects the appropriate implementation of the SageAttention kernel based on the GPU compute capability.
 
     Parameters
     ----------
@@ -111,11 +112,11 @@ def sageattn(
     """
         
     arch = get_cuda_arch_versions()[q.device.index]
-    if arch == "sm_80":
+    if arch == "sm80":
         return sageattn_qk_int8_pv_fp16_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse)
-    if arch == "sm_86":
+    if arch == "sm86":
         return sageattn_qk_int8_pv_fp16_triton(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse)
-    if arch == "sm_89" or arch == "sm_90":
+    if arch == "sm89" or arch == "sm90":
         return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse)
     else:
         raise ValueError(f"Unsupported CUDA architecture: {arch}")
@@ -124,7 +125,8 @@ def sageattn_qk_int8_pv_fp16_triton(
     q: torch.Tensor, 
     k: torch.Tensor, 
     v: torch.Tensor, 
-    tensor_layout: str = "HND", 
+    tensor_layout: str = "HND",
+    quantization_backend: str = "triton",
     is_causal=False, 
     sm_scale: Optional[float] = None, 
     smooth_k: bool = True,
@@ -132,6 +134,7 @@ def sageattn_qk_int8_pv_fp16_triton(
     **kwargs: Any,
 ) -> torch.Tensor:
     """
+    SageAttention with per-block INT8 quantization for Q and K, FP16 PV with FP16 accumulation, implemented using Triton.
 
     Parameters
     ----------
@@ -153,6 +156,10 @@ def sageattn_qk_int8_pv_fp16_triton(
     tensor_layout : str
         The tensor layout, either "HND" or "NHD".
         Default: "HND".
+
+    quantization_backend : str
+        The quantization backend, either "triton" or "cuda".
+        "cuda" backend offers better performance due to kernel fusion.
 
     is_causal : bool
         Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len.
@@ -189,10 +196,6 @@ def sageattn_qk_int8_pv_fp16_triton(
     - `smooth_k` will introduce slight overhead but will improve the accuracy under most circumstances.
     """
 
-    if return_lse and smooth_k:
-        warnings.warn("currently return_lse and smooth_k cannot be used together. Ignoring smooth_k.")
-        smooth_k = False
-
     dtype = q.dtype
 
     headdim = q.size(-1)
@@ -205,11 +208,19 @@ def sageattn_qk_int8_pv_fp16_triton(
 
     if smooth_k:
         km = k.mean(dim=seq_dim, keepdim=True)
+        if return_lse:
+            if tensor_layout == "NHD":
+                lse_correction = torch.matmul(q.transpose(1, 2), km.transpose(1, 2).transpose(2, 3)).squeeze(-1).to(torch.float32)
+            else:
+                lse_correction = torch.matmul(q, km.transpose(2, 3)).squeeze(-1).to(torch.float32)
     else:
         km = None
 
     if dtype == torch.bfloat16:
         v = v.to(torch.float16)
+
+    if sm_scale is None:
+        sm_scale = 1.0 / (headdim ** 0.5)
 
     if headdim == 96:
         q_int8, q_scale, k_int8, k_scale = per_block_int8_hd96(q, k, km=km, sm_scale=sm_scale, tensor_layout=tensor_layout)
@@ -218,14 +229,19 @@ def sageattn_qk_int8_pv_fp16_triton(
         else:
             o, lse = attn_h96_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, return_lse=return_lse)
     else:
-        q_int8, q_scale, k_int8, k_scale = per_block_int8_triton(q, k, km=km, sm_scale=sm_scale, tensor_layout=tensor_layout)
+        if quantization_backend == "triton":
+            q_int8, q_scale, k_int8, k_scale = per_block_int8_triton(q, k, km=km, sm_scale=sm_scale, tensor_layout=tensor_layout)
+        elif quantization_backend == "cuda":
+            q_int8, q_scale, k_int8, k_scale = per_block_int8_cuda(q, k, km=km, sm_scale=sm_scale, tensor_layout=tensor_layout)
+        else:
+            raise ValueError(f"Unsupported quantization backend: {quantization_backend}")
         if is_causal:
             o, lse = attn_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, return_lse=return_lse)
         else:
             o, lse = attn_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, return_lse=return_lse)
 
     if return_lse:
-        return o, lse
+        return o, lse / 1.44269504 + lse_correction * sm_scale if smooth_k else lse / 1.44269504
     else:
         return o
 
@@ -332,6 +348,7 @@ def sageattn_qk_int8_pv_fp16_cuda(
     **kwargs: Any,
 ):
     """
+    SageAttention with per-warp INT8 quantization for Q and K, FP16 PV with FP16 accumulation, implemented using CUDA.
 
     Parameters
     ----------
@@ -398,10 +415,6 @@ def sageattn_qk_int8_pv_fp16_cuda(
     - `smooth_v` will introduce slight overhead but will improve the accuracy under some circumstances, as observed in CogVideoX.
     """
 
-    if return_lse and smooth_k:
-        warnings.warn("currently return_lse and smooth_k cannot be used together. Ignoring smooth_k.")
-        smooth_k = False
-
     dtype = q.dtype
 
     _tensor_layout = 0 if tensor_layout == "NHD" else 1
@@ -421,6 +434,11 @@ def sageattn_qk_int8_pv_fp16_cuda(
 
     if smooth_k:
         km = k.mean(dim=seq_dim, keepdim=True)
+        if return_lse:
+            if tensor_layout == "NHD":
+                lse_correction = torch.matmul(q.transpose(1, 2), km.transpose(1, 2).transpose(2, 3)).squeeze(-1).to(torch.float32)
+            else:
+                lse_correction = torch.matmul(q, km.transpose(2, 3)).squeeze(-1).to(torch.float32)
     else:
         km = None
 
@@ -440,9 +458,9 @@ def sageattn_qk_int8_pv_fp16_cuda(
             lse = qk_int8_sv_f16_accum_f16_attn_per_warp(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
     else:
         raise ValueError(f"Unsupported pv_accum_dtype: {pv_accum_dtype}")
-    
+
     if return_lse:
-        return o, lse
+        return o, lse / 1.44269504 + lse_correction * sm_scale if smooth_k else lse / 1.44269504
     else:
         return o
 
@@ -459,6 +477,7 @@ def sageattn_qk_int8_pv_fp8_cuda(
     **kwargs: Any,
 ):
     """
+    SageAttention with per-warp INT8 quantization for Q and K, FP8 PV with FP32 accumulation, implemented using CUDA.
 
     Parameters
     ----------
@@ -521,10 +540,6 @@ def sageattn_qk_int8_pv_fp8_cuda(
     - `smooth_v` will introduce little overhead but will improve the accuracy under some circumstances, as observed in CogVideoX.
     """
 
-    if return_lse and smooth_k:
-        warnings.warn("currently return_lse and smooth_k cannot be used together. Ignoring smooth_k.")
-        smooth_k = False
-
     dtype = q.dtype
 
     _tensor_layout = 0 if tensor_layout == "NHD" else 1
@@ -544,6 +559,11 @@ def sageattn_qk_int8_pv_fp8_cuda(
 
     if smooth_k:
         km = k.mean(dim=seq_dim, keepdim=True)
+        if return_lse:
+            if tensor_layout == "NHD":
+                lse_correction = torch.matmul(q.transpose(1, 2), km.transpose(1, 2).transpose(2, 3)).squeeze(-1).to(torch.float32)
+            else:
+                lse_correction = torch.matmul(q, km.transpose(2, 3)).squeeze(-1).to(torch.float32)
     else:
         km = None
 
@@ -559,6 +579,6 @@ def sageattn_qk_int8_pv_fp8_cuda(
         lse = qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
 
     if return_lse:
-        return o, lse
+        return o, lse / 1.44269504 + lse_correction * sm_scale if smooth_k else lse / 1.44269504
     else:
         return o
