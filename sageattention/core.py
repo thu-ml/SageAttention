@@ -7,8 +7,8 @@ from .quant_per_block_varlen import per_block_int8 as per_block_int8_varlen
 from .quant_per_block_hd96 import per_block_int8_hd96
 from .attn_qk_int8_per_block_h96 import forward as attn_h96_false
 from .attn_qk_int8_per_block_h96_causal import forward as attn_h96_true
-from .attn_qk_int8_per_block import forward as attn_true
-from .attn_qk_int8_per_block_causal import forward as attn_false
+from .attn_qk_int8_per_block import forward as attn_false
+from .attn_qk_int8_per_block_causal import forward as attn_true
 from .attn_qk_int8_block_varlen import forward as attn_false_varlen
 from .attn_qk_int8_per_block_causal_varlen import forward as attn_true_varlen
 
@@ -101,9 +101,9 @@ def sageattn(
     q_int8, q_scale, k_int8, k_scale = per_block_int8(q, k, sm_scale=sm_scale, tensor_layout=tensor_layout)
 
     if is_causal:
-        o = attn_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
-    else:
         o = attn_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
+    else:
+        o = attn_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
 
     return o
 
