@@ -6,11 +6,18 @@ This repository provides the official implementation of SageAttention.
 Paper: https://arxiv.org/abs/2410.02367  
 Jintao Zhang, Jia Wei, Haofeng Huang, Pengle Zhang, Jun Zhu, Jianfei Chen
 
+**SageAttention2 Technical Report: Accurate 4-Bit Attention for Plug-and-play Inference Acceleration**  
+Paper: https://arxiv.org/abs/2411.10958  
+Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 
 ![Local Image](./resource/intro.png)
+*SageAttention*
 
+![Local Image](./resource/intro2.png)
+*SageAttention2*
 
 ## Project Updates
+- **News** 2024-11-19: SageAttention2 will be released soon.
 - **News** 2024-11-12: Support for `sageattn_varlen` is available now.
 - **News** 2024-11-11: Support for different sequence length between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
 
@@ -103,7 +110,7 @@ python sageattn_cogvideo.py
 ## Citation
 If you use this code or find our work valuable, please cite:
 ```
-@misc{zhang2024sageattentionaccurate8bitattention,
+@misc{zhang2024sageattention,
       title={SageAttention: Accurate 8-Bit Attention for Plug-and-play Inference Acceleration}, 
       author={Jintao Zhang and Jia wei and Haofeng Huang and Pengle Zhang and Jun Zhu and Jianfei Chen},
       year={2024},
@@ -111,5 +118,15 @@ If you use this code or find our work valuable, please cite:
       archivePrefix={arXiv},
       primaryClass={cs.LG},
       url={https://arxiv.org/abs/2410.02367}, 
+}
+
+@misc{zhang2024sageattention2,
+      title={SageAttention2 Technical Report: Accurate 4 Bit Attention for Plug-and-play Inference Acceleration}, 
+      author={Jintao Zhang and Haofeng Huang and Pengle Zhang and Jia Wei and Jun Zhu and Jianfei Chen},
+      year={2024},
+      eprint={2411.10958},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2411.10958}, 
 }
 ```
