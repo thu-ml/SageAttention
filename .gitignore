@@ -5,3 +5,7 @@
 /dist
 /test
 __pycache__
+*.so
+evaluate/
+*.pkl
+*.vscode/

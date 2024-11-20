@@ -16,52 +16,74 @@ Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 ![Local Image](./resource/intro2.png)
 *SageAttention2*
 
+## Beta Version
+This is a beta release of SageAttention 2. We welcome any feedback on accuracy, performance issues, bugs, feature requests, or suggestions for improvements. Please feel free to open an issue or submit a pull request!
+
+Features:
++ INT8 quantization for `q, k`
++ FP8 quantization for `PV`
++ FP32 buffer for `PV` accumulator to increase accuracy of low-precision accumulator. 
+
+For stable version, refer to [SageAttention 1](https://github.com/thu-ml/SageAttention/tree/sageattention-1)
+
 ## Project Updates
+- **News** 2024-11-21: SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800 and A6000 other than RTX3090 and RTX4090.
 - **News** 2024-11-19: SageAttention2 will be released soon.
 - **News** 2024-11-12: Support for `sageattn_varlen` is available now.
 - **News** 2024-11-11: Support for different sequence length between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
 
 
 ## Base environment
-`python>=3.9`   
-`torch>=2.3.0`  
-`triton>=2.3.0` 
++ `python>=3.9`   
++ `torch>=2.3.0`  
++ `triton>=3.0.0` 
++ `CUDA>=12.4` if you want to use fp8 else `CUDA>=12.0`
 
 We recommend to install: (the kernel will be faster a little)  
-`python>=3.11`  
-`torch>=2.4.0`  
-`triton-nightly`
++ `python>=3.11`  
++ `torch>=2.4.0`  
++ `triton-nightly`
++ `CUDA=12.6`
 
 
 ## Installation
-Install using pip:  
+
+For stable version or python only version, refer to [SageAttention 1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) or install using pip:
 ```
-pip install sageattention
+pip install sageattention==1.0.6
 ```
 
-Or compiling from source:
+To use SageAttention 2.0.0, compile from source:
 ```
+git clone https://github.com/thu-ml/SageAttention.git
 cd sageattention 
-pip install .
+pip install -e . # or python setup.py install
 ```
 
 
-> **Note:** SageAttention is currently optimized for RTX4090 and RTX3090 GPUs. Performance improvements may not be significant on other GPU architectures. We will progressively extend support to other GPUs.
+> **Note:** SageAttention is currently optimized for RTX4090, RTX3090, L20, and L40 GPUs, where performance is excellent. For A100, A800, and A6000 GPUs, the performance is best with `head_dim=128`. However, `head_dim=64` on A100, A800, and A6000 GPUs, as well as performance on the Hopper architecture, are currently suboptimal. We are actively working on improving performance for these settings.
 
 
 ## How to use
 ```python
 from sageattention import sageattn
-attn_output = sageattn(q, k, v, tensor_layout="HND", is_causal=False, smooth_k=True)
+attn_output = sageattn(q, k, v, tensor_layout="HND", is_causal=False)
 ```
-`q, k, v` are **FP16/BF16/FP32** type with the shape `(batch_size, head_num, seq_len, head_dim)` using default `tensor_layout="HND"`. For shape `(batch_size, seq_len, head_num, head_dim)`, set `tensor_layout="NHD"`. `is_causal` determines the use of a causal mask. `smooth_k` is a technique we proposed to ensure the accuracy. Disabling `smooth_k` might slightly increase speed, but could compromise accuracy if the distribution of `q, k, v` is irregular. In rare cases, setting `smooth_k` to `False` may result in better accuracy.
++ `q, k, v` are **FP16/BF16** type with the shape `(batch_size, head_num, seq_len, head_dim)` using default `tensor_layout="HND"`. For shape `(batch_size, seq_len, head_num, head_dim)`, set `tensor_layout="NHD"`. 
++ `is_causal` determines the use of a causal mask.
 
-> **Note:** `sageattn` is an accurate implementation that integrating smoothing K, INT8 per-block quantization for `q, k`, and a FP16 accumulator for Matmul of $PV$. 
-Support for `head_dim` values of `64`, `96`, and `128` is currently available. Extended support for values 48, 72, and 256 will be available soon.
+### Available APIs:
++ `sageattn`: Automacially selects the kernel based on GPU compute capability that achieves good performance-accuracy trade-off.
++ `sageattn_qk_int8_pv_fp16_triton`: Uses INT8 quantization for `q, k` and FP16 for `PV` with FP16 accumulator and Triton backend.
++ `sageattn_qk_int8_pv_fp16_cuda`: use INT8 quantization for `q, k` and FP16 for `PV` with CUDA backend.
++ `sageattn_qk_int8_pv_fp8_cuda`: Uses INT8 quantization for `q, k` and FP8 for `PV` with CUDA backend.
++ `sageattn_varlen`: Supports different sequences length in the same batch, using INT8 quantization for `q, k` and FP16 for `PV` with FP16 accumulator and Triton backend.
+
+For optimal performance while maintaining accuracy on custom devices and models, we strongly recommend referring to the [this file](./sageattention/core.py) for detailed guidance.
+
+> **Note:**
+Support for `head_dim` values of `64`, `96`, and `128` is currently available. Extended support for other `head_dim` is under development.
 Support for different sequence length between `q` and `k,v` and `group-query attention` is available.
-Support of different sequences length in the same batch is available through `sageattn_varlen`.
-
-
 
 
 ## **Plug-and-play Example**
@@ -91,15 +113,27 @@ python sageattn_cogvideo.py
 
 ## Performance
 ### Speed of Kernels
+
+
+![Local Image](./resource/A800_hd128.png)
+
+![Local Image](./resource/A100_hd128.png)
+
+![Local Image](./resource/A6000_hd128.png)
+
+![Local Image](./resource/3090_hd64.png)
+
+![Local Image](./resource/3090_hd128.png)
+
 ![Local Image](./resource/4090_hd64.png)
 
 ![Local Image](./resource/4090_hd128.png)
 
-![Local Image](./resource/3090_hd64.png)
+![Local Image](./resource/L20_hd64.png)
 
-![Local Image](./resource/3090_hd64.png)
+![Local Image](./resource/L20_hd128.png)
 
-> **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing K.
+> **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing. For FP16 `PV`, we use FP16  accumulator and for FP8 `PV` we use FP32 accumulator.
 
 ### End-to-end performance
 ![Local Image](./resource/real_speedup.png)

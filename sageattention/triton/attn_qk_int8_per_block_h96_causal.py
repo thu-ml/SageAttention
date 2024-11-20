@@ -1,10 +1,26 @@
+"""
+Copyright (c) 2024 by SageAttention team.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+"""
+
 import torch, math
 import triton
 import triton.language as tl
 
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
-                    K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn, 
+                    K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
                     start_m,  
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  
@@ -19,11 +35,10 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
         V_ptrs += stride_vn * lo
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        k_mask = offs_n[None, :] < (kv_len - start_n)   
+        k_mask = (offs_n[None, :] < (kv_len - start_n)) & ((tl.arange(0, 128) < 96)[:, None])
         k = tl.load(K_ptrs, mask = k_mask)
         k_scale = tl.load(K_scale_ptr)
-        qk = tl.dot(q, k).to(tl.float32) * q_scale * k_scale 
-
+        qk = tl.dot(q, k).to(tl.float32) * q_scale * k_scale
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = qk + tl.where(mask, 0, -1.0e6)
@@ -32,19 +47,15 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
         else:
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
             qk = qk - m_ij[:, None]
-        
         p = tl.math.exp2(qk)
         l_ij = tl.sum(p, 1)
-        
         alpha = tl.math.exp2(m_i - m_ij)
         l_i = l_i * alpha + l_ij
-        
         acc = acc * alpha[:, None]
-        
-        v = tl.load(V_ptrs, mask = offs_n[:, None] < (kv_len - start_n))
+        v = tl.load(V_ptrs, mask = (offs_n[:, None] < (kv_len - start_n)) & ((tl.arange(0, 128) < 96)[None, :]))
         p = p.to(tl.float16)
         
-        acc += tl.dot(p, v, out_dtype=tl.float16)   
+        acc += tl.dot(p, v, out_dtype=tl.float16)  
         m_i = m_ij
         K_ptrs += BLOCK_N * stride_kn
         K_scale_ptr += 1
@@ -52,28 +63,29 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
     return acc, l_i, m_i
 
 @triton.jit
-def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,  
-              stride_qz, stride_qh, stride_qn,
-              stride_kz, stride_kh, stride_kn,  
+def _attn_fwd(Q, K, V, Q_scale, K_scale, Out, Lse,
+              stride_qz, stride_qh, stride_qn,  
+              stride_kz, stride_kh, stride_kn, 
               stride_vz, stride_vh, stride_vn,  
               stride_oz, stride_oh, stride_on,  
-              qo_len, kv_len, H:tl.constexpr, num_kv_groups:tl.constexpr, 
+              H, num_kv_groups, qo_len, kv_len,  
               HEAD_DIM: tl.constexpr,  
               BLOCK_M: tl.constexpr,  
               BLOCK_N: tl.constexpr,  
-              STAGE: tl.constexpr
+              STAGE: tl.constexpr,
+              RETURN_LSE: tl.constexpr,
               ):
     start_m = tl.program_id(0)
-
-    off_z = tl.program_id(2).to(tl.int64)
-    off_h = tl.program_id(1).to(tl.int64)
-
-    q_scale_offset = (off_z * H + off_h) * tl.cdiv(qo_len, BLOCK_M)
-    k_scale_offset = (off_z * (H // num_kv_groups) + off_h // num_kv_groups) * tl.cdiv(kv_len, BLOCK_N)  
+    off_hz = tl.program_id(1)
     
+    off_z = (off_hz // H).to(tl.int64)
+    off_h = (off_hz % H).to(tl.int64)
+    q_scale_offset = off_hz * tl.cdiv(qo_len, BLOCK_M)
+    k_scale_offset = (off_z * (H // num_kv_groups) + off_h // num_kv_groups) * tl.cdiv(kv_len, BLOCK_N)
+
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
-    offs_k = tl.arange(0, HEAD_DIM)
+    offs_k = tl.arange(0, 128)
     Q_ptrs = Q + (off_z * stride_qz + off_h * stride_qh) + offs_m[:, None] * stride_qn + offs_k[None, :]
     Q_scale_ptr = Q_scale + q_scale_offset + start_m
     K_ptrs = K + (off_z * stride_kz + (off_h // num_kv_groups) * stride_kh) + offs_n[None, :] * stride_kn + offs_k[:, None] 
@@ -83,25 +95,29 @@ def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,
     
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
-    acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
+    acc = tl.zeros([BLOCK_M, 128], dtype=tl.float32)
     
-    q = tl.load(Q_ptrs, mask = offs_m[:, None] < qo_len)
+    q = tl.load(Q_ptrs, mask = (offs_m[:, None] < qo_len) & ((tl.arange(0, 128) < 96)[None, :]))
     q_scale = tl.load(Q_scale_ptr)
     acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
                                     start_m,  
                                     BLOCK_M, HEAD_DIM, BLOCK_N,  
-                                    4 - STAGE, offs_m, offs_n 
+                                    4 - STAGE, offs_m, offs_n
                                     )
-
-    acc, l_i, _ = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
+    acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
                                     start_m,  
                                     BLOCK_M, HEAD_DIM, BLOCK_N,  
-                                    2, offs_m, offs_n 
+                                    2, offs_m, offs_n
                                     )
     acc = acc / l_i[:, None]
-    tl.store(O_block_ptr, acc.to(Out.type.element_ty), mask = (offs_m[:, None] < qo_len))
+    tl.store(O_block_ptr, acc.to(Out.type.element_ty), mask = (offs_m[:, None] < qo_len) & ((tl.arange(0, 128) < 96)[None, :]))
 
-def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.float16):
+    if RETURN_LSE:
+        lse_ptrs = Lse + (off_z * qo_len * H + off_h * qo_len) + offs_m
+        l_i = tl.log2(l_i) + m_i
+        tl.store(lse_ptrs, l_i, mask = (offs_m < qo_len))
+
+def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.float16, return_lse=False):
     BLOCK_M = 128
     BLOCK_N = 64
     stage = 3
@@ -128,21 +144,33 @@ def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.f
         raise ValueError(f"tensor_layout {tensor_layout} not supported")
     
     assert qo_len == kv_len, "qo_len and kv_len must be equal for causal attention"
-
-    HEAD_DIM_K = head_dim
+    
     num_kv_groups = h_qo // h_kv
 
-    grid = (triton.cdiv(qo_len, BLOCK_M), h_qo, b   )
+    if return_lse:
+        lse = torch.empty([b, h_qo, qo_len], dtype=torch.float32, device=q.device)
+    else:
+        lse = torch.empty([0], dtype=torch.float32, device='cpu')
+
+    HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
+    HEAD_DIM_V = v.shape[-1]
+    assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
+
+    grid = (triton.cdiv(qo_len, BLOCK_M), b * h_qo, 1)
     _attn_fwd[grid](
-        q, k, v, q_scale, k_scale, o,  
+        q, k, v, q_scale, k_scale, o, lse,
         stride_bz_q, stride_h_q, stride_seq_q, 
         stride_bz_k, stride_h_k, stride_seq_k,  
         stride_bz_v, stride_h_v, stride_seq_v,  
-        stride_bz_o, stride_h_o, stride_seq_o,
+        stride_bz_o, stride_h_o, stride_seq_o, 
+        h_qo, num_kv_groups, 
         qo_len, kv_len,
-        h_qo, num_kv_groups,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, HEAD_DIM=HEAD_DIM_K,  
-        STAGE=stage,  
-        num_warps=4 if head_dim == 64 else 8,
+        STAGE=stage, RETURN_LSE=return_lse,
+        num_warps=8,  
         num_stages=4)
-    return o
+
+    return o, lse
+
+
+
