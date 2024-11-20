@@ -73,9 +73,8 @@ def sageattn(
     """
 
     dtype = q.dtype
-
     assert q.is_cuda, "Input tensors must be on cuda."
-    assert dtype in [torch.float16, torch.bfloat16, torch.float32], "Input tensors must be of dtype torch.float16, torch.bfloat16, or torch.float32."
+    assert dtype in [torch.float16, torch.bfloat16, torch.float32], "Input tensors must be in dtype of torch.float16, torch.bfloat16, or torch.float32."
     assert q.device == k.device == v.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
 
@@ -177,9 +176,8 @@ def sageattn_varlen(
     """
     
     dtype = q.dtype
-
     assert q.is_cuda, "Input tensors must be on cuda."
-    assert dtype in [torch.float16, torch.bfloat16, torch.float32], "Input tensors must be of dtype torch.float16, torch.bfloat16, or torch.float32."
+    assert dtype in [torch.float16, torch.bfloat16, torch.float32], "Input tensors must be in dtype of torch.float16, torch.bfloat16, or torch.float32."
     assert q.device == k.device == v.device == cu_seqlens_q.device == cu_seqlens_k.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
     assert cu_seqlens_q.dtype in [torch.int32, torch.int64] and cu_seqlens_k.dtype in [torch.int32, torch.int64], "cu_seqlens_q and cu_seqlens_k must have dtype torch.int32 or torch.int64."
