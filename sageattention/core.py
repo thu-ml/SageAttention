@@ -31,6 +31,7 @@ from .triton.attn_qk_int8_per_block_causal_varlen import forward as attn_true_va
 from ._qattn import qk_int8_sv_f16_accum_f32_attn_per_warp
 from ._qattn import qk_int8_sv_f16_accum_f16_attn_per_warp, qk_int8_sv_f16_accum_f16_fuse_v_mean_attn_per_warp
 from ._qattn import qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp, qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn_per_warp
+from ._qattn import qk_int8_sv_f16_accum_f16_attn_per_warp_buf, qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp_buf
 
 from .quant import per_block_int8 as per_block_int8_cuda
 from .quant import per_warp_int8
@@ -113,11 +114,13 @@ def sageattn(
         
     arch = get_cuda_arch_versions()[q.device.index]
     if arch == "sm80":
-        return sageattn_qk_int8_pv_fp16_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse)
-    if arch == "sm86":
+        return sageattn_qk_int8_pv_fp16_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32")
+    elif arch == "sm86":
         return sageattn_qk_int8_pv_fp16_triton(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse)
-    if arch == "sm89" or arch == "sm90":
-        return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse)
+    elif arch == "sm89":
+        return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32+fp32")
+    elif arch == "sm90":
+        return sageattn_qk_int8_pv_fp16_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32")
     else:
         raise ValueError(f"Unsupported CUDA architecture: {arch}")
 
@@ -135,6 +138,7 @@ def sageattn_qk_int8_pv_fp16_triton(
 ) -> torch.Tensor:
     """
     SageAttention with per-block INT8 quantization for Q and K, FP16 PV with FP16 accumulation, implemented using Triton.
+    The FP16 accumulator is added to a FP32 buffer immediately after each iteration.
 
     Parameters
     ----------
@@ -197,6 +201,11 @@ def sageattn_qk_int8_pv_fp16_triton(
     """
 
     dtype = q.dtype
+    assert q.is_cuda, "Input tensors must be on cuda."
+    assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
+    assert q.device == k.device == v.device, "All tensors must be on the same device."
+    assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
+
 
     headdim = q.size(-1)
     assert headdim in [64, 96, 128], "headdim should be in [64, 96, 128]."
@@ -311,6 +320,10 @@ def sageattn_varlen(
     """
     
     dtype = q.dtype
+    assert q.is_cuda, "Input tensors must be on cuda."
+    assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
+    assert q.device == k.device == v.device, "All tensors must be on the same device."
+    assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
 
     head_dim = q.size(-1)
     assert head_dim in [64, 128], "varlen only support head_dim [64, 128]."
@@ -379,7 +392,10 @@ def sageattn_qk_int8_pv_fp16_cuda(
         The scale used in softmax, if not provided, will be set to ``1.0 / sqrt(head_dim)``.
 
     pv_accum_dtype : str
-        The dtype of the accumulation of the product of the value tensor and the attention weights, either "fp16" or "fp32".
+        The dtype of the accumulation of the product of the value tensor and the attention weights, either "fp16", "fp16+fp32" or "fp32".
+        - "fp16": PV accumulation is done in fully in FP16. This is the fastest option but may lead to numerical instability. `smooth_v` option will increase the accuracy in cases when the value tensor has a large bias (like in CogVideoX-2b).
+        - "fp32": PV accumulation is done in FP32. This is the most accurate option but may be slower than "fp16" due to CUDA core overhead.
+        - "fp16+fp32": PV accumulation is done in FP16, but added to a FP32 buffer every few iterations. This offers a balance between speed and accuracy.
         Default: "fp16".
 
     smooth_k : bool
@@ -388,6 +404,7 @@ def sageattn_qk_int8_pv_fp16_cuda(
     
     smooth_v : bool
         Whether to smooth the value tensor by subtracting the mean along the sequence dimension.
+        smooth_v will be ignored if pv_accum_dtype is "fp32" or "fp16+fp32".
         Default: True.
 
     return_lse : bool
@@ -416,6 +433,11 @@ def sageattn_qk_int8_pv_fp16_cuda(
     """
 
     dtype = q.dtype
+    assert q.is_cuda, "Input tensors must be on cuda."
+    assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
+    assert q.device == k.device == v.device, "All tensors must be on the same device."
+    assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
+
 
     _tensor_layout = 0 if tensor_layout == "NHD" else 1
     _is_caual = 1 if is_causal else 0
@@ -446,6 +468,10 @@ def sageattn_qk_int8_pv_fp16_cuda(
 
     o = torch.empty(q.size(), dtype=dtype, device=q.device)
 
+    if pv_accum_dtype in ["fp32", "fp16+fp32"] and smooth_v:
+        warnings.warn(f"pv_accum_dtype is {pv_accum_dtype}, smooth_v will be ignored.")
+        smooth_v = False
+
     if pv_accum_dtype == 'fp32':
         v = v.to(torch.float16)
         lse = qk_int8_sv_f16_accum_f32_attn_per_warp(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
@@ -456,6 +482,9 @@ def sageattn_qk_int8_pv_fp16_cuda(
         else:
             v = v.to(torch.float16)
             lse = qk_int8_sv_f16_accum_f16_attn_per_warp(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
+    elif pv_accum_dtype == "fp16+fp32":
+        v = v.to(torch.float16)
+        lse = qk_int8_sv_f16_accum_f16_attn_per_warp_buf(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
     else:
         raise ValueError(f"Unsupported pv_accum_dtype: {pv_accum_dtype}")
 
@@ -471,6 +500,7 @@ def sageattn_qk_int8_pv_fp8_cuda(
     tensor_layout: str = "HND",
     is_causal: bool = False,
     sm_scale: Optional[float] = None,
+    pv_accum_dtype: str = "fp32",
     smooth_k: bool = True,
     smooth_v: bool = True,
     return_lse: bool = False,
@@ -507,12 +537,19 @@ def sageattn_qk_int8_pv_fp8_cuda(
     sm_scale : Optional[float]
         The scale used in softmax, if not provided, will be set to ``1.0 / sqrt(head_dim)``.
 
+    pv_accum_dtype : str
+        The dtype of the accumulation of the product of the value tensor and the attention weights, either "fp32" or "fp32+fp32".
+        - "fp32": PV accumulation is done in fully in FP32. However, due to the hardware issue, there are only 22 valid bits in the FP32 accumulator.
+        - "fp32+fp32": PV accumulation is done in FP32 (actually FP22), but added to a FP32 buffer every few iterations. This offers a balance between speed and accuracy.
+        Default: "fp32".
+        
     smooth_k : bool
         Whether to smooth the key tensor by subtracting the mean along the sequence dimension.
         Default: True.
     
     smooth_v : bool
         Whether to smooth the value tensor by subtracting the mean along the sequence dimension.
+        smooth_v will be ignored if pv_accum_dtype is "fp32+fp32".
         Default: True.
 
     return_lse : bool
@@ -541,6 +578,10 @@ def sageattn_qk_int8_pv_fp8_cuda(
     """
 
     dtype = q.dtype
+    assert q.is_cuda, "Input tensors must be on cuda."
+    assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
+    assert q.device == k.device == v.device, "All tensors must be on the same device."
+    assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
 
     _tensor_layout = 0 if tensor_layout == "NHD" else 1
     _is_caual = 1 if is_causal else 0
@@ -571,12 +612,19 @@ def sageattn_qk_int8_pv_fp8_cuda(
 
     o = torch.empty(q.size(), dtype=dtype, device=q.device)
 
+    if pv_accum_dtype == 'fp32+fp32' and smooth_v:
+        warnings.warn("pv_accum_dtype is 'fp32+fp32', smooth_v will be ignored.")
+        smooth_v = False
+
     v_fp8, v_scale, vm = per_channel_fp8(v, tensor_layout=tensor_layout, smooth_v=smooth_v)
 
-    if smooth_v:
-        lse = qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn_per_warp(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, vm, _tensor_layout, _is_caual, sm_scale, _return_lse)
-    else:
-        lse = qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
+    if pv_accum_dtype == "fp32":
+        if smooth_v:
+            lse = qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn_per_warp(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, vm, _tensor_layout, _is_caual, sm_scale, _return_lse)
+        else:
+            lse = qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
+    elif pv_accum_dtype == "fp32+fp32":
+        lse = qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
 
     if return_lse:
         return o, lse / 1.44269504 + lse_correction * sm_scale if smooth_k else lse / 1.44269504

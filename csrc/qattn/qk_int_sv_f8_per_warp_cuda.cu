@@ -361,7 +361,7 @@ __global__ void qk_int_sv_f8_attn_per_warp_kernel(int8_t *__restrict__ Q, int8_t
     {
       apply_causal_mask<num_tiles_q, num_tiles_k>(Q_idx_lane_base, K_idx_lane_base, RS_f32);
     }
-    apply_out_of_bound_mask<num_tiles_q, num_tiles_k>(K_idx_lane_base, RS_f32, kv_len);
+    // apply_out_of_bound_mask<num_tiles_q, num_tiles_k>(K_idx_lane_base, RS_f32, kv_len);
     K_idx_lane_base += CTA_K;
 
     if constexpr (std::is_same<DTypeSVAccum, float>::value)
