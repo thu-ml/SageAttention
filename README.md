@@ -6,6 +6,9 @@ This repository provides the official implementation of SageAttention.
 Paper: https://arxiv.org/abs/2410.02367  
 Jintao Zhang, Jia Wei, Pengle Zhang, Jun Zhu, Jianfei Chen
 
+**SageAttention2 Technical Report: Accurate 4-Bit Attention for Plug-and-play Inference Acceleration**  
+Paper: https://arxiv.org/abs/2411.10958  
+Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 
 ![Local Image](./resource/intro.png)
 
@@ -123,5 +126,15 @@ If you use this code or find our work valuable, please cite:
       archivePrefix={arXiv},
       primaryClass={cs.LG},
       url={https://arxiv.org/abs/2410.02367}, 
+}
+
+@misc{zhang2024sageattention2,
+      title={SageAttention2 Technical Report: Accurate 4 Bit Attention for Plug-and-play Inference Acceleration}, 
+      author={Jintao Zhang and Haofeng Huang and Pengle Zhang and Jia Wei and Jun Zhu and Jianfei Chen},
+      year={2024},
+      eprint={2411.10958},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2411.10958}, 
 }
 ```
