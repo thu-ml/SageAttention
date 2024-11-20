@@ -1,3 +1,19 @@
+"""
+Copyright (c) 2024 by SageAttention team.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+"""
+
 import torch
 import triton
 import triton.language as tl
@@ -30,9 +46,12 @@ def quant_per_block_int8_kernel(Input, Output, Scale, L,
     tl.store(output_ptrs, x_int8, mask=offs_n[:, None] < L)
     tl.store(scale_ptrs, scale)
 
-def per_block_int8(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
+def per_block_int8(q, k, km=None, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
     q_int8 = torch.empty(q.shape, dtype=torch.int8, device=q.device)
     k_int8 = torch.empty(k.shape, dtype=torch.int8, device=k.device)
+
+    if km is not None:
+        k -= km
 
     if tensor_layout == "HND":
         b, h_qo, qo_len, head_dim = q.shape
@@ -53,8 +72,8 @@ def per_block_int8(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
     else:
         raise ValueError(f"Unknown tensor layout: {tensor_layout}")
 
-    q_scale = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
-    k_scale = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, 1), device=q.device, dtype=torch.float32)
+    q_scale = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ), device=q.device, dtype=torch.float32)
+    k_scale = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK), device=q.device, dtype=torch.float32)
 
     if sm_scale is None:
         sm_scale = head_dim**-0.5

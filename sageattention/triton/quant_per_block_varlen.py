@@ -1,3 +1,19 @@
+"""
+Copyright (c) 2024 by SageAttention team.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+"""
+
 import torch
 import triton
 import triton.language as tl
@@ -59,8 +75,8 @@ def per_block_int8(q, k, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
     cu_seqlens_q_scale = torch.nn.functional.pad(torch.cumsum(q_scale_len, dim=0), (1, 0), value=0)
     cu_seqlens_k_scale = torch.nn.functional.pad(torch.cumsum(k_scale_len, dim=0), (1, 0), value=0)
 
-    q_scale = torch.empty((cu_seqlens_q_scale[-1], h_qo, 1), device=q.device, dtype=torch.float32)
-    k_scale = torch.empty((cu_seqlens_k_scale[-1], h_kv, 1), device=k.device, dtype=torch.float32)
+    q_scale = torch.empty((cu_seqlens_q_scale[-1], h_qo), device=q.device, dtype=torch.float32)
+    k_scale = torch.empty((cu_seqlens_k_scale[-1], h_kv), device=k.device, dtype=torch.float32)
 
     if sm_scale is None:
         sm_scale = head_dim**-0.5
