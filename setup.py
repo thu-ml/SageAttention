@@ -13,7 +13,7 @@ setup(
     license='BSD 3-Clause License',  
     python_requires='>=3.9', 
     classifiers=[  
-        'Development Status :: 6 - Beta', 
+        'Development Status :: 4 - Beta', 
         'Intended Audience :: Developers',  
         'Topic :: Software Development :: Libraries :: Python Modules',
         'License :: OSI Approved :: BSD License',
