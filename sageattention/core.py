@@ -68,11 +68,16 @@ def sageattn(
     Note
     ----
     - ``num_qo_heads`` must be divisible by ``num_kv_heads``. 
-    - The tensors `q`, `k`, and `v` must have the dtype ``torch.float16`` or ``torch.bfloat16``
+    - The tensors `q`, `k`, and `v` must have the dtype ``torch.float16``, ``torch.bfloat16`` or ``torch.float32``.
     - All tensors must be on the same cuda device.
     """
 
     dtype = q.dtype
+
+    assert q.is_cuda, "Input tensors must be on cuda."
+    assert dtype in [torch.float16, torch.bfloat16, torch.float32], "Input tensors must be of dtype torch.float16, torch.bfloat16, or torch.float32."
+    assert q.device == k.device == v.device, "All tensors must be on the same device."
+    assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
 
     headdim = q.size(-1)
     assert headdim in [64, 96, 128], "headdim should be in [64, 96, 128]."
@@ -88,7 +93,7 @@ def sageattn(
     else:
         km = None
 
-    if dtype == torch.bfloat16:
+    if dtype == torch.bfloat16 or dtype == torch.float32:
         v = v.to(torch.float16)
 
     if headdim == 96:
@@ -166,12 +171,18 @@ def sageattn_varlen(
     Note
     ----
     - ``num_qo_heads`` must be divisible by ``num_kv_heads``.
-    - The tensors `q`, `k`, and `v` must have the dtype ``torch.float16`` or ``torch.bfloat16``
+    - The tensors `q`, `k`, and `v` must have the dtype ``torch.float16``, ``torch.bfloat16`` or ``torch.float32``.
     - The tensors `cu_seqlens_q` and `cu_seqlens_k` must have the dtype ``torch.int32`` or ``torch.int64``.
     - All tensors must be on the same cuda device.
     """
     
     dtype = q.dtype
+
+    assert q.is_cuda, "Input tensors must be on cuda."
+    assert dtype in [torch.float16, torch.bfloat16, torch.float32], "Input tensors must be of dtype torch.float16, torch.bfloat16, or torch.float32."
+    assert q.device == k.device == v.device == cu_seqlens_q.device == cu_seqlens_k.device, "All tensors must be on the same device."
+    assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
+    assert cu_seqlens_q.dtype in [torch.int32, torch.int64] and cu_seqlens_k.dtype in [torch.int32, torch.int64], "cu_seqlens_q and cu_seqlens_k must have dtype torch.int32 or torch.int64."
 
     head_dim = q.size(-1)
     assert head_dim in [64, 128], "varlen only support head_dim [64, 128]."
@@ -179,7 +190,7 @@ def sageattn_varlen(
     assert q.stride(-1) == 1 and k.stride(-1) == 1 and v.stride(-1) == 1, "Last dim of qkv must be contiguous."
     assert cu_seqlens_q.is_contiguous() and cu_seqlens_k.is_contiguous(), "cu_seqlens_q and cu_seqlens_k must be contiguous."
 
-    if dtype == torch.bfloat16:
+    if dtype == torch.bfloat16 or dtype == torch.float32:
         v = v.to(torch.float16)
 
     if smooth_k:

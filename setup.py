@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='sageattention', 
-    version='1.0.5',  
+    version='1.0.6',  
     author='Jintao Zhang, Haofeng Huang',
     author_email='jt-zhang6@gmail.com, huanghf22@mails.tsinghua.edu.cn', 
     packages=find_packages(),  
@@ -13,7 +13,7 @@ setup(
     license='BSD 3-Clause License',  
     python_requires='>=3.9', 
     classifiers=[  
-        'Development Status :: 4 - Beta', 
+        'Development Status :: 6 - Beta', 
         'Intended Audience :: Developers',  
         'Topic :: Software Development :: Libraries :: Python Modules',
         'License :: OSI Approved :: BSD License',
