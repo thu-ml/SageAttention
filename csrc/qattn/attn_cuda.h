@@ -38,6 +38,17 @@ torch::Tensor qk_int8_sv_f16_accum_f16_attn_per_warp(torch::Tensor query,
                     float sm_scale,
                     int return_lse);
 
+torch::Tensor qk_int8_sv_f16_accum_f16_attn_per_warp_buf(torch::Tensor query,
+                    torch::Tensor key,
+                    torch::Tensor value,
+                    torch::Tensor output,
+                    torch::Tensor query_scale,
+                    torch::Tensor key_scale,
+                    int tensor_layout,
+                    int is_causal,
+                    float sm_scale,
+                    int return_lse);
+
 torch::Tensor qk_int8_sv_f16_accum_f16_fuse_v_mean_attn_per_warp(torch::Tensor query,
                     torch::Tensor key,
                     torch::Tensor value,
@@ -81,6 +92,29 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn_per_warp(tor
                     torch::Tensor key_scale,
                     torch::Tensor value_scale,
                     torch::Tensor value_mean,
+                    int tensor_layout,
+                    int is_causal,
+                    float sm_scale,
+                    int return_lse);
+
+torch::Tensor qk_int8_sv_f8_accum_f32_attn_per_warp_buf(torch::Tensor query,
+                    torch::Tensor key,
+                    torch::Tensor value,
+                    torch::Tensor output,
+                    torch::Tensor query_scale,
+                    torch::Tensor key_scale,
+                    int tensor_layout,
+                    int is_causal,
+                    float sm_scale,
+                    int return_lse);
+
+torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp_buf(torch::Tensor query,
+                    torch::Tensor key,
+                    torch::Tensor value,
+                    torch::Tensor output,
+                    torch::Tensor query_scale,
+                    torch::Tensor key_scale,
+                    torch::Tensor value_scale,
                     int tensor_layout,
                     int is_causal,
                     float sm_scale,
