@@ -11,10 +11,10 @@ Paper: https://arxiv.org/abs/2411.10958
 Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 
 ![Local Image](./resource/intro.png)
-*SageAttention*
+*SageAttention on CogvideoX-2B (RTX4090)*
 
 ![Local Image](./resource/intro2.png)
-*SageAttention2*
+*SageAttention2 on Llama3.1-8B*
 
 ## Project Updates
 - **News** 2024-11-19: SageAttention2 will be released soon.
