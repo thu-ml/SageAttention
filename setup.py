@@ -138,6 +138,8 @@ qattn_extension = CUDAExtension(
         "csrc/qattn/pybind.cpp",
         "csrc/qattn/qk_int_sv_f16_per_warp_cuda.cu",
         "csrc/qattn/qk_int_sv_f8_per_warp_cuda.cu",
+        "csrc/qattn/qk_int_sv_f16_per_warp_buffer_cuda.cu",
+        "csrc/qattn/qk_int_sv_f8_per_warp_buffer_cuda.cu",
     ],
     extra_compile_args={
         "cxx": CXX_FLAGS,

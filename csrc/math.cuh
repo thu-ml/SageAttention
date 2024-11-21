@@ -26,6 +26,7 @@ namespace math {
 
 // log2(e)
 constexpr float log2e = 1.44269504088896340736f;
+constexpr float log2e_recp = 1.0f / log2e;
 
 __forceinline__ __device__ half2 uint32_as_half2(uint32_t x) { return *(half2*)&x; }
 

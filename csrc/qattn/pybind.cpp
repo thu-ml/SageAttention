@@ -27,4 +27,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
   m.def("qk_int8_sv_f8_accum_f32_attn_per_warp", &qk_int8_sv_f8_accum_f32_attn_per_warp, "QK int8 sv f8 accum f32 attn");
   m.def("qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp", &qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp, "QK int8 sv f8 accum f32 fuse v scale attn");
   m.def("qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn_per_warp", &qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn_per_warp, "QK int8 sv f8 accum f32 fuse v scale fuse v mean attn");
+
+  m.def("qk_int8_sv_f16_accum_f16_attn_per_warp_buf", &qk_int8_sv_f16_accum_f16_attn_per_warp_buf, "QK int8 sv f16 accum f16 attn per warp buf");
+  m.def("qk_int8_sv_f8_accum_f32_attn_per_warp_buf", &qk_int8_sv_f8_accum_f32_attn_per_warp_buf, "QK int8 sv f8 accum f32 attn per warp buf");
+  m.def("qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp_buf", &qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp_buf, "QK int8 sv f8 accum f32 fuse v scale attn per warp buf");
 }
