@@ -11,6 +11,10 @@ Paper: https://arxiv.org/abs/2411.10958
 Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 
 ![Local Image](./resource/intro.png)
+*SageAttention on CogvideoX-2B (RTX4090)*
+
+![Local Image](./resource/intro2.png)
+*SageAttention2 on Llama3.1-8B*
 
 
 ## Project Updates
