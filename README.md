@@ -1,6 +1,6 @@
 # SageAttention
 
-This repository provides the official implementation of SageAttention.
+This repository provides the official implementation of SageAttention and SageAttention2.
 
 **SageAttention: Accurate 8-Bit Attention for Plug-and-play Inference Acceleration**  
 Paper: https://arxiv.org/abs/2410.02367  
@@ -11,24 +11,23 @@ Paper: https://arxiv.org/abs/2411.10958
 Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 
 ![Local Image](./resource/intro.png)
-*SageAttention*
+*SageAttention on CogvideoX-2B (RTX4090)*
 
 ![Local Image](./resource/intro2.png)
-*SageAttention2*
+*SageAttention2 on Llama3.1-8B*
 
-## Beta Version
-This is a beta release of SageAttention 2. We welcome any feedback on accuracy, performance issues, bugs, feature requests, or suggestions for improvements. Please feel free to open an issue or submit a pull request!
+## Beta Version of SageAttention2
+This is a beta release of SageAttention2. We welcome any feedback on accuracy, performance issues, bugs, feature requests, or suggestions. Please feel free to open an issue or launch a pull request!
 
-Features:
-+ INT8 quantization for `q, k`
-+ FP8 quantization for `PV`
-+ FP32 buffer for `PV` accumulator to increase accuracy of low-precision accumulator. 
+Current Features:
++ INT8 quantization for $QK^\top$
++ FP8 quantization for $PV$
++ FP32 buffer for $PV$ accumulator to enhance the accuracy of the low-precision (FP22) accumulator. 
 
-For stable version, refer to [SageAttention 1](https://github.com/thu-ml/SageAttention/tree/sageattention-1)
+For stable version, please use [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1).
 
 ## Project Updates
 - **News** 2024-11-21: SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800 and A6000 other than RTX3090 and RTX4090.
-- **News** 2024-11-19: SageAttention2 will be released soon.
 - **News** 2024-11-12: Support for `sageattn_varlen` is available now.
 - **News** 2024-11-11: Support for different sequence length between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
 
@@ -48,12 +47,12 @@ We recommend to install: (the kernel will be faster a little)
 
 ## Installation
 
-For stable version or python only version, refer to [SageAttention 1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) or install using pip:
+For stable version or Triton only version, refer to [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) or install using pip:
 ```
 pip install sageattention==1.0.6
 ```
 
-To use SageAttention 2.0.0, compile from source:
+To use SageAttention 2.0.0, please compile from source:
 ```
 git clone https://github.com/thu-ml/SageAttention.git
 cd sageattention 
@@ -61,25 +60,25 @@ pip install -e . # or python setup.py install
 ```
 
 
-> **Note:** SageAttention is currently optimized for RTX4090, RTX3090, L20, and L40 GPUs, where performance is excellent. For A100, A800, and A6000 GPUs, the performance is best with `head_dim=128`. However, `head_dim=64` on A100, A800, and A6000 GPUs, as well as performance on the Hopper architecture, are currently suboptimal. We are actively working on improving performance for these settings.
+> **Note:** Currently, SageAttention is optimized for excellent performance on RTX4090, RTX3090, L20, and L40 GPUs. On A100, A800, and A6000 GPUs, performance is best with a `head_dim=128`, while `head_dim=64` is less optimal. Similarly, performance on the Hopper architecture is currently not optimal. We are actively working to enhance performance in these configurations.
 
 
-## How to use
+## How to Use
 ```python
 from sageattention import sageattn
 attn_output = sageattn(q, k, v, tensor_layout="HND", is_causal=False)
 ```
-+ `q, k, v` are **FP16/BF16** type with the shape `(batch_size, head_num, seq_len, head_dim)` using default `tensor_layout="HND"`. For shape `(batch_size, seq_len, head_num, head_dim)`, set `tensor_layout="NHD"`. 
++ `q, k, v` are **FP16/BF16** dtype with the shape `(batch_size, head_num, seq_len, head_dim)` using default `tensor_layout="HND"`. For shape `(batch_size, seq_len, head_num, head_dim)`, set `tensor_layout="NHD"`. 
 + `is_causal` determines the use of a causal mask.
 
 ### Available APIs:
-+ `sageattn`: Automacially selects the kernel based on GPU compute capability that achieves good performance-accuracy trade-off.
-+ `sageattn_qk_int8_pv_fp16_triton`: Uses INT8 quantization for `q, k` and FP16 for `PV` with FP16 accumulator and Triton backend.
-+ `sageattn_qk_int8_pv_fp16_cuda`: use INT8 quantization for `q, k` and FP16 for `PV` with CUDA backend.
-+ `sageattn_qk_int8_pv_fp8_cuda`: Uses INT8 quantization for `q, k` and FP8 for `PV` with CUDA backend.
-+ `sageattn_varlen`: Supports different sequences length in the same batch, using INT8 quantization for `q, k` and FP16 for `PV` with FP16 accumulator and Triton backend.
++ `sageattn`: Automatically selects the optimal kernel based on the GPU to achieve a good performance-accuracy trade-off.
++ `sageattn_qk_int8_pv_fp16_triton`: INT8 quantization for $QK^\top$ and FP16 for $PV$ with FP16 accumulator using Triton backend.
++ `sageattn_qk_int8_pv_fp16_cuda`: INT8 quantization for $QK^\top$ and FP16 for $PV$ using CUDA backend.
++ `sageattn_qk_int8_pv_fp8_cuda`: INT8 quantization for $QK^\top$ and FP8 for $PV$ using CUDA backend.
++ `sageattn_varlen`: INT8 quantization for $QK^\top$ and FP16 for $PV$ with FP16 accumulator using Triton backend. Support for varying sequence lengths within the same batch.
 
-For optimal performance while maintaining accuracy on custom devices and models, we strongly recommend referring to the [this file](./sageattention/core.py) for detailed guidance.
+For optimal speed and accuracy performance on custom devices and models, we strongly recommend referring to the [this file](./sageattention/core.py) for detailed guidance.
 
 > **Note:**
 Support for `head_dim` values of `64`, `96`, and `128` is currently available. Extended support for other `head_dim` is under development.
@@ -108,22 +107,16 @@ python sageattn_cogvideo.py
 
 **You can get a lossless video in** `./example` **faster than by using** `python original_cogvideo.py`
 
-> **Note:** Not all models use `F.scaled_dot_product_attention`, so maybe you should replace the original Attention by modifying the `Attention Class` of the target model (as shown in another example in `./example`).
+> **Note:** Not all models use `F.scaled_dot_product_attention`, so maybe you should replace the original Attention by modifying the `Attention Class` of the target model.
 
 
 ## Performance
 ### Speed of Kernels
 
-
-![Local Image](./resource/A800_hd128.png)
-
+*`8+8` means the kernel with INT8 quantization for $QK^\top$ and FP8 quantization for $PV$. `8+16` uses FP16 for $PV$.*
 ![Local Image](./resource/A100_hd128.png)
 
-![Local Image](./resource/A6000_hd128.png)
-
-![Local Image](./resource/3090_hd64.png)
-
-![Local Image](./resource/3090_hd128.png)
+![Local Image](./resource/A800_hd128.png)
 
 ![Local Image](./resource/4090_hd64.png)
 
@@ -133,11 +126,19 @@ python sageattn_cogvideo.py
 
 ![Local Image](./resource/L20_hd128.png)
 
-> **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing. For FP16 `PV`, we use FP16  accumulator and for FP8 `PV` we use FP32 accumulator.
+![Local Image](./resource/A6000_hd128.png)
 
-### End-to-end performance
-![Local Image](./resource/real_speedup.png)
+![Local Image](./resource/3090_hd64.png)
 
+![Local Image](./resource/3090_hd128.png)
+
+
+> **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing. we use FP16 accumulator for FP16 $PV$, and FP32 accumulator for FP8 $PV$.
+
+### End-to-end Performance
+<!-- ![Local Image](./resource/real_speedup.png) -->
+
+*The table below shows the end-to-end performance across various models using SageAttention 1.0. For more evaluation, please refer to our paper.*
 ![Local Image](./resource/end-to-end_performance.png)
 
 
