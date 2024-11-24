@@ -47,7 +47,7 @@ We recommend to install: (the kernel will be faster a little)
 
 ## Installation
 
-For stable version or Triton only version, refer to [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) or install using pip:
+For the stable version or Triton-only version, refer to [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) and install using pip:
 ```
 pip install sageattention==1.0.6
 ```
@@ -138,7 +138,7 @@ python sageattn_cogvideo.py
 ### End-to-end Performance
 <!-- ![Local Image](./resource/real_speedup.png) -->
 
-*The table below shows the end-to-end performance across various models using SageAttention 1.0. For more evaluation, please refer to our paper.*
+*The table below shows the end-to-end performance across various models using [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1). For more evaluation, please refer to our papers.*
 ![Local Image](./resource/end-to-end_performance.png)
 
 
