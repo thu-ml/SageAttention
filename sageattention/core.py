@@ -18,7 +18,8 @@ def sageattn(
     q: torch.Tensor, 
     k: torch.Tensor, 
     v: torch.Tensor, 
-    tensor_layout: str ="HND", 
+    tensor_layout: str ="HND",
+    use_fp16_pv_accum: bool = None,
     is_causal=False, 
     sm_scale: Optional[float] = None, 
     smooth_k: bool =True,
@@ -46,6 +47,9 @@ def sageattn(
     tensor_layout : str
         The tensor layout, either "HND" or "NHD".
         Default: "HND".
+
+    use_fp16_pv_accum : Optional[bool]
+        Whether to use fp16 for partial value accumulation. If not provided, will be set to True on GeForce RTX GPUs, and False on other GPUs.
 
     is_causal : bool
         Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len.
@@ -86,6 +90,14 @@ def sageattn(
 
     seq_dim = 1 if tensor_layout == "NHD" else 2
 
+    device_name = torch.cuda.get_device_name(q.device)
+    
+    if use_fp16_pv_accum is None:
+        if "GeForce RTX" in device_name:
+            use_fp16_pv_accum = True
+        else:
+            use_fp16_pv_accum = False
+
     if smooth_k:
         km = k.mean(dim=seq_dim, keepdim=True)
         k -= km
@@ -98,16 +110,16 @@ def sageattn(
     if headdim == 96:
         q_int8, q_scale, k_int8, k_scale = per_block_int8_hd96(q, k, sm_scale=sm_scale, tensor_layout=tensor_layout)
         if is_causal:
-            return attn_h96_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
+            return attn_h96_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, use_fp16_pv_accum=use_fp16_pv_accum)
         else:
-            return attn_h96_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
+            return attn_h96_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, use_fp16_pv_accum=use_fp16_pv_accum)
 
     q_int8, q_scale, k_int8, k_scale = per_block_int8(q, k, sm_scale=sm_scale, tensor_layout=tensor_layout)
 
     if is_causal:
-        o = attn_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
+        o = attn_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, use_fp16_pv_accum=use_fp16_pv_accum)
     else:
-        o = attn_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype)
+        o = attn_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, use_fp16_pv_accum=use_fp16_pv_accum)
 
     return o
 
@@ -119,6 +131,7 @@ def sageattn_varlen(
     cu_seqlens_k: torch.Tensor, 
     max_seqlen_q: int, 
     max_seqlen_k: int, 
+    use_fp16_pv_accum: bool = None,
     is_causal: bool=False,
     sm_scale: Optional[float]=None, 
     smooth_k: bool=True,
@@ -150,6 +163,9 @@ def sageattn_varlen(
     
     max_seqlen_k : int
         The maximum sequence length for the key and value tensors in the batch.
+
+    use_fp16_pv_accum : Optional[bool]
+        Whether to use fp16 for partial value accumulation. If not provided, will be set to True on GeForce RTX GPUs, and False on other GPUs.
 
     is_causal : bool
         Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len for each sequence.
@@ -188,6 +204,14 @@ def sageattn_varlen(
     assert q.stride(-1) == 1 and k.stride(-1) == 1 and v.stride(-1) == 1, "Last dim of qkv must be contiguous."
     assert cu_seqlens_q.is_contiguous() and cu_seqlens_k.is_contiguous(), "cu_seqlens_q and cu_seqlens_k must be contiguous."
 
+    device_name = torch.cuda.get_device_name(q.device)
+    
+    if use_fp16_pv_accum is None:
+        if "GeForce RTX" in device_name:
+            use_fp16_pv_accum = True
+        else:
+            use_fp16_pv_accum = False
+
     if dtype == torch.bfloat16 or dtype == torch.float32:
         v = v.to(torch.float16)
 
@@ -198,8 +222,8 @@ def sageattn_varlen(
     q_int8, q_scale, k_int8, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale = per_block_int8_varlen(q, k, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, sm_scale=sm_scale)
 
     if is_causal:
-        o = attn_true_varlen(q_int8, k_int8, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale, output_dtype=dtype)
+        o = attn_true_varlen(q_int8, k_int8, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale, output_dtype=dtype, use_fp16_pv_accum=use_fp16_pv_accum)
     else:
-        o = attn_false_varlen(q_int8, k_int8, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale, output_dtype=dtype)
+        o = attn_false_varlen(q_int8, k_int8, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale, output_dtype=dtype, use_fp16_pv_accum=use_fp16_pv_accum)
 
     return o

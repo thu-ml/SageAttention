@@ -5,7 +5,8 @@ import triton.language as tl
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
                     K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn, 
-                    start_m,  
+                    start_m, 
+                    USE_FP16_PV_ACCUM: tl.constexpr, 
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  
                     ):
@@ -44,7 +45,11 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
         v = tl.load(V_ptrs, mask = offs_n[:, None] < (kv_len - start_n))
         p = p.to(tl.float16)
         
-        acc += tl.dot(p, v, out_dtype=tl.float16)   
+        if USE_FP16_PV_ACCUM:
+            acc += tl.dot(p, v, out_dtype=tl.float16)
+        else:
+            acc += tl.dot(p, v)
+  
         m_i = m_ij
         K_ptrs += BLOCK_N * stride_kn
         K_scale_ptr += 1
@@ -58,7 +63,7 @@ def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,
               stride_vz, stride_vh, stride_vn,  
               stride_oz, stride_oh, stride_on,  
               qo_len, kv_len, H:tl.constexpr, num_kv_groups:tl.constexpr, 
-              HEAD_DIM: tl.constexpr,  
+              HEAD_DIM: tl.constexpr, USE_FP16_PV_ACCUM: tl.constexpr,
               BLOCK_M: tl.constexpr,  
               BLOCK_N: tl.constexpr,  
               STAGE: tl.constexpr
@@ -88,20 +93,22 @@ def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,
     q = tl.load(Q_ptrs, mask = offs_m[:, None] < qo_len)
     q_scale = tl.load(Q_scale_ptr)
     acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
-                                    start_m,  
+                                    start_m, 
+                                    USE_FP16_PV_ACCUM,
                                     BLOCK_M, HEAD_DIM, BLOCK_N,  
                                     4 - STAGE, offs_m, offs_n 
                                     )
 
     acc, l_i, _ = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
-                                    start_m,  
+                                    start_m, 
+                                    USE_FP16_PV_ACCUM, 
                                     BLOCK_M, HEAD_DIM, BLOCK_N,  
                                     2, offs_m, offs_n 
                                     )
     acc = acc / l_i[:, None]
     tl.store(O_block_ptr, acc.to(Out.type.element_ty), mask = (offs_m[:, None] < qo_len))
 
-def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.float16):
+def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.float16, use_fp16_pv_accum=True):
     BLOCK_M = 128
     BLOCK_N = 64
     stage = 3
@@ -141,7 +148,7 @@ def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.f
         stride_bz_o, stride_h_o, stride_seq_o,
         qo_len, kv_len,
         h_qo, num_kv_groups,
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, HEAD_DIM=HEAD_DIM_K,  
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, HEAD_DIM=HEAD_DIM_K, USE_FP16_PV_ACCUM=use_fp16_pv_accum, 
         STAGE=stage,  
         num_warps=4 if head_dim == 64 else 8,
         num_stages=4)
