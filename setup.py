@@ -114,10 +114,11 @@ if not compute_capabilities:
 # Validate the NVCC CUDA version.
 if nvcc_cuda_version < Version("12.0"):
     raise RuntimeError("CUDA 12.0 or higher is required to build the package.")
-if nvcc_cuda_version < Version("12.4"):
+if nvcc_cuda_version < Version("12.3"):
     if any(cc.startswith("8.9") for cc in compute_capabilities):
         raise RuntimeError(
-            "CUDA 12.4 or higher is required for compute capability 8.9.")
+            "CUDA 12.3 or higher is required for compute capability 8.9.")
+if nvcc_cuda_version < Version("12.4"):
     if any(cc.startswith("9.0") for cc in compute_capabilities):
         raise RuntimeError(
             "CUDA 12.4 or higher is required for compute capability 9.0.")
