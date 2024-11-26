@@ -51,6 +51,12 @@ with the following code:
 Install xDiT(xfuser >= 0.3.5) and diffusers(>=0.32.0.dev0) from sources and run:
 
 ```bash
+# install latest xDiT(xfuser).
+pip install "xfuser[flash_attn]"
+# install latest diffusers (>=0.32.0.dev0), need by latest xDiT.
+git clone https://github.com/huggingface/diffusers.git
+cd diffusers && python3 setup.py bdist_wheel && cd dist && python3 -m pip install *.whl
+# then run parallel sage attention inference.
 ./run_parallel.sh
 ```
 
