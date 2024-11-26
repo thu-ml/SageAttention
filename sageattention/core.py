@@ -41,6 +41,7 @@ from .quant import per_channel_fp8
 from typing import Any, List, Literal, Optional, Tuple, Union
 import warnings
 
+
 def get_cuda_arch_versions():
     cuda_archs = []
     for i in range(torch.cuda.device_count()):
@@ -436,7 +437,14 @@ def sageattn_qk_int8_pv_fp16_cuda(
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
     assert q.device == k.device == v.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
-
+    # FIXME(DefTruth): make sage atttention work compatible with distributed 
+    # env, for eaxmple, xDiT which launch by torchrun. Without this workaround, 
+    # sage attention will run into illegal memory access error after first 
+    # inference step in distributed env for multi gpus inference. This small
+    # workaround also make sage attention work compatible with torch.compile
+    # through non-fullgraph compile mode.
+    if torch.distributed.get_world_size() > 1:
+        torch.cuda.set_device(v.device)
 
     _tensor_layout = 0 if tensor_layout == "NHD" else 1
     _is_caual = 1 if is_causal else 0
@@ -472,7 +480,7 @@ def sageattn_qk_int8_pv_fp16_cuda(
         smooth_v = False
 
     if pv_accum_dtype == 'fp32':
-        v = v.to(torch.float16)
+        v = v.to(dtype=torch.float16)
         lse = qk_int8_sv_f16_accum_f32_attn_per_warp(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp16":
         if smooth_v:
@@ -581,6 +589,14 @@ def sageattn_qk_int8_pv_fp8_cuda(
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
     assert q.device == k.device == v.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
+    # FIXME(DefTruth): make sage atttention work compatible with distributed 
+    # env, for eaxmple, xDiT which launch by torchrun. Without this workaround, 
+    # sage attention will run into illegal memory access error after first 
+    # inference step in distributed env for multi gpus inference. This small
+    # workaround also make sage attention work compatible with torch.compile
+    # through non-fullgraph compile mode.
+    if torch.distributed.get_world_size() > 1:
+        torch.cuda.set_device(v.device)
 
     _tensor_layout = 0 if tensor_layout == "NHD" else 1
     _is_caual = 1 if is_causal else 0
