@@ -437,8 +437,8 @@ def sageattn_qk_int8_pv_fp16_cuda(
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
     assert q.device == k.device == v.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
-    # FIXME(DefTruth): make sage atttention work compatible with distributed 
-    # env, for eaxmple, xDiT which launch by torchrun. Without this workaround, 
+    # FIXME(DefTruth): make sage attention work compatible with distributed 
+    # env, for example, xDiT which launch by torchrun. Without this workaround, 
     # sage attention will run into illegal memory access error after first 
     # inference step in distributed env for multi gpus inference. This small
     # workaround also make sage attention work compatible with torch.compile
@@ -589,12 +589,11 @@ def sageattn_qk_int8_pv_fp8_cuda(
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
     assert q.device == k.device == v.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
-    # FIXME(DefTruth): make sage atttention work compatible with distributed 
-    # env, for eaxmple, xDiT which launch by torchrun. Without this workaround, 
+    # FIXME(DefTruth): make sage attention work compatible with distributed 
+    # env, for example, xDiT which launch by torchrun. Without this workaround, 
     # sage attention will run into illegal memory access error after first 
     # inference step in distributed env for multi gpus inference. This small
     # workaround also make sage attention work compatible with torch.compile
-    # through non-fullgraph compile mode.
     if torch.distributed.get_world_size() > 1:
         torch.cuda.set_device(v.device)
 
