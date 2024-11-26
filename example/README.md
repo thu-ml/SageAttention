@@ -46,3 +46,12 @@ with the following code:
         is_causal=not is_full
     )
 ```
+## Parallel SageAttention Inference
+
+Install xDiT(xfuser >= 0.3.5) and diffusers(>=0.32.0.dev0) from sources and run:
+
+```bash
+./run_parallel.sh
+```
+
+
