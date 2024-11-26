@@ -43,8 +43,8 @@ CFG_ARGS="--use_cfg_parallel"
 fi
 
 # COMPILE_FLAG=--use_torch_compile
-# SAGE_ATTN_FLAG=--use_sage_attn_fp16
-SAGE_ATTN_FLAG=--use_sage_attn_fp8
+SAGE_ATTN_FLAG=--use_sage_attn_fp16
+# SAGE_ATTN_FLAG=--use_sage_attn_fp8
 torchrun --nproc_per_node=$N_GPUS ./$SCRIPT \
 --model $MODEL_ID \
 $PARALLEL_ARGS \
