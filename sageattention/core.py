@@ -17,6 +17,7 @@ limitations under the License.
 import torch
 import triton
 import triton.language as tl
+import torch.distributed as dist
 
 from .triton.quant_per_block import per_block_int8 as per_block_int8_triton
 from .triton.quant_per_block_varlen import per_block_int8 as per_block_int8_varlen_triton
@@ -443,7 +444,7 @@ def sageattn_qk_int8_pv_fp16_cuda(
     # inference step in distributed env for multi gpus inference. This small
     # workaround also make sage attention work compatible with torch.compile
     # through non-fullgraph compile mode.
-    if torch.distributed.get_world_size() > 1:
+    if dist.is_initialized() and dist.get_world_size() > 1:
         torch.cuda.set_device(v.device)
 
     _tensor_layout = 0 if tensor_layout == "NHD" else 1
@@ -480,7 +481,7 @@ def sageattn_qk_int8_pv_fp16_cuda(
         smooth_v = False
 
     if pv_accum_dtype == 'fp32':
-        v = v.to(torch.float16)
+        v = v.to(dtype=torch.float16)
         lse = qk_int8_sv_f16_accum_f32_attn_per_warp(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp16":
         if smooth_v:
@@ -594,7 +595,7 @@ def sageattn_qk_int8_pv_fp8_cuda(
     # sage attention will run into illegal memory access error after first 
     # inference step in distributed env for multi gpus inference. This small
     # workaround also make sage attention work compatible with torch.compile
-    if torch.distributed.get_world_size() > 1:
+    if dist.is_initialized() and dist.get_world_size() > 1:
         torch.cuda.set_device(v.device)
 
     _tensor_layout = 0 if tensor_layout == "NHD" else 1
