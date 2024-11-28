@@ -481,7 +481,7 @@ def sageattn_qk_int8_pv_fp16_cuda(
         smooth_v = False
 
     if pv_accum_dtype == 'fp32':
-        v = v.to(dtype=torch.float16)
+        v = v.to(torch.float16)
         lse = qk_int8_sv_f16_accum_f32_attn_per_warp(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp16":
         if smooth_v:
