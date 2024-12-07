@@ -1,5 +1,7 @@
 # SageAttention
+We are continuously improving and updating more features. You can **Star** and **Watch** our repository to stay updated.
 
+---
 This repository provides the official implementation of SageAttention and SageAttention2.
 
 **SageAttention: Accurate 8-Bit Attention for Plug-and-play Inference Acceleration**  
