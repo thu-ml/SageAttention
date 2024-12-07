@@ -97,6 +97,7 @@ import torch.nn.functional as F
 
 F.scaled_dot_product_attention = sageattn
 ```
+> **Note:** Not all models works with `F.scaled_dot_product_attention = sageattn`. Technically, you should replace the original Attention by modifying the `Attention Class` of the target model. For image and video models, we suggest only replacing the attention in DiT computation.
 
 Specifically,
 
@@ -107,7 +108,7 @@ python sageattn_cogvideo.py
 
 **You can get a lossless video in** `./example` **faster than by using** `python original_cogvideo.py`
 
-> **Note:** Not all models use `F.scaled_dot_product_attention`, so maybe you should replace the original Attention by modifying the `Attention Class` of the target model.
+
 
 
 ## Performance
