@@ -51,7 +51,7 @@ def per_block_int8(q, k, km=None, BLKQ=128, BLKK=64, sm_scale=None, tensor_layou
     k_int8 = torch.empty(k.shape, dtype=torch.int8, device=k.device)
 
     if km is not None:
-        k -= km
+        k = k - km
 
     if tensor_layout == "HND":
         b, h_qo, qo_len, head_dim = q.shape
