@@ -7,7 +7,7 @@ prompt = "A panda, dressed in a small, red jacket and a tiny hat, sits on a wood
 pipe = CogVideoXPipeline.from_pretrained(
     "THUDM/CogVideoX-2b",
     torch_dtype=torch.float16
-)
+).to("cuda")
 
 pipe.vae.enable_slicing()
 pipe.vae.enable_tiling()

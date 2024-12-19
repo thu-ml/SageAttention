@@ -1,5 +1,5 @@
 # SageAttention
-We are continuously improving and updating more features. You can **Star** and **Watch** our repository to stay updated.
+We are continuously updating more features. You could **Star** and **Watch** our repository to stay updated.
 
 ---
 This repository provides the official implementation of SageAttention and SageAttention2.
@@ -12,11 +12,7 @@ Jintao Zhang, Jia Wei, Haofeng Huang, Pengle Zhang, Jun Zhu, Jianfei Chen
 Paper: https://arxiv.org/abs/2411.10958  
 Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 
-![Local Image](./resource/intro.png)
-*SageAttention on CogvideoX-2B (RTX4090)*
-
-![Local Image](./resource/intro2.png)
-*SageAttention2 on Llama3.1-8B*
+![Local Image](./resource/2.png)
 
 ## Beta Version of SageAttention2
 This is a beta release of SageAttention2. We welcome any feedback on accuracy, performance issues, bugs, feature requests, or suggestions. Please feel free to open an issue or launch a pull request!
@@ -29,9 +25,9 @@ Current Features:
 For stable version, please use [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1).
 
 ## Project Updates
-- **News** 2024-11-21: SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800 and A6000 other than RTX3090 and RTX4090.
-- **News** 2024-11-12: Support for `sageattn_varlen` is available now.
-- **News** 2024-11-11: Support for different sequence length between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
+- **News** [2024-11-21]: SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800 and A6000 other than RTX3090 and RTX4090.
+- **News** [2024-11-12]: Support for `sageattn_varlen` is available now.
+- **News** [2024-11-11]: Support for different sequence length between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
 
 
 ## Base environment
@@ -139,14 +135,20 @@ python sageattn_cogvideo.py
 > **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing. we use FP16 accumulator for FP16 $PV$, and FP32 accumulator for FP8 $PV$.
 
 ### End-to-end Performance
-<!-- ![Local Image](./resource/real_speedup.png) -->
 
-*The table below shows the end-to-end performance across various models using [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1). For more evaluation, please refer to our papers.*
-![Local Image](./resource/end-to-end_performance.png)
+![Local Image](./resource/22.png)
+
+![Local Image](./resource/23.png)
+
+![Local Image](./resource/24.png)
+
+![Local Image](./resource/25.png)
+
+![Local Image](./resource/26.png)
 
 
 ## Citation
-If you use this code or find our work valuable, please cite:
+**If you use this code or find our work valuable, please cite:**
 ```
 @misc{zhang2024sageattention,
       title={SageAttention: Accurate 8-Bit Attention for Plug-and-play Inference Acceleration}, 
@@ -159,7 +161,7 @@ If you use this code or find our work valuable, please cite:
 }
 
 @misc{zhang2024sageattention2,
-      title={SageAttention2 Technical Report: Accurate 4 Bit Attention for Plug-and-play Inference Acceleration}, 
+      title={SageAttention2: Efficient Attention with Thorough Outlier Smoothing and Per-thread INT4 Quantization}, 
       author={Jintao Zhang and Haofeng Huang and Pengle Zhang and Jia Wei and Jun Zhu and Jianfei Chen},
       year={2024},
       eprint={2411.10958},
