@@ -8,7 +8,7 @@ This repository provides the official implementation of SageAttention and SageAt
 Paper: https://arxiv.org/abs/2410.02367  
 Jintao Zhang, Jia Wei, Haofeng Huang, Pengle Zhang, Jun Zhu, Jianfei Chen
 
-**SageAttention2 Technical Report: Accurate 4-Bit Attention for Plug-and-play Inference Acceleration**  
+**SageAttention2: Efficient Attention with Thorough Outlier Smoothing and Per-thread INT4 Quantization**  
 Paper: https://arxiv.org/abs/2411.10958  
 Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 
@@ -22,9 +22,10 @@ Current Features:
 + FP8 quantization for $PV$
 + FP32 buffer for $PV$ accumulator to enhance the accuracy of the low-precision (FP22) accumulator. 
 
-For stable version, please use [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1).
+For stable version, please use [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) branch.
 
 ## Project Updates
+- **News** [2024-12-20]: Update the [SageAttention2 Paper](https://arxiv.org/abs/2411.10958).
 - **News** [2024-11-21]: SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800 and A6000 other than RTX3090 and RTX4090.
 - **News** [2024-11-12]: Support for `sageattn_varlen` is available now.
 - **News** [2024-11-11]: Support for different sequence length between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
