@@ -1,4 +1,4 @@
-from  torch.nn.functional import scaled_dot_product_attention as sdpa
+from torch.nn.functional import scaled_dot_product_attention as sdpa
 import torch
 from flash_attn.utils.benchmark import benchmark_forward
 

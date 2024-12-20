@@ -15,33 +15,40 @@ limitations under the License.
 """
 
 import torch
+import torch.nn.functional as F
 import triton
 import triton.language as tl
-import torch.distributed as dist
 
 from .triton.quant_per_block import per_block_int8 as per_block_int8_triton
 from .triton.quant_per_block_varlen import per_block_int8 as per_block_int8_varlen_triton
-from .triton.quant_per_block_hd96 import per_block_int8_hd96
-from .triton.attn_qk_int8_per_block_h96 import forward as attn_h96_false
-from .triton.attn_qk_int8_per_block_h96_causal import forward as attn_h96_true
 from .triton.attn_qk_int8_per_block import forward as attn_false
 from .triton.attn_qk_int8_per_block_causal import forward as attn_true
 from .triton.attn_qk_int8_block_varlen import forward as attn_false_varlen
 from .triton.attn_qk_int8_per_block_causal_varlen import forward as attn_true_varlen
 
-from ._qattn import qk_int8_sv_f16_accum_f32_attn_per_warp
-from ._qattn import qk_int8_sv_f16_accum_f16_attn_per_warp, qk_int8_sv_f16_accum_f16_fuse_v_mean_attn_per_warp
-from ._qattn import qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp, qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn_per_warp
-from ._qattn import qk_int8_sv_f16_accum_f16_attn_per_warp_buf, qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp_buf
+from .triton.quant_per_thread import per_thread_int8 as per_thread_int8_triton
+
+from . import _qattn
 
 from .quant import per_block_int8 as per_block_int8_cuda
-from .quant import per_warp_int8
+from .quant import per_warp_int8 as per_warp_int8_cuda
 from .quant import sub_mean
 from .quant import per_channel_fp8
+
+from .hadamard_utils import random_hadamard_matrix
 
 from typing import Any, List, Literal, Optional, Tuple, Union
 import warnings
 
+from transformers.models.llama.modeling_llama import repeat_kv
+
+def precision_metric(quant_o, fa2_o): 
+    x, xx = quant_o.float(), fa2_o.float() 
+    sim = F.cosine_similarity(x.reshape(1, -1), xx.reshape(1, -1)).item()
+    l1 =   ( (x - xx).abs().sum() / xx.abs().sum() ).item()
+    rmse = torch.sqrt(torch.mean((x -xx) ** 2)).item()
+
+    return sim, l1, rmse
 
 def get_cuda_arch_versions():
     cuda_archs = []
@@ -118,7 +125,7 @@ def sageattn(
     if arch == "sm80":
         return sageattn_qk_int8_pv_fp16_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32")
     elif arch == "sm86":
-        return sageattn_qk_int8_pv_fp16_triton(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse)
+        return sageattn_qk_int8_pv_fp16_triton_per_block(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse)
     elif arch == "sm89":
         return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32+fp32")
     elif arch == "sm90":
@@ -126,7 +133,8 @@ def sageattn(
     else:
         raise ValueError(f"Unsupported CUDA architecture: {arch}")
 
-def sageattn_qk_int8_pv_fp16_triton(
+@torch.compiler.disable
+def sageattn_qk_int8_pv_fp16_triton_per_block(
     q: torch.Tensor, 
     k: torch.Tensor, 
     v: torch.Tensor, 
@@ -209,7 +217,7 @@ def sageattn_qk_int8_pv_fp16_triton(
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
 
     headdim = q.size(-1)
-    assert headdim in [64, 96, 128], "headdim should be in [64, 96, 128]."
+    assert headdim in [64, 128], "headdim should be in [64, 96, 128]."
 
     # assert last dim is contiguous
     assert q.stride(-1) == 1 and k.stride(-1) == 1 and v.stride(-1) == 1, "Last dim of qkv must be contiguous."
@@ -232,23 +240,16 @@ def sageattn_qk_int8_pv_fp16_triton(
     if sm_scale is None:
         sm_scale = 1.0 / (headdim ** 0.5)
 
-    if headdim == 96:
-        q_int8, q_scale, k_int8, k_scale = per_block_int8_hd96(q, k, km=km, sm_scale=sm_scale, tensor_layout=tensor_layout)
-        if is_causal:
-            o, lse = attn_h96_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, return_lse=return_lse)
-        else:
-            o, lse = attn_h96_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, return_lse=return_lse)
+    if quantization_backend == "triton":
+        q_int8, q_scale, k_int8, k_scale = per_block_int8_triton(q, k, km=km, sm_scale=sm_scale, tensor_layout=tensor_layout)
+    elif quantization_backend == "cuda":
+        q_int8, q_scale, k_int8, k_scale = per_block_int8_cuda(q, k, km=km, sm_scale=sm_scale, tensor_layout=tensor_layout)
     else:
-        if quantization_backend == "triton":
-            q_int8, q_scale, k_int8, k_scale = per_block_int8_triton(q, k, km=km, sm_scale=sm_scale, tensor_layout=tensor_layout)
-        elif quantization_backend == "cuda":
-            q_int8, q_scale, k_int8, k_scale = per_block_int8_cuda(q, k, km=km, sm_scale=sm_scale, tensor_layout=tensor_layout)
-        else:
-            raise ValueError(f"Unsupported quantization backend: {quantization_backend}")
-        if is_causal:
-            o, lse = attn_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, return_lse=return_lse)
-        else:
-            o, lse = attn_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, return_lse=return_lse)
+        raise ValueError(f"Unsupported quantization backend: {quantization_backend}")
+    if is_causal:
+        o, lse = attn_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, return_lse=return_lse)
+    else:
+        o, lse = attn_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, return_lse=return_lse)
 
     if return_lse:
         return o, lse / 1.44269504 + lse_correction * sm_scale if smooth_k else lse / 1.44269504
@@ -348,16 +349,18 @@ def sageattn_varlen(
 
     return o
 
+@torch.compiler.disable
 def sageattn_qk_int8_pv_fp16_cuda(
     q: torch.Tensor, 
     k: torch.Tensor, 
     v: torch.Tensor,
     tensor_layout: str = "HND",
     is_causal: bool = False,
+    qk_quant_gran: str = "per_warp",
     sm_scale: Optional[float] = None,
-    pv_accum_dtype: str = "fp16",
+    pv_accum_dtype: str = "fp32",
     smooth_k: bool = True,
-    smooth_v: bool = True,
+    smooth_v: bool = False,
     return_lse: bool = False,
     **kwargs: Any,
 ):
@@ -388,6 +391,10 @@ def sageattn_qk_int8_pv_fp16_cuda(
     is_causal : bool
         Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len.
         Default: False.
+
+    qk_quant_gran : str
+        The granularity of quantization for Q and K, either "per_warp" or "per_thread".
+        Default: "per_warp".
 
     sm_scale : Optional[float]
         The scale used in softmax, if not provided, will be set to ``1.0 / sqrt(head_dim)``.
@@ -436,19 +443,13 @@ def sageattn_qk_int8_pv_fp16_cuda(
     dtype = q.dtype
     assert q.is_cuda, "Input tensors must be on cuda."
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
+    assert qk_quant_gran in ["per_warp", "per_thread"], "qk_quant_gran must be either 'per_warp' or 'per_thread'."
     assert q.device == k.device == v.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
-    # FIXME(DefTruth): make sage attention work compatible with distributed 
-    # env, for example, xDiT which launch by torchrun. Without this workaround, 
-    # sage attention will run into illegal memory access error after first 
-    # inference step in distributed env for multi gpus inference. This small
-    # workaround also make sage attention work compatible with torch.compile
-    # through non-fullgraph compile mode.
-    if dist.is_initialized() and dist.get_world_size() > 1:
-        torch.cuda.set_device(v.device)
 
     _tensor_layout = 0 if tensor_layout == "NHD" else 1
     _is_caual = 1 if is_causal else 0
+    _qk_quant_gran = 3 if qk_quant_gran == "per_thread" else 2
     _return_lse = 1 if return_lse else 0
 
     head_dim = q.size(-1)
@@ -472,7 +473,10 @@ def sageattn_qk_int8_pv_fp16_cuda(
     else:
         km = None
 
-    q_int8, q_scale, k_int8, k_scale = per_warp_int8(q, k, km, tensor_layout=tensor_layout)
+    if qk_quant_gran == "per_warp":
+        q_int8, q_scale, k_int8, k_scale = per_warp_int8_cuda(q, k, km, tensor_layout=tensor_layout)
+    elif qk_quant_gran == "per_thread":
+        q_int8, q_scale, k_int8, k_scale = per_thread_int8_triton(q, k, km, tensor_layout=tensor_layout)
 
     o = torch.empty(q.size(), dtype=dtype, device=q.device)
 
@@ -482,17 +486,20 @@ def sageattn_qk_int8_pv_fp16_cuda(
 
     if pv_accum_dtype == 'fp32':
         v = v.to(torch.float16)
-        lse = qk_int8_sv_f16_accum_f32_attn_per_warp(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
+        lse = _qattn.qk_int8_sv_f16_accum_f32_attn(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp16":
         if smooth_v:
             smoothed_v, vm = sub_mean(v, tensor_layout=tensor_layout)
-            lse = qk_int8_sv_f16_accum_f16_fuse_v_mean_attn_per_warp(q_int8, k_int8, smoothed_v, o, q_scale, k_scale, vm, _tensor_layout, _is_caual, sm_scale, _return_lse)
+            lse = _qattn.qk_int8_sv_f16_accum_f16_fuse_v_mean_attn(q_int8, k_int8, smoothed_v, o, q_scale, k_scale, vm, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
         else:
             v = v.to(torch.float16)
-            lse = qk_int8_sv_f16_accum_f16_attn_per_warp(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
+            lse = _qattn.qk_int8_sv_f16_accum_f16_attn(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp16+fp32":
         v = v.to(torch.float16)
-        lse = qk_int8_sv_f16_accum_f16_attn_per_warp_buf(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
+        if head_dim == 128:
+            lse = _qattn.qk_int8_sv_f16_accum_f16_attn_buf(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+        elif head_dim == 64:
+            lse = _qattn.qk_int8_sv_f16_accum_f16_attn_inst_buf(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     else:
         raise ValueError(f"Unsupported pv_accum_dtype: {pv_accum_dtype}")
 
@@ -501,16 +508,18 @@ def sageattn_qk_int8_pv_fp16_cuda(
     else:
         return o
 
+@torch.compiler.disable
 def sageattn_qk_int8_pv_fp8_cuda(
     q: torch.Tensor, 
     k: torch.Tensor, 
     v: torch.Tensor,
     tensor_layout: str = "HND",
     is_causal: bool = False,
+    qk_quant_gran: str = "per_thread",
     sm_scale: Optional[float] = None,
-    pv_accum_dtype: str = "fp32",
+    pv_accum_dtype: str = "fp32+fp32",
     smooth_k: bool = True,
-    smooth_v: bool = True,
+    smooth_v: bool = False,
     return_lse: bool = False,
     **kwargs: Any,
 ):
@@ -541,6 +550,10 @@ def sageattn_qk_int8_pv_fp8_cuda(
     is_causal : bool
         Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len.
         Default: False.
+
+    qk_quant_gran : str
+        The granularity of quantization for Q and K, either "per_warp" or "per_thread".
+        Default: "per_warp".
 
     sm_scale : Optional[float]
         The scale used in softmax, if not provided, will be set to ``1.0 / sqrt(head_dim)``.
@@ -585,21 +598,18 @@ def sageattn_qk_int8_pv_fp8_cuda(
     - `smooth_v` will introduce little overhead but will improve the accuracy under some circumstances, as observed in CogVideoX.
     """
 
+    torch.cuda.set_device(q.device)
+
     dtype = q.dtype
     assert q.is_cuda, "Input tensors must be on cuda."
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
+    assert qk_quant_gran in ["per_warp", "per_thread"], "qk_quant_gran must be either 'per_warp' or 'per_thread'."
     assert q.device == k.device == v.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
-    # FIXME(DefTruth): make sage attention work compatible with distributed 
-    # env, for example, xDiT which launch by torchrun. Without this workaround, 
-    # sage attention will run into illegal memory access error after first 
-    # inference step in distributed env for multi gpus inference. This small
-    # workaround also make sage attention work compatible with torch.compile
-    if dist.is_initialized() and dist.get_world_size() > 1:
-        torch.cuda.set_device(v.device)
 
     _tensor_layout = 0 if tensor_layout == "NHD" else 1
     _is_caual = 1 if is_causal else 0
+    _qk_quant_gran = 3 if qk_quant_gran == "per_thread" else 2
     _return_lse = 1 if return_lse else 0
 
     head_dim = q.size(-1)
@@ -623,7 +633,10 @@ def sageattn_qk_int8_pv_fp8_cuda(
     else:
         km = None
 
-    q_int8, q_scale, k_int8, k_scale = per_warp_int8(q, k, km, tensor_layout=tensor_layout)
+    if qk_quant_gran == "per_warp":
+        q_int8, q_scale, k_int8, k_scale = per_warp_int8_cuda(q, k, km, tensor_layout=tensor_layout)
+    elif qk_quant_gran == "per_thread":
+        q_int8, q_scale, k_int8, k_scale = per_thread_int8_triton(q, k, km, tensor_layout=tensor_layout)
 
     o = torch.empty(q.size(), dtype=dtype, device=q.device)
 
@@ -635,11 +648,13 @@ def sageattn_qk_int8_pv_fp8_cuda(
 
     if pv_accum_dtype == "fp32":
         if smooth_v:
-            lse = qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn_per_warp(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, vm, _tensor_layout, _is_caual, sm_scale, _return_lse)
+            lse = _qattn.qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, vm, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
         else:
-            lse = qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
+            lse = _qattn.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp32+fp32":
-        lse = qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, sm_scale, _return_lse)
+        lse = _qattn.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+        # lse = _qattn.qk_int8_sv_f8_accum_f32_attn_inst_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+        # o = (o.to(torch.float32) * v_scale.unsqueeze(1)).to(dtype)
 
     if return_lse:
         return o, lse / 1.44269504 + lse_correction * sm_scale if smooth_k else lse / 1.44269504
