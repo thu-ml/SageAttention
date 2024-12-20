@@ -18,14 +18,15 @@ Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 This is a beta release of SageAttention2. We welcome any feedback on accuracy, performance issues, bugs, feature requests, or suggestions. Please feel free to open an issue or launch a pull request!
 
 Current Features:
-+ INT8 quantization for $QK^\top$
++ INT8 quantization for $QK^\top$ with support for varying granularities
 + FP8 quantization for $PV$
-+ FP32 buffer for $PV$ accumulator to enhance the accuracy of the low-precision (FP22) accumulator. 
++ FP32 buffer for $PV$ to improve accuracy in FP8 mma
 
 For stable version, please use [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) branch.
 
 ## Project Updates
 - **News** [2024-12-20]: Update the [SageAttention2 Paper](https://arxiv.org/abs/2411.10958).
+- **News** [2024-12-20]: We are excited to announce the release of SageAttention 2.0.1 Beta! In this version, we introduce a new feature: per-thread quantization, which offers finer granularity while maintaining hardware efficiency.
 - **News** [2024-11-21]: SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800 and A6000 other than RTX3090 and RTX4090.
 - **News** [2024-11-12]: Support for `sageattn_varlen` is available now.
 - **News** [2024-11-11]: Support for different sequence length between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
@@ -36,13 +37,7 @@ For stable version, please use [SageAttention-1](https://github.com/thu-ml/SageA
 + `torch>=2.3.0`  
 + `triton>=3.0.0` 
 + `CUDA>=12.4` if you want to use fp8 else `CUDA>=12.0`
-
-We recommend to install: (the kernel will be faster a little)  
-+ `python>=3.11`  
-+ `torch>=2.4.0`  
-+ `triton-nightly`
-+ `CUDA=12.6`
-
++ `flash-attn` for benchmarking
 
 ## Installation
 
@@ -51,7 +46,7 @@ For the stable version or Triton-only version, refer to [SageAttention-1](https:
 pip install sageattention==1.0.6
 ```
 
-To use SageAttention 2.0.0, please compile from source:
+To use SageAttention 2.0.1, please compile from source:
 ```
 git clone https://github.com/thu-ml/SageAttention.git
 cd sageattention 
@@ -72,15 +67,14 @@ attn_output = sageattn(q, k, v, tensor_layout="HND", is_causal=False)
 
 ### Available APIs:
 + `sageattn`: Automatically selects the optimal kernel based on the GPU to achieve a good performance-accuracy trade-off.
-+ `sageattn_qk_int8_pv_fp16_triton`: INT8 quantization for $QK^\top$ and FP16 for $PV$ with FP16 accumulator using Triton backend.
++ `sageattn_qk_int8_pv_fp16_triton`: INT8 quantization for $QK^\top$ and FP16 for $PV$ using Triton backend.
 + `sageattn_qk_int8_pv_fp16_cuda`: INT8 quantization for $QK^\top$ and FP16 for $PV$ using CUDA backend.
 + `sageattn_qk_int8_pv_fp8_cuda`: INT8 quantization for $QK^\top$ and FP8 for $PV$ using CUDA backend.
-+ `sageattn_varlen`: INT8 quantization for $QK^\top$ and FP16 for $PV$ with FP16 accumulator using Triton backend. Support for varying sequence lengths within the same batch.
++ `sageattn_varlen`: INT8 quantization for $QK^\top$ and FP16 for $PV$ using Triton backend. Support for varying sequence lengths within the same batch.
 
 For optimal speed and accuracy performance on custom devices and models, we strongly recommend referring to the [this file](./sageattention/core.py) for detailed guidance.
 
 > **Note:**
-Support for `head_dim` values of `64`, `96`, and `128` is currently available. Extended support for other `head_dim` is under development.
 Support for different sequence length between `q` and `k,v` and `group-query attention` is available.
 
 
