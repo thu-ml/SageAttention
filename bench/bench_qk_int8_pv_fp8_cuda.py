@@ -9,7 +9,8 @@ parser = argparse.ArgumentParser(description='Benchmark QK Int8 PV FP8 CUDA')
 parser.add_argument('--batch_size', type=int, default=4, help='Batch size')
 parser.add_argument('--num_heads', type=int, default=32, help='Number of heads')
 parser.add_argument('--head_dim', type=int, default=128, help='Head dimension')
-parser.add_argument('--pv_accum_dtype', type=str, default='fp32', choices=['fp32', 'fp32+fp32'])
+parser.add_argument('--quant_gran', type=str, default='per_warp', choices=['per_warp', 'per_thread'], help='Quantization granularity')
+parser.add_argument('--pv_accum_dtype', type=str, default='fp32+fp32', choices=['fp32', 'fp32+fp32'])
 args = parser.parse_args()
 
 head = args.num_heads
@@ -23,11 +24,11 @@ WARP_Q = 32
 WARP_K = 64
 
 if args.pv_accum_dtype == 'fp32':
-    kernel = qattn.qk_int8_sv_f8_accum_f32_attn_per_warp # the kernel with fp32 (actually fp22) accumulator
+    kernel = qattn.qk_int8_sv_f8_accum_f32_attn # the kernel with fp32 (actually fp22) accumulator
 elif args.pv_accum_dtype == 'fp32+fp32':
-    kernel = qattn.qk_int8_sv_f8_accum_f32_attn_per_warp_buf # the kernel with fp32 longterm buffer
-else:
-    raise ValueError("Unsupported pv_accum_dtype")
+    kernel = qattn.qk_int8_sv_f8_accum_f32_attn_inst_buf # the kernel with fp32 longterm buffer and fp32 (actually fp22) shortterm accumulator
+
+_qk_quant_gran = 3 if args.quant_gran == 'per_thread' else 2
 
 is_causal = False
 _is_causal = 1 if is_causal else 0
@@ -42,13 +43,18 @@ for seq_len in {1024, 2048, 4096, 8192, 16384, 32768}:
     vm = torch.randn(batch, head, headdim, dtype=torch.float).cuda()
     v_scale = torch.randn(batch, head, headdim, dtype=torch.float).cuda()
 
-    q_scale = torch.randn(batch, head, seq_len // WARP_Q, dtype=torch.float).cuda()
-    k_scale = torch.randn(batch, head, seq_len // WARP_K, dtype=torch.float).cuda()
+    if args.quant_gran == 'per_warp':
+        q_scale = torch.randn(batch, head, seq_len // WARP_Q, dtype=torch.float).cuda()
+        k_scale = torch.randn(batch, head, seq_len // WARP_K, dtype=torch.float).cuda()
+    elif args.quant_gran == 'per_thread':
+        q_scale = torch.randn(batch, head, seq_len // WARP_Q * 8, dtype=torch.float).cuda()
+        k_scale = torch.randn(batch, head, seq_len // WARP_K * 4, dtype=torch.float).cuda()
+
     v = torch.randn(batch, headdim,head,  seq_len, dtype=torch.float16).cuda().to(torch.float8_e4m3fn)
     sm_scale = 1 / (headdim ** 0.5)
-    for i in range(5): kernel(q, k, v, o, q_scale, k_scale, 0, _is_causal, sm_scale, 0)
+    for i in range(5): kernel(q, k, v, o, q_scale, k_scale, 0, _is_causal, _qk_quant_gran, sm_scale, 0)
     torch.cuda.synchronize()
-    _, time = benchmark_forward(kernel, q, k, v, o, q_scale, k_scale, 0, _is_causal, sm_scale, 0, repeats=100, verbose=False, desc='Triton')
+    _, time = benchmark_forward(kernel, q, k, v, o, q_scale, k_scale, 0, _is_causal, _qk_quant_gran, sm_scale, 0, repeats=100, verbose=False, desc='Triton')
     print(f'{seq_len} flops:{flops/time.mean*1e-12}')
 
 is_causal = True
@@ -64,11 +70,16 @@ for seq_len in {1024, 2048, 4096, 8192, 16384, 32768}:
     vm = torch.randn(batch, head, headdim, dtype=torch.float).cuda()
     v_scale = torch.randn(batch, head, headdim, dtype=torch.float).cuda()
 
-    q_scale = torch.randn(batch, head, seq_len // WARP_Q, dtype=torch.float).cuda()
-    k_scale = torch.randn(batch, head, seq_len // WARP_K, dtype=torch.float).cuda()
+    if args.quant_gran == 'per_warp':
+        q_scale = torch.randn(batch, head, seq_len // WARP_Q, dtype=torch.float).cuda()
+        k_scale = torch.randn(batch, head, seq_len // WARP_K, dtype=torch.float).cuda()
+    elif args.quant_gran == 'per_thread':
+        q_scale = torch.randn(batch, head, seq_len // WARP_Q * 8, dtype=torch.float).cuda()
+        k_scale = torch.randn(batch, head, seq_len // WARP_K * 4, dtype=torch.float).cuda()
+
     v = torch.randn(batch, headdim,head,  seq_len, dtype=torch.float16).cuda().to(torch.float8_e4m3fn)
     sm_scale = 1 / (headdim ** 0.5)
-    for i in range(5): kernel(q, k, v, o, q_scale, k_scale, 0, _is_causal, sm_scale, 0)
+    for i in range(5): kernel(q, k, v, o, q_scale, k_scale, 0, _is_causal, _qk_quant_gran, sm_scale, 0)
     torch.cuda.synchronize()
-    _, time = benchmark_forward(kernel, q, k, v, o, q_scale, k_scale, 0, _is_causal, sm_scale, 0, repeats=100, verbose=False, desc='Triton')
+    _, time = benchmark_forward(kernel, q, k, v, o, q_scale, k_scale, 0, _is_causal, _qk_quant_gran, sm_scale, 0, repeats=100, verbose=False, desc='Triton')
     print(f'{seq_len} flops:{flops/time.mean*1e-12}')

@@ -17,10 +17,7 @@ limitations under the License.
 import torch
 from typing import Any, List, Literal, Optional, Tuple, Union
 
-from ._fused import quant_per_block_int8_cuda, quant_per_block_int8_fuse_sub_mean_cuda, quant_per_warp_int8_cuda
-from ._fused import sub_mean_cuda
-from ._fused import transpose_pad_permute_cuda
-from ._fused import scale_fuse_quant_cuda, mean_scale_fuse_quant_cuda
+from . import _fused
 
 def per_block_int8(
     q: torch.Tensor, 
@@ -96,12 +93,12 @@ def per_block_int8(
     
     sm_scale *= 1.44269504
 
-    quant_per_block_int8_cuda(q, q_int8, q_scale, sm_scale, BLKQ, _tensor_layout)
+    _fused.quant_per_block_int8_cuda(q, q_int8, q_scale, sm_scale, BLKQ, _tensor_layout)
     if km is not None:
         km = km.squeeze(1) if _tensor_layout == 0 else km.squeeze(2)
-        quant_per_block_int8_fuse_sub_mean_cuda(k, km, k_int8, k_scale, BLKK, _tensor_layout)
+        _fused.quant_per_block_int8_fuse_sub_mean_cuda(k, km, k_int8, k_scale, BLKK, _tensor_layout)
     else:
-        quant_per_block_int8_cuda(k, k_int8, k_scale, BLKK, _tensor_layout)
+        _fused.quant_per_block_int8_cuda(k, k_int8, k_scale, BLKK, _tensor_layout)
 
     return q_int8, q_scale, k_int8, k_scale
 
@@ -169,13 +166,13 @@ def per_warp_int8(
     q_scale = torch.empty((b, h_qo, ((qo_len + 127) // 128) * (128 // 32)), device=q.device, dtype=torch.float32)
     k_scale = torch.empty((b, h_kv, (kv_len + 63) // 64), device=q.device, dtype=torch.float32)
 
-    quant_per_warp_int8_cuda(q, q_int8, q_scale, _tensor_layout)
+    _fused.quant_per_warp_int8_cuda(q, q_int8, q_scale, _tensor_layout)
 
     if km is not None:
         km = km.squeeze(1) if _tensor_layout == 0 else km.squeeze(2)
-        quant_per_block_int8_fuse_sub_mean_cuda(k, km, k_int8, k_scale, 64, _tensor_layout)
+        _fused.quant_per_block_int8_fuse_sub_mean_cuda(k, km, k_int8, k_scale, 64, _tensor_layout)
     else:
-        quant_per_block_int8_cuda(k, k_int8, k_scale, 64, _tensor_layout)
+        _fused.quant_per_block_int8_cuda(k, k_int8, k_scale, 64, _tensor_layout)
     
     return q_int8, q_scale, k_int8, k_scale
 
@@ -217,7 +214,7 @@ def sub_mean(
     v_smoothed = torch.empty(v.shape, dtype=torch.float16, device=v.device)
     
     # subtract mean and store the result as fp16
-    sub_mean_cuda(v, vm, v_smoothed, _tensor_layout)
+    _fused.sub_mean_cuda(v, vm, v_smoothed, _tensor_layout)
 
     return v_smoothed, vm
 
@@ -278,7 +275,7 @@ def per_channel_fp8(
         padded_len = (kv_len + 63) // 64 * 64
         v_transposed_permutted = torch.empty((b, head_dim, h_kv, padded_len), dtype=v.dtype, device=v.device)
     
-    transpose_pad_permute_cuda(v, v_transposed_permutted, _tensor_layout)
+    _fused.transpose_pad_permute_cuda(v, v_transposed_permutted, _tensor_layout)
 
     v_fp8 = torch.empty(v_transposed_permutted.shape, dtype=torch.float8_e4m3fn, device=v.device)
 
@@ -286,10 +283,10 @@ def per_channel_fp8(
     vm = torch.empty((b, h_kv, head_dim), dtype=torch.float32, device=v.device)
 
     if smooth_v:
-        mean_scale_fuse_quant_cuda(v_transposed_permutted, v_fp8, vm, v_scale, kv_len, scale_max, _tensor_layout)
+        _fused.mean_scale_fuse_quant_cuda(v_transposed_permutted, v_fp8, vm, v_scale, kv_len, scale_max, _tensor_layout)
         return v_fp8, v_scale, vm
     else:
-        scale_fuse_quant_cuda(v_transposed_permutted, v_fp8, v_scale, kv_len, scale_max, _tensor_layout)
+        _fused.scale_fuse_quant_cuda(v_transposed_permutted, v_fp8, v_scale, kv_len, scale_max, _tensor_layout)
         return v_fp8, v_scale, None
 
 

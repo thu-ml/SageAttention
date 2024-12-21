@@ -136,10 +136,10 @@ qattn_extension = CUDAExtension(
     name="sageattention._qattn",
     sources=[
         "csrc/qattn/pybind.cpp",
-        "csrc/qattn/qk_int_sv_f16_per_warp_cuda.cu",
-        "csrc/qattn/qk_int_sv_f8_per_warp_cuda.cu",
-        "csrc/qattn/qk_int_sv_f16_per_warp_buffer_cuda.cu",
-        "csrc/qattn/qk_int_sv_f8_per_warp_buffer_cuda.cu",
+        "csrc/qattn/qk_int_sv_f16_cuda.cu",
+        "csrc/qattn/qk_int_sv_f8_cuda.cu",
+        "csrc/qattn/qk_int_sv_f16_buffer_cuda.cu",
+        "csrc/qattn/qk_int_sv_f8_buffer_cuda.cu",
     ],
     extra_compile_args={
         "cxx": CXX_FLAGS,
@@ -161,7 +161,7 @@ ext_modules.append(fused_extension)
 
 setup(
     name='sageattention', 
-    version='2.0.0',  
+    version='2.0.1',  
     author='SageAttention team',
     license='Apache 2.0 License',  
     description='Accurate and efficient plug-and-play low-bit attention.',  

@@ -46,6 +46,19 @@
     throw std::invalid_argument(err_msg.str());                 \
   }
 
+#define DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, ...)              \
+  if (qk_quant_gran == 2) {                                         \
+    constexpr int QK_QUANT_GRAN = 2;                            \
+    __VA_ARGS__                                                 \
+  } else if (qk_quant_gran == 3) {                                  \
+    constexpr int QK_QUANT_GRAN = 3;                           \
+    __VA_ARGS__                                                 \
+  }  else {                                                     \
+    std::ostringstream err_msg;                                 \
+    err_msg << "Unsupported qk_quant_gran: " << int(qk_quant_gran);   \
+    throw std::invalid_argument(err_msg.str());                 \
+  }
+
 #define DISPATCH_RETURN_LSE(return_lse, RETURN_LSE, ...)             \
   if (return_lse == 1) {                                         \
     constexpr bool RETURN_LSE = true;                            \

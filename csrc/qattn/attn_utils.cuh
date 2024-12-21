@@ -44,6 +44,13 @@ enum class DataType {
     kE5M2,
 };
 
+enum class QuantGranularity {
+    kPerTensor = 0,
+    kPerBlock = 1,
+    kPerWarp = 2,
+    kPerThread = 3,
+};
+
 enum class ComputeUnit {
   kTensorCore,
   kCudaCore,
@@ -367,17 +374,14 @@ __device__ __forceinline__ void update_mdo(float RS[][num_tiles_k][8], DTypeSVAc
         m_temp = max(m_temp, m_local);
       }
       // exchange element with the 4 threads in the row
+      if constexpr (!fuse_scale)
+      {
+        m_temp *= sm_scale;
+      }
       m_temp = max(m_temp, __shfl_xor_sync(0xffffffff, m_temp, 0x1)); // 0 exchange with 1, 2 exchange with 3
       m_temp = max(m_temp, __shfl_xor_sync(0xffffffff, m_temp, 0x2)); // 0 exchange with 2, 1 exchange with 3
 
-      if constexpr (fuse_scale)
-      {
-        m[fq][k] = max(m[fq][k], m_temp);
-      }
-      else 
-      {
-        m[fq][k] = max(m[fq][k], m_temp * sm_scale);
-      }
+      m[fq][k] = max(m[fq][k], m_temp);
 
       float o_scale = math::ptx_exp2(m_prev - m[fq][k]);
 
@@ -626,6 +630,83 @@ __device__ __forceinline__ void compute_fp16_sv_permuted(const smem_t<swizzle_mo
   offset_V -= (16 * num_tiles_k * stride);
 }
 
+template <uint32_t num_warps_q, uint32_t num_warps_k, 
+          uint32_t num_tiles_q, uint32_t num_tiles_k, uint32_t num_tiles_v,
+          SwizzleMode swizzle_mode, uint32_t stride, uint32_t RS_width=4, typename T, typename DTypeSVAccum>
+__device__ __forceinline__ void compute_fp16_sv_permuted_inst_buf(const smem_t<swizzle_mode, stride> &smem_V, T RS_f16[][num_tiles_k][RS_width], DTypeSVAccum RO[][num_tiles_v][8], float d[][2], uint32_t &offset_V)
+{
+  static_assert(sizeof(T) == 4);
+  static_assert(std::is_same<DTypeSVAccum, float>::value);
+
+  uint32_t RO_inst_buf[num_tiles_q][num_tiles_v][4];
+
+  // ! be sure you know what you are doing
+#pragma unroll
+  for (uint32_t fk = 0; fk < 1; fk++)
+  {
+#pragma unroll
+    for (uint32_t fv = 0; fv < num_tiles_v; fv++)
+    {
+      // load RV
+      uint32_t RV[4];
+      smem_V.ldmatrix_m8n8x4_trans(offset_V, RV);
+#pragma unroll
+      for (uint32_t fq = 0; fq < num_tiles_q; fq++)
+      {
+        {
+          mma::mma_sync_m16n16k16_row_col_f16f16f16<mma::MMAMode::kInit>((uint32_t*)RO_inst_buf[fq][fv], (uint32_t*)(RS_f16[fq][fk]), RV);
+        }
+      }
+
+      offset_V = smem_V.advance_offset_by_column<2>(offset_V, fv);
+    }
+    offset_V = smem_V.advance_offset_by_row<16>(offset_V - (2 * num_tiles_v));
+  }
+
+#pragma unroll
+  for (uint32_t fk = 1; fk < num_tiles_k; fk++)
+  {
+#pragma unroll
+    for (uint32_t fv = 0; fv < num_tiles_v; fv++)
+    {
+      // load RV
+      uint32_t RV[4];
+      smem_V.ldmatrix_m8n8x4_trans(offset_V, RV);
+#pragma unroll
+      for (uint32_t fq = 0; fq < num_tiles_q; fq++)
+      {
+        {
+          mma::mma_sync_m16n16k16_row_col_f16f16f16<mma::MMAMode::kInplaceUpdate>((uint32_t*)RO_inst_buf[fq][fv], (uint32_t*)(RS_f16[fq][fk]), RV);
+        }
+      }
+
+      offset_V = smem_V.advance_offset_by_column<2>(offset_V, fv);
+    }
+    offset_V = smem_V.advance_offset_by_row<16>(offset_V - (2 * num_tiles_v));
+  }
+
+  // accumulate into RO
+#pragma unroll
+  for (uint32_t fq = 0; fq < num_tiles_q; fq++)
+  {
+#pragma unroll
+    for (uint32_t fv = 0; fv < num_tiles_v; fv++)
+    {
+      RO[fq][fv][0] += __half2float(((half2*)RO_inst_buf[fq][fv])[0].x);
+      RO[fq][fv][1] += __half2float(((half2*)RO_inst_buf[fq][fv])[0].y);
+      RO[fq][fv][2] += __half2float(((half2*)RO_inst_buf[fq][fv])[1].x);
+      RO[fq][fv][3] += __half2float(((half2*)RO_inst_buf[fq][fv])[1].y);
+      RO[fq][fv][4] += __half2float(((half2*)RO_inst_buf[fq][fv])[2].x);
+      RO[fq][fv][5] += __half2float(((half2*)RO_inst_buf[fq][fv])[2].y);
+      RO[fq][fv][6] += __half2float(((half2*)RO_inst_buf[fq][fv])[3].x);
+      RO[fq][fv][7] += __half2float(((half2*)RO_inst_buf[fq][fv])[3].y);
+    }
+  }
+
+  // make offset_V their original value
+  offset_V -= (16 * num_tiles_k * stride);
+}
+
 template<uint32_t num_tiles_q, uint32_t num_tiles_v,
        ComputeUnit compute_unit = ComputeUnit::kTensorCore, // compute unit for accumulate_d
        typename DTypeQKAccum, typename DTypeSVAccum>
@@ -714,6 +795,89 @@ __device__ __forceinline__ void compute_fp8_sv(const smem_t<swizzle_mode, stride
         }
       }
       offset_V = smem_V.advance_offset_by_row<16>(offset_V);
+    }
+  }
+}
+
+template <uint32_t num_warps_q, uint32_t num_warps_k, 
+          uint32_t num_tiles_q, uint32_t num_tiles_k, uint32_t num_tiles_v,
+          SwizzleMode swizzle_mode, uint32_t stride, typename DTypeSVAccum>
+__device__ __forceinline__ void compute_fp8_sv_inst_buf(const smem_t<swizzle_mode, stride> &smem_V, uint32_t RS_f8[][num_tiles_k / 2][4], DTypeSVAccum RO[][num_tiles_v][8], float d[][2])
+{
+  uint32_t smem_V_row_base = get_lane_id() % 8 + (get_lane_id() / 16) * 8;
+  // uint32_t smem_V_col_base = get_warp_idx_k<num_warps_q, num_warps_k>() * ((16 * num_tiles_k) / 16) + (get_lane_id() / 8) % 2;
+  uint32_t smem_V_col_base = (get_lane_id() / 8) % 2;
+
+  float RO_inst_buf[num_tiles_q][num_tiles_v][8];
+
+#pragma unroll
+  for (uint32_t fk = 0; fk < 1; fk++)
+  {
+    uint32_t offset_V = smem_V.get_permuted_offset(smem_V_row_base, smem_V_col_base + fk * 2);
+#pragma unroll
+    for (uint32_t fv = 0; fv < num_tiles_v; fv++)
+    {
+      // load RV
+      uint32_t RV[4];
+      // uint32_t offset_V = (smem_V).get_permuted_offset(smem_V_row_base + fv * 16, smem_V_col_base + fk * 2);
+      smem_V.ldmatrix_m8n8x4(offset_V, RV);
+#pragma unroll
+      for (uint32_t fq = 0; fq < num_tiles_q; fq++)
+      {
+        if constexpr (std::is_same<DTypeSVAccum, float>::value)
+        {
+          mma::mma_sync_m16n16k32_row_col_f8f8f32<mma::MMAMode::kInit>(RO_inst_buf[fq][fv], RS_f8[fq][fk], RV);
+        }
+        else if constexpr (std::is_same<DTypeSVAccum, half>::value)
+        {
+          // ! Not Implemented
+        }
+      }
+      offset_V = smem_V.advance_offset_by_row<16>(offset_V);
+    }
+  }
+
+#pragma unroll
+  for (uint32_t fk = 1; fk < num_tiles_k / 2; fk++)
+  {
+    uint32_t offset_V = smem_V.get_permuted_offset(smem_V_row_base, smem_V_col_base + fk * 2);
+#pragma unroll
+    for (uint32_t fv = 0; fv < num_tiles_v; fv++)
+    {
+      // load RV
+      uint32_t RV[4];
+      // uint32_t offset_V = (smem_V).get_permuted_offset(smem_V_row_base + fv * 16, smem_V_col_base + fk * 2);
+      smem_V.ldmatrix_m8n8x4(offset_V, RV);
+#pragma unroll
+      for (uint32_t fq = 0; fq < num_tiles_q; fq++)
+      {
+        if constexpr (std::is_same<DTypeSVAccum, float>::value)
+        {
+          mma::mma_sync_m16n16k32_row_col_f8f8f32<mma::MMAMode::kInplaceUpdate>(RO_inst_buf[fq][fv], RS_f8[fq][fk], RV);
+        }
+        else if constexpr (std::is_same<DTypeSVAccum, half>::value)
+        {
+          // ! Not Implemented
+        }
+      }
+      offset_V = smem_V.advance_offset_by_row<16>(offset_V);
+    }
+  }
+
+#pragma unroll
+  for (uint32_t fq = 0; fq < num_tiles_q; fq++)
+  {
+#pragma unroll
+    for (uint32_t fv = 0; fv < num_tiles_v; fv++)
+    {
+      RO[fq][fv][0] += RO_inst_buf[fq][fv][0];
+      RO[fq][fv][1] += RO_inst_buf[fq][fv][1];
+      RO[fq][fv][2] += RO_inst_buf[fq][fv][2];
+      RO[fq][fv][3] += RO_inst_buf[fq][fv][3];
+      RO[fq][fv][4] += RO_inst_buf[fq][fv][4];
+      RO[fq][fv][5] += RO_inst_buf[fq][fv][5];
+      RO[fq][fv][6] += RO_inst_buf[fq][fv][6];
+      RO[fq][fv][7] += RO_inst_buf[fq][fv][7];
     }
   }
 }

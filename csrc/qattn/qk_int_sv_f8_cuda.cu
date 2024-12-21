@@ -41,9 +41,9 @@
 #define MMA_SV_N 16
 #define MMA_SV_K 32
 
-template<uint32_t CTA_Q, uint32_t CTA_K, uint32_t WARP_Q, uint32_t WARP_K, uint32_t head_dim, DataType DTypeQK,
-        typename DTypeSVAccum = float, typename DTypeOut = half, ComputeUnit DenominatorAccumUnit, MaskMode mask_mode = MaskMode::kNone, bool return_lse = false, bool fuse_v_scale=false, bool fuse_v_mean=false>
-__global__ void qk_int_sv_f8_attn_per_warp_kernel(int8_t *__restrict__ Q, int8_t *__restrict__ K, int8_t *__restrict__ V, DTypeOut *__restrict__ O, float *__restrict__ Lse,
+template<uint32_t CTA_Q, uint32_t CTA_K, uint32_t WARP_Q, uint32_t WARP_K, uint32_t head_dim, DataType DTypeQK, QuantGranularity Q_GRAN, QuantGranularity K_GRAN,
+        typename DTypeSVAccum = float, bool use_inst_buffer = false, typename DTypeOut = half, ComputeUnit DenominatorAccumUnit, MaskMode mask_mode = MaskMode::kNone, bool return_lse = false, bool fuse_v_scale=false, bool fuse_v_mean=false>
+__global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restrict__ K, int8_t *__restrict__ V, DTypeOut *__restrict__ O, float *__restrict__ Lse,
                       float *__restrict__ Q_scale, float *__restrict__ K_scale, float *__restrict__ V_scale, float *__restrict__ V_mean,
                       const uint32_t qo_len, const uint32_t kv_len, const uint32_t num_kv_groups,
                       const uint32_t stride_bz_q, const uint32_t stride_seq_q, const uint32_t stride_h_q, 
@@ -54,6 +54,8 @@ __global__ void qk_int_sv_f8_attn_per_warp_kernel(int8_t *__restrict__ Q, int8_t
 {
   // compile time check
   static_assert(DTypeQK == DataType::kInt8 || DTypeQK == DataType::kInt4, "DTypeQK must be int8 or int4");
+  static_assert(Q_GRAN == QuantGranularity::kPerBlock || Q_GRAN == QuantGranularity::kPerWarp || Q_GRAN == QuantGranularity::kPerThread, "Q_GRAN must be kPerBlock, kPerWarp or kPerThread");
+  static_assert(K_GRAN == QuantGranularity::kPerBlock || K_GRAN == QuantGranularity::kPerWarp || K_GRAN == QuantGranularity::kPerThread, "K_GRAN must be kPerBlock, kPerWarp or kPerThread");
   static_assert(head_dim % 64 == 0, "head_dim must be a multiple of 64");
   static_assert(std::is_same<DTypeSVAccum, float>::value, "DTypeSVAccum must be float, half is WIP");
   static_assert(std::is_same<DTypeOut, half>::value || std::is_same<DTypeOut, nv_bfloat16>::value, "DTypeOut must be half or nv_bfloat16");
@@ -93,11 +95,41 @@ __global__ void qk_int_sv_f8_attn_per_warp_kernel(int8_t *__restrict__ Q, int8_t
   float m[num_tiles_q][2]; // max
   float d[num_tiles_q][2]; // denominator
 
-  const uint32_t num_warp_block_q = gridDim.x * num_warps_q;
-  const uint32_t num_warp_block_k = div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K);
+  uint32_t q_scale_idx, k_scale_idx;
 
-  uint32_t q_scale_idx = batch_id * num_qo_heads * num_warp_block_q + head_id * num_warp_block_q + bx * num_warps_q + get_warp_idx_q<num_warps_q, num_warps_k>();
-  uint32_t k_scale_idx = batch_id * (num_qo_heads / num_kv_groups) * num_warp_block_k + (head_id / num_kv_groups) * num_warp_block_k;
+  if constexpr (Q_GRAN == QuantGranularity::kPerBlock)
+  {
+    const uint32_t num_block_q = gridDim.x;
+    q_scale_idx = batch_id * num_qo_heads * num_block_q + head_id * num_block_q + bx;
+  }
+  else if constexpr (Q_GRAN == QuantGranularity::kPerWarp)
+  {
+    const uint32_t num_warp_block_q = gridDim.x * num_warps_q;
+    q_scale_idx = batch_id * num_qo_heads * num_warp_block_q + head_id * num_warp_block_q + bx * num_warps_q + get_warp_idx_q<num_warps_q, num_warps_k>();
+  }
+  else if constexpr (Q_GRAN == QuantGranularity::kPerThread)
+  {
+    const uint32_t num_warp_block_q = gridDim.x * num_warps_q;
+    q_scale_idx = batch_id * num_qo_heads * (num_warp_block_q * 8) + head_id * (num_warp_block_q * 8) + bx * (num_warps_q * 8) + get_warp_idx_q<num_warps_q, num_warps_k>() * 8 + lane_id / 4;
+  }
+
+  if constexpr (K_GRAN == QuantGranularity::kPerBlock)
+  {
+    const uint32_t num_block_k = div_ceil(kv_len, CTA_K);
+    k_scale_idx = batch_id * (num_qo_heads / num_kv_groups) * num_block_k + (head_id / num_kv_groups) * num_block_k;
+  }
+  else if constexpr (K_GRAN == QuantGranularity::kPerWarp)
+  {
+    const uint32_t num_warp_block_k = div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K);
+    k_scale_idx = batch_id * (num_qo_heads / num_kv_groups) * num_warp_block_k + (head_id / num_kv_groups) * num_warp_block_k + get_warp_idx_k<num_warps_q, num_warps_k>();
+  }
+  else if constexpr (K_GRAN == QuantGranularity::kPerThread)
+  {
+    const uint32_t num_warp_block_k = div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K);
+    k_scale_idx = batch_id * (num_qo_heads / num_kv_groups) * (num_warp_block_k * 4) + (head_id / num_kv_groups) * (num_warp_block_k * 4) + get_warp_idx_k<num_warps_q, num_warps_k>() * 4 + lane_id % 4;
+  }
+
+  constexpr uint32_t k_scale_advance_offset = (K_GRAN == QuantGranularity::kPerBlock) ? 1 : (K_GRAN == QuantGranularity::kPerWarp) ? (CTA_K / WARP_K) : (CTA_K / WARP_K) * 4;
 
   // initialize o, m, d
 #pragma unroll
@@ -220,11 +252,12 @@ __global__ void qk_int_sv_f8_attn_per_warp_kernel(int8_t *__restrict__ Q, int8_t
   float q_scale = Q_scale[q_scale_idx];
 
   float original_sm_scale = sm_scale;
-  float dequant_scale = q_scale * K_scale[k_scale_idx + 0];
+  float dequant_scale = q_scale * K_scale[k_scale_idx + 0 * k_scale_advance_offset];
 
   sm_scale = original_sm_scale * dequant_scale;
 
   // load V
+  // ! we assume that V is padded. If not, there might be illegal memory access or nan issue.
   // for fp16: 
   // load_global_to_share                stride_seq_v
   load_fp8_V_global_to_share<global_to_shared_line_lanes_V, global_to_shared_copy_lines_per_warp_V, V_smem_iters_row, V_smem_iters_col, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V, CTA_K>(
@@ -298,7 +331,7 @@ __global__ void qk_int_sv_f8_attn_per_warp_kernel(int8_t *__restrict__ Q, int8_t
       &K_lane_base_ptr, K_smem_offset_load, stride_seq_k, smem_K);
     cp_async::commit_group();
 
-    dequant_scale = q_scale * K_scale[k_scale_idx + iter];
+    dequant_scale = q_scale * K_scale[k_scale_idx + iter * k_scale_advance_offset];
     sm_scale = original_sm_scale * dequant_scale;
     
     // ensure V is ready
@@ -308,9 +341,16 @@ __global__ void qk_int_sv_f8_attn_per_warp_kernel(int8_t *__restrict__ Q, int8_t
     // for fp16:
     // compute_fp16_sv_permuted<num_warps_q, num_warps_k, num_tiles_q, num_tiles_k, num_tiles_v, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V, 4>(
     //   smem_V, RS_f16, RO, d, V_smem_offset_mma);
-    compute_fp8_sv<num_warps_q, num_warps_k, num_tiles_q, num_tiles_k, num_tiles_v, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V>(
-      smem_V, RS_f8, RO, d);
-
+    if constexpr (!use_inst_buffer)
+    {
+      compute_fp8_sv<num_warps_q, num_warps_k, num_tiles_q, num_tiles_k, num_tiles_v, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V>(
+        smem_V, RS_f8, RO, d);
+    }
+    else
+    {
+      compute_fp8_sv_inst_buf<num_warps_q, num_warps_k, num_tiles_q, num_tiles_k, num_tiles_v, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V>(
+        smem_V, RS_f8, RO, d);   
+    }
     __syncthreads();
     // load V
     // for fp16: 
@@ -393,7 +433,7 @@ __global__ void qk_int_sv_f8_attn_per_warp_kernel(int8_t *__restrict__ Q, int8_t
       &K_lane_base_ptr, K_smem_offset_load, stride_seq_k, smem_K, K_load_idx_lane_base, kv_len);
     cp_async::commit_group();
 
-    dequant_scale = q_scale * K_scale[k_scale_idx + num_iterations - 1];
+    dequant_scale = q_scale * K_scale[k_scale_idx + (num_iterations - 1) * k_scale_advance_offset];
     sm_scale = original_sm_scale * dequant_scale;
 
     // ensure V is ready
@@ -403,8 +443,16 @@ __global__ void qk_int_sv_f8_attn_per_warp_kernel(int8_t *__restrict__ Q, int8_t
     // for fp16:
     // compute_fp16_sv_permuted<num_warps_q, num_warps_k, num_tiles_q, num_tiles_k, num_tiles_v, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V, 4>(
     //   smem_V, RS_f16, RO, d, V_smem_offset_mma);
-    compute_fp8_sv<num_warps_q, num_warps_k, num_tiles_q, num_tiles_k, num_tiles_v, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V>(
-      smem_V, RS_f8, RO, d);
+    if constexpr (!use_inst_buffer)
+    {
+      compute_fp8_sv<num_warps_q, num_warps_k, num_tiles_q, num_tiles_k, num_tiles_v, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V>(
+        smem_V, RS_f8, RO, d);
+    }
+    else
+    {
+      compute_fp8_sv_inst_buf<num_warps_q, num_warps_k, num_tiles_q, num_tiles_k, num_tiles_v, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V>(
+        smem_V, RS_f8, RO, d);
+    }
 
     __syncthreads();
     // load V
@@ -486,8 +534,16 @@ __global__ void qk_int_sv_f8_attn_per_warp_kernel(int8_t *__restrict__ Q, int8_t
     // for fp16:
     // compute_fp16_sv_permuted<num_warps_q, num_warps_k, num_tiles_q, num_tiles_k, num_tiles_v, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V, 4>(
     //   smem_V, RS_f16, RO, d, V_smem_offset_mma);
-    compute_fp8_sv<num_warps_q, num_warps_k, num_tiles_q, num_tiles_k, num_tiles_v, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V>(
-      smem_V, RS_f8, RO, d);
+    if constexpr (!use_inst_buffer)
+    {
+      compute_fp8_sv<num_warps_q, num_warps_k, num_tiles_q, num_tiles_k, num_tiles_v, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V>(
+        smem_V, RS_f8, RO, d);
+    }
+    else
+    {
+      compute_fp8_sv_inst_buf<num_warps_q, num_warps_k, num_tiles_q, num_tiles_k, num_tiles_v, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V>(
+        smem_V, RS_f8, RO, d);
+    }
 
     __syncthreads();
 
@@ -635,7 +691,7 @@ __global__ void qk_int_sv_f8_attn_per_warp_kernel(int8_t *__restrict__ Q, int8_t
   }
 }
 
-torch::Tensor qk_int8_sv_f8_accum_f32_attn_per_warp(torch::Tensor query,
+torch::Tensor qk_int8_sv_f8_accum_f32_attn(torch::Tensor query,
                     torch::Tensor key,
                     torch::Tensor value,
                     torch::Tensor output,
@@ -643,6 +699,7 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_per_warp(torch::Tensor query,
                     torch::Tensor key_scale,
                     int tensor_layout,
                     int is_causal,
+                    int qk_quant_gran,
                     float sm_scale,
                     int return_lse)
 {
@@ -746,50 +803,64 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_per_warp(torch::Tensor query,
 
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
     DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
-      DISPATCH_RETURN_LSE(return_lse, RETURN_LSE, {
-        DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
-          constexpr int CTA_Q = (HEAD_DIM == 256) ? 64 : 128;
-          constexpr int CTA_K = (HEAD_DIM == 256) ? 64 : 64;
-          constexpr int WARP_Q = (HEAD_DIM == 256) ? 16 : 32;
-          constexpr int WARP_K = (HEAD_DIM == 256) ? 64 : 64;
+      DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
+        DISPATCH_RETURN_LSE(return_lse, RETURN_LSE, {
+          DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
+            constexpr int CTA_Q = (HEAD_DIM == 256) ? 64 : 128;
+            constexpr int CTA_K = (HEAD_DIM == 256) ? 64 : 64;
+            constexpr int WARP_Q = (HEAD_DIM == 256) ? 16 : 32;
+            constexpr int WARP_K = (HEAD_DIM == 256) ? 64 : 64;
 
-          assert(value.size(0) == batch_size);
-          assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
+            assert(value.size(0) == batch_size);
+            assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
 
-          constexpr MaskMode mask_mode = IS_CAUSAL ? MaskMode::kCausal : MaskMode::kNone;
+            constexpr MaskMode mask_mode = IS_CAUSAL ? MaskMode::kCausal : MaskMode::kNone;
 
-          CHECK_SHAPE(query_scale, batch_size, num_qo_heads, static_cast<long>(div_ceil(qo_len, CTA_Q) * (CTA_Q / WARP_Q)));
-          CHECK_SHAPE(key_scale, batch_size, num_kv_heads, static_cast<long>(div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K)));
+            if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp))
+            {
+              CHECK_SHAPE(query_scale, batch_size, num_qo_heads, static_cast<long>(div_ceil(qo_len, CTA_Q) * (CTA_Q / WARP_Q)));
+              CHECK_SHAPE(key_scale, batch_size, num_kv_heads, static_cast<long>(div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K)));
+            }
+            else if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerThread))
+            {
+              CHECK_SHAPE(query_scale, batch_size, num_qo_heads, static_cast<long>(div_ceil(qo_len, CTA_Q) * (CTA_Q / WARP_Q) * 8));
+              CHECK_SHAPE(key_scale, batch_size, num_kv_heads, static_cast<long>(div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K) * 4));    
+            }
+            else
+            {
+              static_assert(QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp) || QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerThread), "Unsupported quantization granularity");
+            }
 
-          //                                     smem_Q                                     smem_K                            smem_V                     smem_O
-          size_t smem_max = std::max(CTA_Q * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t), CTA_Q * HEAD_DIM * sizeof(half));
-          
-          auto kernel_func = qk_int_sv_f8_attn_per_warp_kernel<CTA_Q, CTA_K, WARP_Q, WARP_K, HEAD_DIM, DataType::kInt8,
-                                                      float, DTypeOut, ComputeUnit::kCudaCore, mask_mode, RETURN_LSE, false, false>;
+            //                                     smem_Q                                     smem_K                            smem_V                     smem_O
+            size_t smem_max = std::max(CTA_Q * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t), CTA_Q * HEAD_DIM * sizeof(half));
+            
+            auto kernel_func = qk_int_sv_f8_attn_kernel<CTA_Q, CTA_K, WARP_Q, WARP_K, HEAD_DIM, DataType::kInt8, static_cast<QuantGranularity>(QK_QUANT_GRAN), static_cast<QuantGranularity>(QK_QUANT_GRAN),
+                                                        float, false, DTypeOut, ComputeUnit::kCudaCore, mask_mode, RETURN_LSE, false, false>;
 
-          cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_max);
+            cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_max);
 
-          dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
-          dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
+            dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
+            dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
 
-          kernel_func<<<grid, block, smem_max>>>(
-            query.data_ptr<int8_t>(), 
-            key.data_ptr<int8_t>(),
-            reinterpret_cast<int8_t*>(value.data_ptr()),
-            reinterpret_cast<DTypeOut*>(output.data_ptr()),
-            (return_lse) ? reinterpret_cast<float*>(lse.data_ptr()) : nullptr,
-            reinterpret_cast<float*>(query_scale.data_ptr()),
-            reinterpret_cast<float*>(key_scale.data_ptr()),
-            nullptr,
-            nullptr,
-            qo_len,
-            kv_len,
-            num_kv_groups,
-            stride_bz_q, stride_seq_q, stride_h_q,
-            stride_bz_k, stride_seq_k, stride_h_k,
-            stride_bz_v, stride_h_v, stride_d_v,
-            stride_bz_o, stride_seq_o, stride_h_o,
-            sm_scale);
+            kernel_func<<<grid, block, smem_max>>>(
+              query.data_ptr<int8_t>(), 
+              key.data_ptr<int8_t>(),
+              reinterpret_cast<int8_t*>(value.data_ptr()),
+              reinterpret_cast<DTypeOut*>(output.data_ptr()),
+              (RETURN_LSE) ? reinterpret_cast<float*>(lse.data_ptr()) : nullptr,
+              reinterpret_cast<float*>(query_scale.data_ptr()),
+              reinterpret_cast<float*>(key_scale.data_ptr()),
+              nullptr,
+              nullptr,
+              qo_len,
+              kv_len,
+              num_kv_groups,
+              stride_bz_q, stride_seq_q, stride_h_q,
+              stride_bz_k, stride_seq_k, stride_h_k,
+              stride_bz_v, stride_h_v, stride_d_v,
+              stride_bz_o, stride_seq_o, stride_h_o,
+              sm_scale);
+          });
         });
       });
     });
@@ -798,7 +869,185 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_per_warp(torch::Tensor query,
   return lse;
 }
 
-torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn_per_warp(torch::Tensor query,
+torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(torch::Tensor query,
+                    torch::Tensor key,
+                    torch::Tensor value,
+                    torch::Tensor output,
+                    torch::Tensor query_scale,
+                    torch::Tensor key_scale,
+                    int tensor_layout,
+                    int is_causal,
+                    int qk_quant_gran,
+                    float sm_scale,
+                    int return_lse)
+{
+  CHECK_CUDA(query);
+  CHECK_CUDA(key);
+  CHECK_CUDA(value);
+  CHECK_CUDA(output);
+  CHECK_CUDA(query_scale);
+  CHECK_CUDA(key_scale);
+
+  CHECK_LASTDIM_CONTIGUOUS(query);
+  CHECK_LASTDIM_CONTIGUOUS(key);
+  CHECK_CONTIGUOUS(value); // ensure value is contiguous to prevent troubles in the kernel
+  CHECK_LASTDIM_CONTIGUOUS(output);
+  CHECK_CONTIGUOUS(query_scale);
+  CHECK_CONTIGUOUS(key_scale);
+
+  CHECK_DTYPE(query, torch::kInt8);
+  CHECK_DTYPE(key, torch::kInt8);
+  // TODO: how to check fp8 data type?
+  // CHECK_DTYPE(value, torch::kHalf);
+  CHECK_DTYPE(query_scale, torch::kFloat32);
+  CHECK_DTYPE(key_scale, torch::kFloat32);
+
+  CHECK_DIMS(query, 4);
+  CHECK_DIMS(key, 4);
+  CHECK_DIMS(value, 4);
+  CHECK_DIMS(output, 4);
+  CHECK_DIMS(query_scale, 3);
+  CHECK_DIMS(key_scale, 3);
+
+  const int batch_size = query.size(0);
+  const int head_dim = query.size(3);
+
+  int stride_bz_q = query.stride(0);
+  int stride_bz_k = key.stride(0);
+  int stride_bz_v = value.stride(0);
+  int stride_bz_o = output.stride(0);
+
+  int qo_len, kv_len, num_qo_heads, num_kv_heads;
+  int stride_seq_q, stride_h_q, stride_seq_k, stride_h_k, stride_h_v, stride_d_v, stride_seq_o, stride_h_o;
+
+  if (tensor_layout == 0)
+  {
+    qo_len = query.size(1);
+    kv_len = key.size(1);
+    num_qo_heads = query.size(2);
+    num_kv_heads = key.size(2);
+
+    stride_seq_q = query.stride(1);
+    stride_h_q = query.stride(2);
+    stride_seq_k = key.stride(1);
+    stride_h_k = key.stride(2);
+    stride_h_v = value.stride(2);
+    stride_d_v = value.stride(1);
+    stride_seq_o = output.stride(1);
+    stride_h_o = output.stride(2);
+
+    CHECK_SHAPE(key, batch_size, kv_len, num_kv_heads, head_dim);
+    CHECK_SHAPE(output, batch_size, qo_len, num_qo_heads, head_dim);
+    assert(value.size(1) == head_dim);
+    assert(value.size(2) == num_kv_heads);
+  }
+  else
+  {
+    qo_len = query.size(2);
+    kv_len = key.size(2);
+    num_qo_heads = query.size(1);
+    num_kv_heads = key.size(1);
+
+    stride_seq_q = query.stride(2);
+    stride_h_q = query.stride(1);
+    stride_seq_k = key.stride(2);
+    stride_h_k = key.stride(1);
+    stride_h_v = value.stride(1);
+    stride_d_v = value.stride(2);
+    stride_seq_o = output.stride(2);
+    stride_h_o = output.stride(1);
+
+    CHECK_SHAPE(key, batch_size, num_kv_heads, kv_len, head_dim);
+    CHECK_SHAPE(output, batch_size, num_qo_heads, qo_len, head_dim);
+    assert(value.size(2) == head_dim);
+    assert(value.size(1) == num_kv_heads);
+  }
+  
+  if (num_qo_heads % num_kv_heads != 0) {
+    std::ostringstream err_msg;
+    err_msg << "num_qo_heads (" << num_qo_heads << ") must be divisible by num_kv_heads (" << num_kv_heads << ")";
+    throw std::invalid_argument(err_msg.str());  
+  }
+
+  torch::Tensor lse = torch::empty({0});
+  if (return_lse)
+  {
+    lse = torch::empty({batch_size, num_qo_heads, qo_len}, query.options().dtype(torch::kFloat32));
+  }
+
+  const int num_kv_groups = num_qo_heads / num_kv_heads;
+
+  auto output_dtype = output.scalar_type();
+
+  DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
+    DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
+      DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
+        DISPATCH_RETURN_LSE(return_lse, RETURN_LSE, {
+          DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
+            constexpr int CTA_Q = (HEAD_DIM == 256) ? 64 : 128;
+            constexpr int CTA_K = (HEAD_DIM == 256) ? 64 : 64;
+            constexpr int WARP_Q = (HEAD_DIM == 256) ? 16 : 32;
+            constexpr int WARP_K = (HEAD_DIM == 256) ? 64 : 64;
+
+            assert(value.size(0) == batch_size);
+            assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
+
+            constexpr MaskMode mask_mode = IS_CAUSAL ? MaskMode::kCausal : MaskMode::kNone;
+
+            if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp))
+            {
+              CHECK_SHAPE(query_scale, batch_size, num_qo_heads, static_cast<long>(div_ceil(qo_len, CTA_Q) * (CTA_Q / WARP_Q)));
+              CHECK_SHAPE(key_scale, batch_size, num_kv_heads, static_cast<long>(div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K)));
+            }
+            else if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerThread))
+            {
+              CHECK_SHAPE(query_scale, batch_size, num_qo_heads, static_cast<long>(div_ceil(qo_len, CTA_Q) * (CTA_Q / WARP_Q) * 8));
+              CHECK_SHAPE(key_scale, batch_size, num_kv_heads, static_cast<long>(div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K) * 4));    
+            }
+            else
+            {
+              static_assert(QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp) || QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerThread), "Unsupported quantization granularity");
+            }
+
+            //                                     smem_Q                                     smem_K                            smem_V                     smem_O
+            size_t smem_max = std::max(CTA_Q * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t), CTA_Q * HEAD_DIM * sizeof(half));
+            
+            auto kernel_func = qk_int_sv_f8_attn_kernel<CTA_Q, CTA_K, WARP_Q, WARP_K, HEAD_DIM, DataType::kInt8, static_cast<QuantGranularity>(QK_QUANT_GRAN), static_cast<QuantGranularity>(QK_QUANT_GRAN),
+                                                        float, true, DTypeOut, ComputeUnit::kCudaCore, mask_mode, RETURN_LSE, false, false>;
+
+            cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_max);
+
+            dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
+            dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
+
+            kernel_func<<<grid, block, smem_max>>>(
+              query.data_ptr<int8_t>(), 
+              key.data_ptr<int8_t>(),
+              reinterpret_cast<int8_t*>(value.data_ptr()),
+              reinterpret_cast<DTypeOut*>(output.data_ptr()),
+              (RETURN_LSE) ? reinterpret_cast<float*>(lse.data_ptr()) : nullptr,
+              reinterpret_cast<float*>(query_scale.data_ptr()),
+              reinterpret_cast<float*>(key_scale.data_ptr()),
+              nullptr,
+              nullptr,
+              qo_len,
+              kv_len,
+              num_kv_groups,
+              stride_bz_q, stride_seq_q, stride_h_q,
+              stride_bz_k, stride_seq_k, stride_h_k,
+              stride_bz_v, stride_h_v, stride_d_v,
+              stride_bz_o, stride_seq_o, stride_h_o,
+              sm_scale);
+          });
+        });
+      });
+    });
+  });
+
+  return lse;
+}
+
+torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn(torch::Tensor query,
                     torch::Tensor key,
                     torch::Tensor value,
                     torch::Tensor output,
@@ -808,6 +1057,7 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn_per_warp(tor
                     torch::Tensor value_mean,
                     int tensor_layout,
                     int is_causal,
+                    int qk_quant_gran,
                     float sm_scale,
                     int return_lse)
 {
@@ -919,52 +1169,67 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn_per_warp(tor
 
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
     DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
-      DISPATCH_RETURN_LSE(return_lse, RETURN_LSE, {
-        DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
-          constexpr int CTA_Q = (HEAD_DIM == 256) ? 64 : 128;
-          constexpr int CTA_K = (HEAD_DIM == 256) ? 64 : 64;
-          constexpr int WARP_Q = (HEAD_DIM == 256) ? 16 : 32;
-          constexpr int WARP_K = (HEAD_DIM == 256) ? 64 : 64;
+      DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
+        DISPATCH_RETURN_LSE(return_lse, RETURN_LSE, {
+          DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
+            constexpr int CTA_Q = (HEAD_DIM == 256) ? 64 : 128;
+            constexpr int CTA_K = (HEAD_DIM == 256) ? 64 : 64;
+            constexpr int WARP_Q = (HEAD_DIM == 256) ? 16 : 32;
+            constexpr int WARP_K = (HEAD_DIM == 256) ? 64 : 64;
 
-          assert(value.size(0) == batch_size);
-          assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
+            assert(value.size(0) == batch_size);
+            assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
 
-          constexpr MaskMode mask_mode = IS_CAUSAL ? MaskMode::kCausal : MaskMode::kNone;
+            constexpr MaskMode mask_mode = IS_CAUSAL ? MaskMode::kCausal : MaskMode::kNone;
 
-          CHECK_SHAPE(query_scale, batch_size, num_qo_heads, static_cast<long>(div_ceil(qo_len, CTA_Q) * (CTA_Q / WARP_Q)));
-          CHECK_SHAPE(key_scale, batch_size, num_kv_heads, static_cast<long>(div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K)));
-          CHECK_SHAPE(value_scale, batch_size, num_kv_heads, head_dim);
-          CHECK_SHAPE(value_mean, batch_size, num_kv_heads, head_dim);
+            if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp))
+            {
+              CHECK_SHAPE(query_scale, batch_size, num_qo_heads, static_cast<long>(div_ceil(qo_len, CTA_Q) * (CTA_Q / WARP_Q)));
+              CHECK_SHAPE(key_scale, batch_size, num_kv_heads, static_cast<long>(div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K)));
+            }
+            else if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerThread))
+            {
+              CHECK_SHAPE(query_scale, batch_size, num_qo_heads, static_cast<long>(div_ceil(qo_len, CTA_Q) * (CTA_Q / WARP_Q) * 8));
+              CHECK_SHAPE(key_scale, batch_size, num_kv_heads, static_cast<long>(div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K) * 4));    
+            }
+            else
+            {
+              static_assert(QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp) || QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerThread), "Unsupported quantization granularity");
+            }     
+            
+            CHECK_SHAPE(value_scale, batch_size, num_kv_heads, head_dim);
+            CHECK_SHAPE(value_mean, batch_size, num_kv_heads, head_dim);
 
-          //                                     smem_Q                                     smem_K                            smem_V                     smem_O
-          size_t smem_max = std::max(CTA_Q * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t), CTA_Q * HEAD_DIM * sizeof(half));
-          
-          auto kernel_func = qk_int_sv_f8_attn_per_warp_kernel<CTA_Q, CTA_K, WARP_Q, WARP_K, HEAD_DIM, DataType::kInt8,
-                                                      float, DTypeOut, ComputeUnit::kCudaCore, mask_mode, RETURN_LSE, true, true>;
+            //                                     smem_Q                                     smem_K                            smem_V                     smem_O
+            size_t smem_max = std::max(CTA_Q * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t), CTA_Q * HEAD_DIM * sizeof(half));
+            
+            auto kernel_func = qk_int_sv_f8_attn_kernel<CTA_Q, CTA_K, WARP_Q, WARP_K, HEAD_DIM, DataType::kInt8, static_cast<QuantGranularity>(QK_QUANT_GRAN), static_cast<QuantGranularity>(QK_QUANT_GRAN),
+                                                        float, false, DTypeOut, ComputeUnit::kCudaCore, mask_mode, RETURN_LSE, true, true>;
 
-          cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_max);
+            cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_max);
 
-          dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
-          dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
+            dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
+            dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
 
-          kernel_func<<<grid, block, smem_max>>>(
-            query.data_ptr<int8_t>(), 
-            key.data_ptr<int8_t>(),
-            reinterpret_cast<int8_t*>(value.data_ptr()),
-            reinterpret_cast<DTypeOut*>(output.data_ptr()),
-            (return_lse) ? reinterpret_cast<float*>(lse.data_ptr()) : nullptr,
-            reinterpret_cast<float*>(query_scale.data_ptr()),
-            reinterpret_cast<float*>(key_scale.data_ptr()),
-            reinterpret_cast<float*>(value_scale.data_ptr()),
-            reinterpret_cast<float*>(value_mean.data_ptr()),
-            qo_len,
-            kv_len,
-            num_kv_groups,
-            stride_bz_q, stride_seq_q, stride_h_q,
-            stride_bz_k, stride_seq_k, stride_h_k,
-            stride_bz_v, stride_h_v, stride_d_v,
-            stride_bz_o, stride_seq_o, stride_h_o,
-            sm_scale);
+            kernel_func<<<grid, block, smem_max>>>(
+              query.data_ptr<int8_t>(), 
+              key.data_ptr<int8_t>(),
+              reinterpret_cast<int8_t*>(value.data_ptr()),
+              reinterpret_cast<DTypeOut*>(output.data_ptr()),
+              (RETURN_LSE) ? reinterpret_cast<float*>(lse.data_ptr()) : nullptr,
+              reinterpret_cast<float*>(query_scale.data_ptr()),
+              reinterpret_cast<float*>(key_scale.data_ptr()),
+              reinterpret_cast<float*>(value_scale.data_ptr()),
+              reinterpret_cast<float*>(value_mean.data_ptr()),
+              qo_len,
+              kv_len,
+              num_kv_groups,
+              stride_bz_q, stride_seq_q, stride_h_q,
+              stride_bz_k, stride_seq_k, stride_h_k,
+              stride_bz_v, stride_h_v, stride_d_v,
+              stride_bz_o, stride_seq_o, stride_h_o,
+              sm_scale);
+          });
         });
       });
     });
@@ -973,7 +1238,7 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn_per_warp(tor
   return lse;
 }
 
-torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp(torch::Tensor query,
+torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn(torch::Tensor query,
                     torch::Tensor key,
                     torch::Tensor value,
                     torch::Tensor output,
@@ -982,6 +1247,7 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp(torch::Tensor q
                     torch::Tensor value_scale,
                     int tensor_layout,
                     int is_causal,
+                    int qk_quant_gran,
                     float sm_scale,
                     int return_lse)
 {
@@ -1089,52 +1355,253 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_per_warp(torch::Tensor q
 
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
     DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
-      DISPATCH_RETURN_LSE(return_lse, RETURN_LSE, {  
-        DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
+      DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
+        DISPATCH_RETURN_LSE(return_lse, RETURN_LSE, {  
+          DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
+              
+            constexpr int CTA_Q = (HEAD_DIM == 256) ? 64 : 128;
+            constexpr int CTA_K = (HEAD_DIM == 256) ? 64 : 64;
+            constexpr int WARP_Q = (HEAD_DIM == 256) ? 16 : 32;
+            constexpr int WARP_K = (HEAD_DIM == 256) ? 64 : 64;
+
+            assert(value.size(0) == batch_size);
+            assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
+
+            constexpr MaskMode mask_mode = IS_CAUSAL ? MaskMode::kCausal : MaskMode::kNone;
+
+            if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp))
+            {
+              CHECK_SHAPE(query_scale, batch_size, num_qo_heads, static_cast<long>(div_ceil(qo_len, CTA_Q) * (CTA_Q / WARP_Q)));
+              CHECK_SHAPE(key_scale, batch_size, num_kv_heads, static_cast<long>(div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K)));
+            }
+            else if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerThread))
+            {
+              CHECK_SHAPE(query_scale, batch_size, num_qo_heads, static_cast<long>(div_ceil(qo_len, CTA_Q) * (CTA_Q / WARP_Q) * 8));
+              CHECK_SHAPE(key_scale, batch_size, num_kv_heads, static_cast<long>(div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K) * 4));    
+            }
+            else
+            {
+              static_assert(QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp) || QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerThread), "Unsupported quantization granularity");
+            }
+
+            CHECK_SHAPE(value_scale, batch_size, num_kv_heads, head_dim);
+
+            //                                     smem_Q                                     smem_K                            smem_V                     smem_O
+            size_t smem_max = std::max(CTA_Q * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t), CTA_Q * HEAD_DIM * sizeof(half));
             
-          constexpr int CTA_Q = (HEAD_DIM == 256) ? 64 : 128;
-          constexpr int CTA_K = (HEAD_DIM == 256) ? 64 : 64;
-          constexpr int WARP_Q = (HEAD_DIM == 256) ? 16 : 32;
-          constexpr int WARP_K = (HEAD_DIM == 256) ? 64 : 64;
+            auto kernel_func = qk_int_sv_f8_attn_kernel<CTA_Q, CTA_K, WARP_Q, WARP_K, HEAD_DIM, DataType::kInt8, static_cast<QuantGranularity>(QK_QUANT_GRAN), static_cast<QuantGranularity>(QK_QUANT_GRAN),
+                                                        float, false, DTypeOut, ComputeUnit::kCudaCore, mask_mode, RETURN_LSE, true, false>;
 
-          assert(value.size(0) == batch_size);
-          assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
+            cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_max);
 
-          constexpr MaskMode mask_mode = IS_CAUSAL ? MaskMode::kCausal : MaskMode::kNone;
+            dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
+            dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
 
-          CHECK_SHAPE(query_scale, batch_size, num_qo_heads, static_cast<long>(div_ceil(qo_len, CTA_Q) * (CTA_Q / WARP_Q)));
-          CHECK_SHAPE(key_scale, batch_size, num_kv_heads, static_cast<long>(div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K)));
-          CHECK_SHAPE(value_scale, batch_size, num_kv_heads, head_dim);
+            kernel_func<<<grid, block, smem_max>>>(
+              query.data_ptr<int8_t>(), 
+              key.data_ptr<int8_t>(),
+              reinterpret_cast<int8_t*>(value.data_ptr()),
+              reinterpret_cast<DTypeOut*>(output.data_ptr()),
+              (RETURN_LSE) ? reinterpret_cast<float*>(lse.data_ptr()) : nullptr,
+              reinterpret_cast<float*>(query_scale.data_ptr()),
+              reinterpret_cast<float*>(key_scale.data_ptr()),
+              reinterpret_cast<float*>(value_scale.data_ptr()),
+              nullptr,
+              qo_len,
+              kv_len,
+              num_kv_groups,
+              stride_bz_q, stride_seq_q, stride_h_q,
+              stride_bz_k, stride_seq_k, stride_h_k,
+              stride_bz_v, stride_h_v, stride_d_v,
+              stride_bz_o, stride_seq_o, stride_h_o,
+              sm_scale);
+          });
+        });
+      });
+    });
+  });
 
-          //                                     smem_Q                                     smem_K                            smem_V                     smem_O
-          size_t smem_max = std::max(CTA_Q * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t), CTA_Q * HEAD_DIM * sizeof(half));
-          
-          auto kernel_func = qk_int_sv_f8_attn_per_warp_kernel<CTA_Q, CTA_K, WARP_Q, WARP_K, HEAD_DIM, DataType::kInt8,
-                                                      float, DTypeOut, ComputeUnit::kCudaCore, mask_mode, RETURN_LSE, true, false>;
+  return lse;
+}
 
-          cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_max);
+torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(torch::Tensor query,
+                    torch::Tensor key,
+                    torch::Tensor value,
+                    torch::Tensor output,
+                    torch::Tensor query_scale,
+                    torch::Tensor key_scale,
+                    torch::Tensor value_scale,
+                    int tensor_layout,
+                    int is_causal,
+                    int qk_quant_gran,
+                    float sm_scale,
+                    int return_lse)
+{
+  CHECK_CUDA(query);
+  CHECK_CUDA(key);
+  CHECK_CUDA(value);
+  CHECK_CUDA(output);
+  CHECK_CUDA(query_scale);
+  CHECK_CUDA(key_scale);
+  CHECK_CUDA(value_scale);
 
-          dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
-          dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
+  CHECK_LASTDIM_CONTIGUOUS(query);
+  CHECK_LASTDIM_CONTIGUOUS(key);
+  CHECK_CONTIGUOUS(value); // ensure value is contiguous to prevent troubles in the kernel
+  CHECK_LASTDIM_CONTIGUOUS(output);
+  CHECK_CONTIGUOUS(query_scale);
+  CHECK_CONTIGUOUS(key_scale);
+  CHECK_CONTIGUOUS(value_scale);
 
-          kernel_func<<<grid, block, smem_max>>>(
-            query.data_ptr<int8_t>(), 
-            key.data_ptr<int8_t>(),
-            reinterpret_cast<int8_t*>(value.data_ptr()),
-            reinterpret_cast<DTypeOut*>(output.data_ptr()),
-            (return_lse) ? reinterpret_cast<float*>(lse.data_ptr()) : nullptr,
-            reinterpret_cast<float*>(query_scale.data_ptr()),
-            reinterpret_cast<float*>(key_scale.data_ptr()),
-            reinterpret_cast<float*>(value_scale.data_ptr()),
-            nullptr,
-            qo_len,
-            kv_len,
-            num_kv_groups,
-            stride_bz_q, stride_seq_q, stride_h_q,
-            stride_bz_k, stride_seq_k, stride_h_k,
-            stride_bz_v, stride_h_v, stride_d_v,
-            stride_bz_o, stride_seq_o, stride_h_o,
-            sm_scale);
+  CHECK_DTYPE(query, torch::kInt8);
+  CHECK_DTYPE(key, torch::kInt8);
+  // TODO: how to check fp8 data type?
+  // CHECK_DTYPE(value, torch::kHalf);
+  CHECK_DTYPE(query_scale, torch::kFloat32);
+  CHECK_DTYPE(key_scale, torch::kFloat32);
+  CHECK_DTYPE(value_scale, torch::kFloat32);
+
+  CHECK_DIMS(query, 4);
+  CHECK_DIMS(key, 4);
+  CHECK_DIMS(value, 4);
+  CHECK_DIMS(output, 4);
+  CHECK_DIMS(query_scale, 3);
+  CHECK_DIMS(key_scale, 3);
+  CHECK_DIMS(value_scale, 3);
+
+  const int batch_size = query.size(0);
+  const int head_dim = query.size(3);
+
+  int stride_bz_q = query.stride(0);
+  int stride_bz_k = key.stride(0);
+  int stride_bz_v = value.stride(0);
+  int stride_bz_o = output.stride(0);
+
+  int qo_len, kv_len, num_qo_heads, num_kv_heads;
+  int stride_seq_q, stride_h_q, stride_seq_k, stride_h_k, stride_h_v, stride_d_v, stride_seq_o, stride_h_o;
+
+  if (tensor_layout == 0)
+  {
+    qo_len = query.size(1);
+    kv_len = key.size(1);
+    num_qo_heads = query.size(2);
+    num_kv_heads = key.size(2);
+
+    stride_seq_q = query.stride(1);
+    stride_h_q = query.stride(2);
+    stride_seq_k = key.stride(1);
+    stride_h_k = key.stride(2);
+    stride_h_v = value.stride(2);
+    stride_d_v = value.stride(1);
+    stride_seq_o = output.stride(1);
+    stride_h_o = output.stride(2);
+
+    CHECK_SHAPE(key, batch_size, kv_len, num_kv_heads, head_dim);
+    CHECK_SHAPE(output, batch_size, qo_len, num_qo_heads, head_dim);
+    assert(value.size(1) == head_dim);
+    assert(value.size(2) == num_kv_heads);
+  }
+  else
+  {
+    qo_len = query.size(2);
+    kv_len = key.size(2);
+    num_qo_heads = query.size(1);
+    num_kv_heads = key.size(1);
+
+    stride_seq_q = query.stride(2);
+    stride_h_q = query.stride(1);
+    stride_seq_k = key.stride(2);
+    stride_h_k = key.stride(1);
+    stride_h_v = value.stride(1);
+    stride_d_v = value.stride(2);
+    stride_seq_o = output.stride(2);
+    stride_h_o = output.stride(1);
+
+    CHECK_SHAPE(key, batch_size, num_kv_heads, kv_len, head_dim);
+    CHECK_SHAPE(output, batch_size, num_qo_heads, qo_len, head_dim);
+    assert(value.size(2) == head_dim);
+    assert(value.size(1) == num_kv_heads);
+  }
+
+  if (num_qo_heads % num_kv_heads != 0) {
+    std::ostringstream err_msg;
+    err_msg << "num_qo_heads (" << num_qo_heads << ") must be divisible by num_kv_heads (" << num_kv_heads << ")";
+    throw std::invalid_argument(err_msg.str());  
+  }
+
+  torch::Tensor lse = torch::empty({0});
+  if (return_lse)
+  {
+    lse = torch::empty({batch_size, num_qo_heads, qo_len}, query.options().dtype(torch::kFloat32));
+  }
+
+  const int num_kv_groups = num_qo_heads / num_kv_heads;
+
+  auto output_dtype = output.scalar_type();
+
+  DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
+    DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
+      DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
+        DISPATCH_RETURN_LSE(return_lse, RETURN_LSE, {  
+          DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
+              
+            constexpr int CTA_Q = (HEAD_DIM == 256) ? 64 : 128;
+            constexpr int CTA_K = (HEAD_DIM == 256) ? 64 : 64;
+            constexpr int WARP_Q = (HEAD_DIM == 256) ? 16 : 32;
+            constexpr int WARP_K = (HEAD_DIM == 256) ? 64 : 64;
+
+            assert(value.size(0) == batch_size);
+            assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
+
+            constexpr MaskMode mask_mode = IS_CAUSAL ? MaskMode::kCausal : MaskMode::kNone;
+
+            if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp))
+            {
+              CHECK_SHAPE(query_scale, batch_size, num_qo_heads, static_cast<long>(div_ceil(qo_len, CTA_Q) * (CTA_Q / WARP_Q)));
+              CHECK_SHAPE(key_scale, batch_size, num_kv_heads, static_cast<long>(div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K)));
+            }
+            else if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerThread))
+            {
+              CHECK_SHAPE(query_scale, batch_size, num_qo_heads, static_cast<long>(div_ceil(qo_len, CTA_Q) * (CTA_Q / WARP_Q) * 8));
+              CHECK_SHAPE(key_scale, batch_size, num_kv_heads, static_cast<long>(div_ceil(kv_len, CTA_K) * (CTA_K / WARP_K) * 4));    
+            }
+            else
+            {
+              static_assert(QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp) || QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerThread), "Unsupported quantization granularity");
+            }
+
+            CHECK_SHAPE(value_scale, batch_size, num_kv_heads, head_dim);
+
+            //                                     smem_Q                                     smem_K                            smem_V                     smem_O
+            size_t smem_max = std::max(CTA_Q * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t), CTA_Q * HEAD_DIM * sizeof(half));
+            
+            auto kernel_func = qk_int_sv_f8_attn_kernel<CTA_Q, CTA_K, WARP_Q, WARP_K, HEAD_DIM, DataType::kInt8, static_cast<QuantGranularity>(QK_QUANT_GRAN), static_cast<QuantGranularity>(QK_QUANT_GRAN),
+                                                        float, true, DTypeOut, ComputeUnit::kCudaCore, mask_mode, RETURN_LSE, true, false>;
+
+            cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_max);
+
+            dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
+            dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
+
+            kernel_func<<<grid, block, smem_max>>>(
+              query.data_ptr<int8_t>(), 
+              key.data_ptr<int8_t>(),
+              reinterpret_cast<int8_t*>(value.data_ptr()),
+              reinterpret_cast<DTypeOut*>(output.data_ptr()),
+              (RETURN_LSE) ? reinterpret_cast<float*>(lse.data_ptr()) : nullptr,
+              reinterpret_cast<float*>(query_scale.data_ptr()),
+              reinterpret_cast<float*>(key_scale.data_ptr()),
+              reinterpret_cast<float*>(value_scale.data_ptr()),
+              nullptr,
+              qo_len,
+              kv_len,
+              num_kv_groups,
+              stride_bz_q, stride_seq_q, stride_h_q,
+              stride_bz_k, stride_seq_k, stride_h_k,
+              stride_bz_v, stride_h_v, stride_d_v,
+              stride_bz_o, stride_seq_o, stride_h_o,
+              sm_scale);
+          });
         });
       });
     });
