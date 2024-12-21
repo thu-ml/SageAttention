@@ -29,4 +29,4 @@ video = pipe(
     generator=torch.Generator(device="cuda").manual_seed(42),
 ).frames[0]
 
-export_to_video(video, "output.mp4", fps=8)
+export_to_video(video, "cogvideo_sdpa.mp4", fps=8)

@@ -2,7 +2,7 @@
 ## **Plug-and-play Example**
 
 **We can replace `scaled_dot_product_attention` easily.**  
-We will take [Cogvideo](https://huggingface.co/THUDM/CogVideoX-2b) as an example:
+We will take [CogvideoX](https://huggingface.co/THUDM/CogVideoX-2b) as an example:
 
 **Just add the following codes and run!**
 ```python
@@ -16,14 +16,14 @@ Specifically,
 
 ```bash
 cd example
-python sageattn_cogvideo.py
+python sageattn_cogvideo.py --compile
 ```
 
-**You can get a lossless video in** `./example` **faster than by using** `python original_cogvideo.py`
+**You can get a lossless video in** `./example` **faster than by using** `python original_cogvideo.py --compile`.
 
 ---
 
-### Another Example for cogvideoX-2B SAT  (35% end-to-end speedup)
+### Another Example for cogvideoX-2B SAT
 We will take [Cogvideo SAT](https://github.com/THUDM/CogVideo/tree/main) as an example:
 
 Once you have set up the environment for cogvideoX's SAT and can generate videos, you can plug SageAttention and play easily by replacing lines 67-72 in CogVideo/sat/sat/transformer_defaults.py:
