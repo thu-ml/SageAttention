@@ -119,6 +119,7 @@ def sageattn(
     else:
         raise ValueError(f"Unsupported CUDA architecture: {arch}")
 
+@torch.compiler.disable
 def sageattn_qk_int8_pv_fp16_triton(
     q: torch.Tensor, 
     k: torch.Tensor, 
@@ -240,6 +241,7 @@ def sageattn_qk_int8_pv_fp16_triton(
     else:
         return o
 
+@torch.compiler.disable
 def sageattn_varlen(
     q: torch.Tensor, 
     k: torch.Tensor, 
@@ -332,6 +334,7 @@ def sageattn_varlen(
 
     return o
 
+@torch.compiler.disable
 def sageattn_qk_int8_pv_fp16_cuda(
     q: torch.Tensor, 
     k: torch.Tensor, 
@@ -488,6 +491,7 @@ def sageattn_qk_int8_pv_fp16_cuda(
     else:
         return o
 
+@torch.compiler.disable
 def sageattn_qk_int8_pv_fp8_cuda(
     q: torch.Tensor, 
     k: torch.Tensor, 
