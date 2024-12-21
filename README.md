@@ -81,7 +81,7 @@ Support for different sequence length between `q` and `k,v` and `group-query att
 ## **Plug-and-play Example**
 
 **We can replace `scaled_dot_product_attention` easily.**  
-We will take [Cogvideo](https://huggingface.co/THUDM/CogVideoX-2b) as an example:
+We will take [CogvideoX](https://huggingface.co/THUDM/CogVideoX-2b) as an example:
 
 **Just add the following codes and run!**
 ```python
@@ -96,10 +96,10 @@ Specifically,
 
 ```bash
 cd example
-python sageattn_cogvideo.py
+python sageattn_cogvideo.py --compile
 ```
 
-**You can get a lossless video in** `./example` **faster than by using** `python original_cogvideo.py`
+**You can get a lossless video in** `./example` **faster than by using** `python original_cogvideo.py --compile`
 
 
 
