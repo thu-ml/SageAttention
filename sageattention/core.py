@@ -130,6 +130,7 @@ def sageattn_qk_int8_pv_fp16_triton(
     sm_scale: Optional[float] = None, 
     smooth_k: bool = True,
     return_lse: bool = False,
+    **kwargs: Any,
 ) -> torch.Tensor:
     """
     SageAttention with per-block INT8 quantization for Q and K, FP16 PV with FP16 accumulation, implemented using Triton.
@@ -253,6 +254,7 @@ def sageattn_varlen(
     is_causal: bool = False,
     sm_scale: Optional[float] = None, 
     smooth_k: bool = True,
+    **kwargs: Any,
 ) -> torch.Tensor:
     """
 
@@ -347,6 +349,7 @@ def sageattn_qk_int8_pv_fp16_cuda(
     smooth_k: bool = True,
     smooth_v: bool = False,
     return_lse: bool = False,
+    **kwargs: Any,
 ) -> torch.Tensor:
     """
     SageAttention with INT8 quantization for Q and K, FP16 PV with FP16/FP32 accumulation, implemented using CUDA.
@@ -512,6 +515,7 @@ def sageattn_qk_int8_pv_fp8_cuda(
     smooth_k: bool = True,
     smooth_v: bool = False,
     return_lse: bool = False,
+    **kwargs: Any,
 ) -> torch.Tensor:
     """
     SageAttention with INT8 quantization for Q and K, FP8 PV with FP32 accumulation, implemented using CUDA.
