@@ -21,7 +21,7 @@ Current Features:
 + INT8 quantization for $QK^\top$ with support for varying granularities
 + FP8 quantization for $PV$
 + FP32 buffer for $PV$ to improve accuracy in FP8 mma
-+ Support `torch.compile` with non-cudagraphs mode and distributed inference.
++ Support `torch.compile` with non-cudagraphs mode and distributed inference
 
 For stable version, please use [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) branch.
 
