@@ -10,10 +10,10 @@ Jintao Zhang, Jia Wei, Haofeng Huang, Pengle Zhang, Jun Zhu, Jianfei Chen
 Paper: https://arxiv.org/abs/2411.10958  
 Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 
-![Local Image](./resource/intro.png)
+![Local Image](./assets/intro.png)
 *SageAttention on CogvideoX-2B (RTX4090)*
 
-![Local Image](./resource/intro2.png)
+![Local Image](./assets/intro2.png)
 *SageAttention2 on Llama3.1-8B*
 
 ## Project Updates
@@ -91,20 +91,20 @@ python sageattn_cogvideo.py
 
 ## Performance
 ### Speed of Kernels
-![Local Image](./resource/4090_hd64.png)
+![Local Image](./assets/4090_hd64.png)
 
-![Local Image](./resource/4090_hd128.png)
+![Local Image](./assets/4090_hd128.png)
 
-![Local Image](./resource/3090_hd64.png)
+![Local Image](./assets/3090_hd64.png)
 
-![Local Image](./resource/3090_hd64.png)
+![Local Image](./assets/3090_hd64.png)
 
 > **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing K.
 
 ### End-to-end performance
-![Local Image](./resource/real_speedup.png)
+![Local Image](./assets/real_speedup.png)
 
-![Local Image](./resource/end-to-end_performance.png)
+![Local Image](./assets/end-to-end_performance.png)
 
 
 ## Citation
