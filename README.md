@@ -12,7 +12,7 @@ Jintao Zhang, Jia Wei, Haofeng Huang, Pengle Zhang, Jun Zhu, Jianfei Chen
 Paper: https://arxiv.org/abs/2411.10958  
 Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 
-![Local Image](./resource/2.png)
+![Local Image](./assets/2.png)
 
 ## Beta Version of SageAttention2
 This is a beta release of SageAttention2. We welcome any feedback on accuracy, performance issues, bugs, feature requests, or suggestions. Please feel free to open an issue or launch a pull request!
@@ -109,38 +109,38 @@ python sageattn_cogvideo.py --compile
 ### Speed of Kernels
 
 *`8+8` means the kernel with INT8 quantization for $QK^\top$ and FP8 quantization for $PV$. `8+16` uses FP16 for $PV$.*
-![Local Image](./resource/A100_hd128.png)
+![Local Image](./assets/A100_hd128.png)
 
-![Local Image](./resource/A800_hd128.png)
+![Local Image](./assets/A800_hd128.png)
 
-![Local Image](./resource/4090_hd64.png)
+![Local Image](./assets/4090_hd64.png)
 
-![Local Image](./resource/4090_hd128.png)
+![Local Image](./assets/4090_hd128.png)
 
-![Local Image](./resource/L20_hd64.png)
+![Local Image](./assets/L20_hd64.png)
 
-![Local Image](./resource/L20_hd128.png)
+![Local Image](./assets/L20_hd128.png)
 
-![Local Image](./resource/A6000_hd128.png)
+![Local Image](./assets/A6000_hd128.png)
 
-![Local Image](./resource/3090_hd64.png)
+![Local Image](./assets/3090_hd64.png)
 
-![Local Image](./resource/3090_hd128.png)
+![Local Image](./assets/3090_hd128.png)
 
 
 > **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing. we use FP16 accumulator for FP16 $PV$, and FP32 accumulator for FP8 $PV$.
 
 ### End-to-end Performance
 
-![Local Image](./resource/22.png)
+![Local Image](./assets/22.png)
 
-![Local Image](./resource/23.png)
+![Local Image](./assets/23.png)
 
-![Local Image](./resource/24.png)
+![Local Image](./assets/24.png)
 
-![Local Image](./resource/25.png)
+![Local Image](./assets/25.png)
 
-![Local Image](./resource/26.png)
+![Local Image](./assets/26.png)
 
 
 ## Citation
