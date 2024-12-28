@@ -20,17 +20,17 @@ This is a beta release of SageAttention2. We welcome any feedback on accuracy, p
 Current Features:
 + INT8 quantization for $QK^\top$ with support for varying granularities
 + FP8 quantization for $PV$
-+ FP32 buffer for $PV$ to improve accuracy in FP8 mma
++ FP32 buffer for $PV$ to improve accuracy in FP8 MMA
 + Support `torch.compile` with non-cudagraphs mode and distributed inference
 
-For stable version, please use [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) branch.
+For a stable version, please use the branch of [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) branch.
 
 ## Project Updates
 - **News** [2024-12-20]: Update the [SageAttention2 Paper](https://arxiv.org/abs/2411.10958).
 - **News** [2024-12-20]: We are excited to announce the release of SageAttention 2.0.1 Beta! In this version, we introduce a new feature: per-thread quantization, which offers finer granularity while maintaining hardware efficiency.
-- **News** [2024-11-21]: SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800 and A6000 other than RTX3090 and RTX4090.
+- **News** [2024-11-21]: SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800, and A6000 other than RTX3090 and RTX4090.
 - **News** [2024-11-12]: Support for `sageattn_varlen` is available now.
-- **News** [2024-11-11]: Support for different sequence length between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
+- **News** [2024-11-11]: Support for different sequence lengths between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
 
 
 ## Base environment
@@ -47,11 +47,11 @@ For the stable version or Triton-only version, refer to [SageAttention-1](https:
 pip install sageattention==1.0.6
 ```
 
-To use SageAttention 2.0.1, please compile from source:
+To use SageAttention 2.0.1, please **compile from source**:
 ```
 git clone https://github.com/thu-ml/SageAttention.git
 cd sageattention 
-pip install -e . # or python setup.py install
+python setup.py install  # or pip install -e .
 ```
 
 
@@ -76,22 +76,21 @@ attn_output = sageattn(q, k, v, tensor_layout="HND", is_causal=False)
 For optimal speed and accuracy performance on custom devices and models, we strongly recommend referring to the [this file](./sageattention/core.py) for detailed guidance.
 
 > **Note:**
-Support for different sequence length between `q` and `k,v` and `group-query attention` is available.
+Support for different sequence lengths between `q` and `k,v` and `group-query attention` is available.
 
 
 ## **Plug-and-play Example**
 
-**We can replace `scaled_dot_product_attention` easily.**  
+We can replace `scaled_dot_product_attention` easily. 
 We will take [CogvideoX](https://huggingface.co/THUDM/CogVideoX-2b) as an example:
 
-**Just add the following codes and run!**
+Add the following codes and run
 ```python
 from sageattention import sageattn
 import torch.nn.functional as F
 
 F.scaled_dot_product_attention = sageattn
 ```
-> **Note:** Not all models works with `F.scaled_dot_product_attention = sageattn`. Technically, you should replace the original Attention by modifying the `Attention Class` of the target model. For image and video models, we suggest only replacing the attention in DiT computation.
 
 Specifically,
 
@@ -102,16 +101,13 @@ python sageattn_cogvideo.py --compile
 
 **You can get a lossless video in** `./example` **faster than by using** `python original_cogvideo.py --compile`
 
-
+> **Note:** Not all models works with `F.scaled_dot_product_attention = sageattn`. Technically, you should replace the original Attention by modifying the `Attention Class` of the target model. For image and video models, we suggest only replacing the attention in DiT.
 
 
 ## Performance
 ### Speed of Kernels
 
-*`8+8` means the kernel with INT8 quantization for $QK^\top$ and FP8 quantization for $PV$. `8+16` uses FP16 for $PV$.*
-![Local Image](./assets/A100_hd128.png)
-
-![Local Image](./assets/A800_hd128.png)
+`8+8` means the kernel with INT8 quantization for $QK^\top$ and FP8 quantization for $PV$. `8+16` uses FP16 with FP16 accumulator for $PV$.
 
 ![Local Image](./assets/4090_hd64.png)
 
@@ -121,16 +117,21 @@ python sageattn_cogvideo.py --compile
 
 ![Local Image](./assets/L20_hd128.png)
 
+![Local Image](./assets/A100_hd128.png)
+
+![Local Image](./assets/A800_hd128.png)
+
 ![Local Image](./assets/A6000_hd128.png)
 
 ![Local Image](./assets/3090_hd64.png)
 
 ![Local Image](./assets/3090_hd128.png)
 
+> **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing.
 
-> **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing. we use FP16 accumulator for FP16 $PV$, and FP32 accumulator for FP8 $PV$.
 
 ### End-to-end Performance
+#### **End-to-End Accuracy:**
 
 ![Local Image](./assets/22.png)
 
@@ -139,6 +140,8 @@ python sageattn_cogvideo.py --compile
 ![Local Image](./assets/24.png)
 
 ![Local Image](./assets/25.png)
+
+#### **End-to-End Speedup:**
 
 ![Local Image](./assets/26.png)
 
