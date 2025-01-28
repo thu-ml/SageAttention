@@ -39,9 +39,9 @@ For a stable version, please use the branch of [SageAttention-1](https://github.
 + `torch>=2.3.0`  
 + `triton>=3.0.0` 
 - `CUDA`:
-      + `12.4` for fp8 support on Ada
-      + `12.3` for fp8 support on Hopper
-      + `12.0` for Ampere
+  + `12.4` for fp8 support on Ada
+  + `12.3` for fp8 support on Hopper
+  + `12.0` for Ampere
 + `flash-attn` for benchmarking
 
 ## Installation
@@ -123,11 +123,11 @@ python cogvideox-2b.py --compile --attention_type sage
 
 ![Local Image](./assets/A100_hd128.png)
 
-![Local Image](./assets/A800_hd128.png)
-
-![Local Image](./assets/A6000_hd128.png)
-
 ![Local Image](./assets/3090_hd128.png)
+
+![Local Image](./assets/H20_hd128.png)
+
+![Local Image](./assets/H100_hd128.png)
 
 > **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing.
 
