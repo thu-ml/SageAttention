@@ -15,7 +15,7 @@ batch = args.batch_size
 headdim = args.head_dim
 
 print(f"FlashAttention3-FP8 Benchmark")
-print(f"batch: {batch}, head: {head}, headdim: {headdim}, pv_accum_dtype: {args.pv_accum_dtype}")
+print(f"batch: {batch}, head: {head}, headdim: {headdim}")
 
 is_causal = False
 print(f"is_causal: {is_causal}")
