@@ -36,21 +36,21 @@ print(f"is_causal: {is_causal}")
 for seq_len in {1024, 2048, 4096, 8192, 16384, 32768}:
     flops = 4 * head * batch * headdim * seq_len * seq_len / (2 if is_causal else 1)
 
-    q = torch.randint(-95, 95, (batch, seq_len, head, headdim), dtype=torch.int8).cuda()
-    k = torch.randint(-95, 95, (batch, seq_len, head, headdim), dtype=torch.int8).cuda()
-    o = torch.empty(batch, seq_len, head, headdim, dtype=torch.float16).cuda()
+    q = torch.randint(-95, 95, (batch, seq_len, head, headdim), dtype=torch.int8, device="cuda")
+    k = torch.randint(-95, 95, (batch, seq_len, head, headdim), dtype=torch.int8, device="cuda")
+    o = torch.empty(batch, seq_len, head, headdim, dtype=torch.float16, device="cuda")
 
-    vm = torch.randn(batch, head, headdim, dtype=torch.float).cuda()
-    v_scale = torch.randn(batch, head, headdim, dtype=torch.float).cuda()
+    vm = torch.randn(batch, head, headdim, dtype=torch.float, device="cuda")
+    v_scale = torch.randn(batch, head, headdim, dtype=torch.float, device="cuda")
 
     if args.quant_gran == 'per_warp':
-        q_scale = torch.randn(batch, head, seq_len // WARP_Q, dtype=torch.float).cuda()
-        k_scale = torch.randn(batch, head, seq_len // WARP_K, dtype=torch.float).cuda()
+        q_scale = torch.randn(batch, head, seq_len // WARP_Q, dtype=torch.float, device="cuda")
+        k_scale = torch.randn(batch, head, seq_len // WARP_K, dtype=torch.float, device="cuda")
     elif args.quant_gran == 'per_thread':
-        q_scale = torch.randn(batch, head, seq_len // WARP_Q * 8, dtype=torch.float).cuda()
-        k_scale = torch.randn(batch, head, seq_len // WARP_K * 4, dtype=torch.float).cuda()
+        q_scale = torch.randn(batch, head, seq_len // WARP_Q * 8, dtype=torch.float, device="cuda")
+        k_scale = torch.randn(batch, head, seq_len // WARP_K * 4, dtype=torch.float, device="cuda")
 
-    v = torch.randn(batch, headdim,head,  seq_len, dtype=torch.float16).cuda().to(torch.float8_e4m3fn)
+    v = torch.randn(batch, headdim,head,  seq_len, dtype=torch.float16, device="cuda").to(torch.float8_e4m3fn)
     sm_scale = 1 / (headdim ** 0.5)
     for i in range(5): kernel(q, k, v, o, q_scale, k_scale, 0, _is_causal, _qk_quant_gran, sm_scale, 0)
     torch.cuda.synchronize()
@@ -63,21 +63,21 @@ print(f"is_causal: {is_causal}")
 for seq_len in {1024, 2048, 4096, 8192, 16384, 32768}:
     flops = 4 * head * batch * headdim * seq_len * seq_len / (2 if is_causal else 1)
 
-    q = torch.randint(-95, 95, (batch, seq_len, head, headdim), dtype=torch.int8).cuda()
-    k = torch.randint(-95, 95, (batch, seq_len, head, headdim), dtype=torch.int8).cuda()
-    o = torch.empty(batch, seq_len, head, headdim, dtype=torch.float16).cuda()
+    q = torch.randint(-95, 95, (batch, seq_len, head, headdim), dtype=torch.int8, device="cuda")
+    k = torch.randint(-95, 95, (batch, seq_len, head, headdim), dtype=torch.int8, device="cuda")
+    o = torch.empty(batch, seq_len, head, headdim, dtype=torch.float16, device="cuda")
 
-    vm = torch.randn(batch, head, headdim, dtype=torch.float).cuda()
-    v_scale = torch.randn(batch, head, headdim, dtype=torch.float).cuda()
+    vm = torch.randn(batch, head, headdim, dtype=torch.float, device="cuda")
+    v_scale = torch.randn(batch, head, headdim, dtype=torch.float, device="cuda")
 
     if args.quant_gran == 'per_warp':
-        q_scale = torch.randn(batch, head, seq_len // WARP_Q, dtype=torch.float).cuda()
-        k_scale = torch.randn(batch, head, seq_len // WARP_K, dtype=torch.float).cuda()
+        q_scale = torch.randn(batch, head, seq_len // WARP_Q, dtype=torch.float, device="cuda")
+        k_scale = torch.randn(batch, head, seq_len // WARP_K, dtype=torch.float, device="cuda")
     elif args.quant_gran == 'per_thread':
-        q_scale = torch.randn(batch, head, seq_len // WARP_Q * 8, dtype=torch.float).cuda()
-        k_scale = torch.randn(batch, head, seq_len // WARP_K * 4, dtype=torch.float).cuda()
+        q_scale = torch.randn(batch, head, seq_len // WARP_Q * 8, dtype=torch.float, device="cuda")
+        k_scale = torch.randn(batch, head, seq_len // WARP_K * 4, dtype=torch.float, device="cuda")
 
-    v = torch.randn(batch, headdim,head,  seq_len, dtype=torch.float16).cuda().to(torch.float8_e4m3fn)
+    v = torch.randn(batch, headdim,head,  seq_len, dtype=torch.float16, device="cuda").to(torch.float8_e4m3fn)
     sm_scale = 1 / (headdim ** 0.5)
     for i in range(5): kernel(q, k, v, o, q_scale, k_scale, 0, _is_causal, _qk_quant_gran, sm_scale, 0)
     torch.cuda.synchronize()
