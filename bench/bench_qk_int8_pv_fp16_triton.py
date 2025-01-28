@@ -16,7 +16,7 @@ batch_size = args.batch_size
 num_heads = args.num_heads
 head_dim = args.head_dim
 
-print(f"Triton QK Int8 PV FP16")
+print(f"Triton QK Int8 PV FP16 Benchmark")
 print(f"batch_size: {batch_size}, num_heads: {num_heads}, head_dim: {head_dim}")
 
 for seq_len in {1024, 2048, 4096, 8192, 16384, 32768}:
