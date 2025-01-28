@@ -26,6 +26,7 @@ Current Features:
 For a stable version, please use the branch of [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) branch.
 
 ## Project Updates
+- **News** [2025-01-28]: SageAttention is available on Hopper GPUs (H100, H800, H20)! It matches the speed of FlashAttention3-FP8 but offers much better accuracy!
 - **News** [2024-12-20]: Update the [SageAttention2 Paper](https://arxiv.org/abs/2411.10958).
 - **News** [2024-12-20]: We are excited to announce the release of SageAttention 2.0.1 Beta! In this version, we introduce a new feature: per-thread quantization, which offers finer granularity while maintaining hardware efficiency.
 - **News** [2024-11-21]: SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800, and A6000 other than RTX3090 and RTX4090.
@@ -37,7 +38,10 @@ For a stable version, please use the branch of [SageAttention-1](https://github.
 + `python>=3.9`   
 + `torch>=2.3.0`  
 + `triton>=3.0.0` 
-+ `CUDA>=12.4` if you want to use fp8 else `CUDA>=12.0`
+- `CUDA`:
+      + `12.4` for fp8 support on Ada
+      + `12.3` for fp8 support on Hopper
+      + `12.0` for Ampere
 + `flash-attn` for benchmarking
 
 ## Installation
@@ -54,9 +58,13 @@ cd sageattention
 python setup.py install  # or pip install -e .
 ```
 
-
-> **Note:** Currently, SageAttention is optimized for excellent performance on RTX4090, RTX3090, L20, and L40 GPUs. On A100, A800, and A6000 GPUs, performance is best with a `head_dim=128`, while `head_dim=64` is less optimal. Similarly, performance on the Hopper architecture is currently not optimal. We are actively working to enhance performance in these configurations.
-
+To benchmark the speed against FlashAttention3, please compile from source:
+```
+git clone https://github.com/Dao-AILab/flash-attention.git
+git checkout b7d29fb3b79f0b78b1c369a52aaa6628dabfb0d7 # 2.7.2 release
+cd hopper
+python setup.py install
+```
 
 ## How to Use
 ```python
@@ -96,10 +104,10 @@ Specifically,
 
 ```bash
 cd example
-python sageattn_cogvideo.py --compile
+python cogvideox-2b.py --compile --attention_type sage
 ```
 
-**You can get a lossless video in** `./example` **faster than by using** `python original_cogvideo.py --compile`
+**You can get a lossless video in** `./example` **faster than by using** `python cogvideox-2b.py --compile`
 
 > **Note:** Not all models works with `F.scaled_dot_product_attention = sageattn`. Technically, you should replace the original Attention by modifying the `Attention Class` of the target model. For image and video models, we suggest only replacing the attention in DiT.
 
@@ -109,11 +117,7 @@ python sageattn_cogvideo.py --compile
 
 `8+8` means the kernel with INT8 quantization for $QK^\top$ and FP8 quantization for $PV$. `8+16` uses FP16 with FP16 accumulator for $PV$.
 
-![Local Image](./assets/4090_hd64.png)
-
 ![Local Image](./assets/4090_hd128.png)
-
-![Local Image](./assets/L20_hd64.png)
 
 ![Local Image](./assets/L20_hd128.png)
 
@@ -122,8 +126,6 @@ python sageattn_cogvideo.py --compile
 ![Local Image](./assets/A800_hd128.png)
 
 ![Local Image](./assets/A6000_hd128.png)
-
-![Local Image](./assets/3090_hd64.png)
 
 ![Local Image](./assets/3090_hd128.png)
 
