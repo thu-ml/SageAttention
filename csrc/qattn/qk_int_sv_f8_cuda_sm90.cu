@@ -487,18 +487,6 @@ __global__ void qk_int8_sv_f8_attn_kernel(const __grid_constant__ CUtensorMap te
     }
   }
 
-  // aggregate d
-#pragma unroll
-  for (uint32_t fq = 0; fq < num_tiles_q; fq++)
-  {
-#pragma unroll
-    for (uint32_t k = 0; k < 2; k++)
-    {
-      d[fq][k] += __shfl_xor_sync(0xffffffff, d[fq][k], 0x1); // sum 0 and 1, 2 and 3
-      d[fq][k] += __shfl_xor_sync(0xffffffff, d[fq][k], 0x2); // sum 0 and 2, 1 and 3
-    }
-  }
-
   normalize_d<num_tiles_q, num_tiles_v, ComputeUnit::kCudaCore>(RO, m, d);
 
   if constexpr (fuse_v_scale)
