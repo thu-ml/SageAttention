@@ -8,6 +8,7 @@ try:
 except:
     FA3_ENABLED = False
 
+@torch.compiler.disable
 def fa3(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -37,6 +38,7 @@ def fa3(
 
     return o
 
+@torch.compiler.disable
 def fa3_fp8(
     q: torch.Tensor,
     k: torch.Tensor,
