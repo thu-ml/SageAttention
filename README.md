@@ -151,7 +151,7 @@ python sageattn_cogvideo.py --compile
 ```
 @inproceedings{zhang2025sageattention,
       title={SageAttention: Accurate 8-Bit Attention for Plug-and-play Inference Acceleration}, 
-      author={Zhang, Jintao and Wei, Jia and Zhang, Pengle and Chen, Jianfei and Zhu, Jun},
+      author={Zhang, Jintao and Wei, Jia and Zhang, Pengle and Zhu, Jun and Chen, Jianfei},
       booktitle={International Conference on Learning Representations (ICLR)},
       year={2025}
 }
