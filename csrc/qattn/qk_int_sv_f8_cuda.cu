@@ -806,10 +806,10 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn(torch::Tensor query,
       DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
         DISPATCH_RETURN_LSE(return_lse, RETURN_LSE, {
           DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
-            constexpr int CTA_Q = (HEAD_DIM == 256) ? 64 : 128;
-            constexpr int CTA_K = (HEAD_DIM == 256) ? 64 : 64;
-            constexpr int WARP_Q = (HEAD_DIM == 256) ? 16 : 32;
-            constexpr int WARP_K = (HEAD_DIM == 256) ? 64 : 64;
+            constexpr int CTA_Q = 128;
+            constexpr int CTA_K = 64;
+            constexpr int WARP_Q = 32;
+            constexpr int WARP_K = 64;
 
             assert(value.size(0) == batch_size);
             assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
@@ -984,10 +984,10 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(torch::Tensor query,
       DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
         DISPATCH_RETURN_LSE(return_lse, RETURN_LSE, {
           DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
-            constexpr int CTA_Q = (HEAD_DIM == 256) ? 64 : 128;
-            constexpr int CTA_K = (HEAD_DIM == 256) ? 64 : 64;
-            constexpr int WARP_Q = (HEAD_DIM == 256) ? 16 : 32;
-            constexpr int WARP_K = (HEAD_DIM == 256) ? 64 : 64;
+            constexpr int CTA_Q = 128;
+            constexpr int CTA_K = 64;
+            constexpr int WARP_Q = 32;
+            constexpr int WARP_K = 64;
 
             assert(value.size(0) == batch_size);
             assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
@@ -1172,10 +1172,10 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn(torch::Tenso
       DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
         DISPATCH_RETURN_LSE(return_lse, RETURN_LSE, {
           DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
-            constexpr int CTA_Q = (HEAD_DIM == 256) ? 64 : 128;
-            constexpr int CTA_K = (HEAD_DIM == 256) ? 64 : 64;
-            constexpr int WARP_Q = (HEAD_DIM == 256) ? 16 : 32;
-            constexpr int WARP_K = (HEAD_DIM == 256) ? 64 : 64;
+            constexpr int CTA_Q = 128;
+            constexpr int CTA_K = 64;
+            constexpr int WARP_Q = 32;
+            constexpr int WARP_K = 64;
 
             assert(value.size(0) == batch_size);
             assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
@@ -1359,10 +1359,10 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn(torch::Tensor query,
         DISPATCH_RETURN_LSE(return_lse, RETURN_LSE, {  
           DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
               
-            constexpr int CTA_Q = (HEAD_DIM == 256) ? 64 : 128;
-            constexpr int CTA_K = (HEAD_DIM == 256) ? 64 : 64;
-            constexpr int WARP_Q = (HEAD_DIM == 256) ? 16 : 32;
-            constexpr int WARP_K = (HEAD_DIM == 256) ? 64 : 64;
+            constexpr int CTA_Q = 128;
+            constexpr int CTA_K = 64;
+            constexpr int WARP_Q = 32;
+            constexpr int WARP_K = 64;
 
             assert(value.size(0) == batch_size);
             assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
@@ -1545,10 +1545,10 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(torch::Tensor q
         DISPATCH_RETURN_LSE(return_lse, RETURN_LSE, {  
           DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
               
-            constexpr int CTA_Q = (HEAD_DIM == 256) ? 64 : 128;
-            constexpr int CTA_K = (HEAD_DIM == 256) ? 64 : 64;
-            constexpr int WARP_Q = (HEAD_DIM == 256) ? 16 : 32;
-            constexpr int WARP_K = (HEAD_DIM == 256) ? 64 : 64;
+            constexpr int CTA_Q = 128;
+            constexpr int CTA_K = 64;
+            constexpr int WARP_Q = 32;
+            constexpr int WARP_K = 64;
 
             assert(value.size(0) == batch_size);
             assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);

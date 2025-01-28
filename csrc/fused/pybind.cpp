@@ -23,7 +23,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
   m.def("quant_per_block_int8_cuda", py::overload_cast<torch::Tensor, torch::Tensor, torch::Tensor, float, int, int>(&quant_per_block_int8_cuda), "quant_per_block_int8_cuda");
   m.def("quant_per_block_int8_cuda", py::overload_cast<torch::Tensor, torch::Tensor, torch::Tensor, int, int>(&quant_per_block_int8_cuda), "quant_per_block_int8_cuda");
   m.def("quant_per_block_int8_fuse_sub_mean_cuda", py::overload_cast<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, int, int>(&quant_per_block_int8_fuse_sub_mean_cuda), "quant_per_block_int8_fuse_sub_mean_cuda");
-  m.def("quant_per_warp_int8_cuda", py::overload_cast<torch::Tensor, torch::Tensor, torch::Tensor, int>(&quant_per_warp_int8_cuda), "quant_per_warp_int8_cuda");
+  m.def("quant_per_warp_int8_cuda", py::overload_cast<torch::Tensor, torch::Tensor, torch::Tensor, int, int, int>(&quant_per_warp_int8_cuda), "quant_per_warp_int8_cuda");
 
   m.def("sub_mean_cuda", py::overload_cast<torch::Tensor, torch::Tensor, torch::Tensor, int>(&sub_mean_cuda), "sub_mean_cuda");
 

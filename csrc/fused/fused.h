@@ -43,6 +43,8 @@ void quant_per_warp_int8_cuda(
                 torch::Tensor input,
                 torch::Tensor output,
                 torch::Tensor scale,
+                int block_size,
+                int warp_block_size,
                 int tensor_layout);
 
 void sub_mean_cuda(

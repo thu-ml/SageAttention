@@ -23,8 +23,8 @@ def per_block_int8(
     q: torch.Tensor, 
     k: torch.Tensor, 
     km: Optional[torch.Tensor] = None,
-    BLKQ: int =128, 
-    BLKK: int =64, 
+    BLKQ: int = 128, 
+    BLKK: int = 64, 
     sm_scale: Optional[float] = None, 
     tensor_layout: str ="HND"
 ):
@@ -104,14 +104,17 @@ def per_block_int8(
 
 def per_warp_int8(
     q: torch.Tensor, 
-    k: torch.Tensor, 
-    km: Optional[torch.Tensor] = None, 
+    k: torch.Tensor,
+    km: Optional[torch.Tensor] = None,
+    BLKQ: int =128,
+    WARPQ: int =32,
+    BLKK: int =64,
     tensor_layout: str ="HND"
 ):
     """
     Quantize the query tensor `q` with per warp quantization and the key tensor `k` with per block quantization.
-    Warp size of quantizing `q` is 32, with a block size of 128.
-    Block size of quantizing `k` is 64.
+    Warp size of quantizing `q` is 16 or 32, with a block size of 64 or 128.
+    Block size of quantizing `k` is 64 or 128.
 
     Parameters
     ----------
@@ -138,9 +141,9 @@ def per_warp_int8(
     Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
         A tuple containing:
         - The quantized query tensor. Shape: Same as `q` but with `int8` dtype.
-        - The scale tensor of the query tensor. Shape: ``[batch_size, num_qo_heads, (qo_len + BLKQ - 1) // 128 * 4]`` with `float32` dtype.
+        - The scale tensor of the query tensor. Shape: ``[batch_size, num_qo_heads, (qo_len + BLKQ - 1) // BLKQ * (BLKQ // WARPQ)]`` with `float32` dtype.
         - The quantized key tensor. Shape: Same as `k` but with `int8` dtype.
-        - The scale tensor of the key tensor. Shape: ``[batch_size, num_kv_heads, (kv_len + BLKK - 1) // 64]`` with `float32` dtype.
+        - The scale tensor of the key tensor. Shape: ``[batch_size, num_kv_heads, (kv_len + BLKK - 1) // BLKK]`` with `float32` dtype.
     
     Note
     ----
@@ -163,16 +166,16 @@ def per_warp_int8(
     
     _tensor_layout = 0 if tensor_layout == "NHD" else 1
 
-    q_scale = torch.empty((b, h_qo, ((qo_len + 127) // 128) * (128 // 32)), device=q.device, dtype=torch.float32)
-    k_scale = torch.empty((b, h_kv, (kv_len + 63) // 64), device=q.device, dtype=torch.float32)
+    q_scale = torch.empty((b, h_qo, ((qo_len + BLKQ - 1) // BLKQ) * (BLKQ // WARPQ)), device=q.device, dtype=torch.float32)
+    k_scale = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK), device=q.device, dtype=torch.float32)
 
-    _fused.quant_per_warp_int8_cuda(q, q_int8, q_scale, _tensor_layout)
+    _fused.quant_per_warp_int8_cuda(q, q_int8, q_scale, BLKQ, WARPQ, _tensor_layout)
 
     if km is not None:
         km = km.squeeze(1) if _tensor_layout == 0 else km.squeeze(2)
-        _fused.quant_per_block_int8_fuse_sub_mean_cuda(k, km, k_int8, k_scale, 64, _tensor_layout)
+        _fused.quant_per_block_int8_fuse_sub_mean_cuda(k, km, k_int8, k_scale, BLKK, _tensor_layout)
     else:
-        _fused.quant_per_block_int8_cuda(k, k_int8, k_scale, 64, _tensor_layout)
+        _fused.quant_per_block_int8_cuda(k, k_int8, k_scale, BLKK, _tensor_layout)
     
     return q_int8, q_scale, k_int8, k_scale
 

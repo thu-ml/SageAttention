@@ -97,3 +97,16 @@
     err_msg << "Unsupported block_size " << int(block_size);    \
     throw std::invalid_argument(err_msg.str());                 \
   }
+
+#define DISPATCH_WARP_BLOCK_SIZE(warp_block_size, WARP_BLOCK_SIZE, ...)  \
+  if (warp_block_size == 16) {                                           \
+    constexpr int WARP_BLOCK_SIZE = 16;                                  \
+    __VA_ARGS__                                                          \
+  } else if (warp_block_size == 32) {                                    \
+    constexpr int WARP_BLOCK_SIZE = 32;                                  \
+    __VA_ARGS__                                                          \
+  }  else {                                                              \
+    std::ostringstream err_msg;                                          \
+    err_msg << "Unsupported warp_block_size " << int(warp_block_size);   \
+    throw std::invalid_argument(err_msg.str());                          \
+  }

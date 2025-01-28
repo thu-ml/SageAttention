@@ -197,7 +197,6 @@ __global__ void QuantInt8Kernel(T *__restrict__ input, T *__restrict__ mean, int
   }
 }
 
-
 template <uint32_t head_dim, uint32_t BLOCK_SIZE, uint32_t num_pack_per_thread = 1, typename T>
 __global__ void SubMeanKernel(T *__restrict__ input, T *__restrict__ mean, half *__restrict__ output, const uint32_t num_tokens, 
                             const uint32_t stride_bz_input, const uint32_t stride_seq_input, const uint32_t stride_h_input,
@@ -687,6 +686,8 @@ void quant_per_warp_int8_cuda(
                 torch::Tensor input,
                 torch::Tensor output,
                 torch::Tensor scale,
+                int block_size,
+                int warp_block_size,
                 int tensor_layout)
 {
   CHECK_CUDA(input);
@@ -734,33 +735,34 @@ void quant_per_warp_int8_cuda(
 
   auto input_dtype = input.scalar_type();
 
-  constexpr int BLOCK_SIZE = 128;
-  constexpr int WARP_BLOCK_SIZE = 32;
-
   DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(input_dtype, c_type, {
-    DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
+    DISPATCH_BLOCK_SIZE(block_size, BLOCK_SIZE, {
+      DISPATCH_WARP_BLOCK_SIZE(warp_block_size, WARP_BLOCK_SIZE, {
+        DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
 
-      CHECK_SHAPE(output, input.size(0), input.size(1), input.size(2), input.size(3));
-      CHECK_SHAPE(scale, batch_size, num_heads, (num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE * (BLOCK_SIZE / WARP_BLOCK_SIZE));
+          CHECK_SHAPE(output, input.size(0), input.size(1), input.size(2), input.size(3));
+          CHECK_SHAPE(scale, batch_size, num_heads, (num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE * (BLOCK_SIZE / WARP_BLOCK_SIZE));
 
-      dim3 grid((num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE * (BLOCK_SIZE / WARP_BLOCK_SIZE), num_heads, batch_size);
+          dim3 grid((num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE * (BLOCK_SIZE / WARP_BLOCK_SIZE), num_heads, batch_size);
 
-      constexpr int num_pack_per_thread = (WARP_BLOCK_SIZE * (HEAD_DIM / 8) + 1023) / 1024;
+          constexpr int num_pack_per_thread = (WARP_BLOCK_SIZE * (HEAD_DIM / 8) + 1023) / 1024;
 
-      dim3 block(WARP_BLOCK_SIZE * (HEAD_DIM / 8) / num_pack_per_thread);
+          dim3 block(WARP_BLOCK_SIZE * (HEAD_DIM / 8) / num_pack_per_thread);
 
-      QuantInt8Kernel<HEAD_DIM, WARP_BLOCK_SIZE, num_pack_per_thread, false, false, c_type><<<grid, block>>>(
-        reinterpret_cast<c_type*>(input.data_ptr()),
-        nullptr,
-        output.data_ptr<int8_t>(),
-        reinterpret_cast<float*>(scale.data_ptr()),
-        0.0,
-        num_tokens,
-        stride_bz_input, stride_seq_input, stride_h_input,
-        0, 0,
-        stride_bz_output, stride_seq_output, stride_h_output,
-        scale.stride(0), scale.stride(1)
-      );
+          QuantInt8Kernel<HEAD_DIM, WARP_BLOCK_SIZE, num_pack_per_thread, false, false, c_type><<<grid, block>>>(
+            reinterpret_cast<c_type*>(input.data_ptr()),
+            nullptr,
+            output.data_ptr<int8_t>(),
+            reinterpret_cast<float*>(scale.data_ptr()),
+            0.0,
+            num_tokens,
+            stride_bz_input, stride_seq_input, stride_h_input,
+            0, 0,
+            stride_bz_output, stride_seq_output, stride_h_output,
+            scale.stride(0), scale.stride(1)
+          );
+        });
+      });
     });
   });
 }
@@ -919,7 +921,6 @@ void transpose_pad_permute_cuda(
     });
   });
 }
-
 
 void scale_fuse_quant_cuda(
                 torch::Tensor input,

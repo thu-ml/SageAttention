@@ -20,13 +20,13 @@ headdim = args.head_dim
 print(f"CUDA QK Int8 PV FP16")
 print(f"batch: {batch}, head: {head}, headdim: {headdim}, pv_accum_dtype: {args.pv_accum_dtype}")
 
-WARP_Q = 32
+WARP_Q = 16 if (headdim == 128 and args.pv_accum_dtype == "fp16+fp32") else 32
 WARP_K = 64
 
 if args.pv_accum_dtype == 'fp32':
     kernel = qattn.qk_int8_sv_f16_accum_f32_attn # the kernel with fully fp32 accumulator
 elif args.pv_accum_dtype == 'fp16+fp32':
-    kernel = qattn.qk_int8_sv_f16_accum_f16_attn_inst_buf if headdim == 64 else qattn.qk_int8_sv_f16_accum_f16_attn_buf # the kernel with fp32 longterm buffer and fp16 shortterm accumulator
+    kernel = qattn.qk_int8_sv_f16_accum_f16_attn_inst_buf # the kernel with fp32 longterm buffer and fp16 shortterm accumulator
 elif args.pv_accum_dtype == 'fp16':
     kernel = qattn.qk_int8_sv_f16_accum_f16_attn # the kernel with fully fp16 accumulator
 
