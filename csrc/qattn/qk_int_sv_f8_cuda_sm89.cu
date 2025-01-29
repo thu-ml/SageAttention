@@ -629,22 +629,16 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
           }
         }
 
-        ((int32_t*)(smem_O.base + offset_O))[lane_id % 4] = RO_f16[0];
-        ((int32_t*)(smem_O.base + offset_O + 8 * (O_SMEM_STRIDE / PACK_SIZE_O)))[lane_id % 4] = RO_f16[1];
+        ((uint32_t*)(smem_O.base + offset_O))[lane_id % 4] = RO_f16[0];
+        ((uint32_t*)(smem_O.base + offset_O + 8 * (O_SMEM_STRIDE / PACK_SIZE_O)))[lane_id % 4] = RO_f16[1];
 
         offset_O = smem_O.get_permuted_offset(smem_O_row_base + fq * MMA_QK_M, fv * (MMA_SV_N / PACK_SIZE_O) + 1);
-        ((int32_t*)(smem_O.base + offset_O))[lane_id % 4] = RO_f16[2];
-        ((int32_t*)(smem_O.base + offset_O + 8 * (O_SMEM_STRIDE / PACK_SIZE_O)))[lane_id % 4] = RO_f16[3];
+        ((uint32_t*)(smem_O.base + offset_O))[lane_id % 4] = RO_f16[2];
+        ((uint32_t*)(smem_O.base + offset_O + 8 * (O_SMEM_STRIDE / PACK_SIZE_O)))[lane_id % 4] = RO_f16[3];
       }
       else if constexpr (std::is_same<DTypeSVAccum, half>::value)
       { 
-        // ! need to convert to bf16 if necessary
-        // ((int32_t*)(smem_O.base + offset_O))[lane_id % 4] = ((int32_t*)RO[fq][fv])[0];
-        // ((int32_t*)(smem_O.base + offset_O + 8 * (O_SMEM_STRIDE / PACK_SIZE_O)))[lane_id % 4] = ((int32_t*)RO[fq][fv])[1];
-
-        // offset_O = smem_O.get_permuted_offset(smem_O_row_base + fq * MMA_QK_M, fv * (MMA_SV_N / PACK_SIZE_O) + 1);
-        // ((int32_t*)(smem_O.base + offset_O))[lane_id % 4] = ((int32_t*)RO[fq][fv])[2];
-        // ((int32_t*)(smem_O.base + offset_O + 8 * (O_SMEM_STRIDE / PACK_SIZE_O)))[lane_id % 4] = ((int32_t*)RO[fq][fv])[3];
+        // TODO: not implement
       }
     }
   }

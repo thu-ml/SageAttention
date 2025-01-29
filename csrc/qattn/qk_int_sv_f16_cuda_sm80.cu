@@ -608,21 +608,21 @@ __global__ void qk_int_sv_f16_attn_kernel(int8_t *__restrict__ Q, int8_t *__rest
           }
         }
 
-        ((int32_t*)(smem_O.base + offset_O))[lane_id % 4] = RO_f16[0];
-        ((int32_t*)(smem_O.base + offset_O + 8 * (O_SMEM_STRIDE / PACK_SIZE_O)))[lane_id % 4] = RO_f16[1];
+        ((uint32_t*)(smem_O.base + offset_O))[lane_id % 4] = RO_f16[0];
+        ((uint32_t*)(smem_O.base + offset_O + 8 * (O_SMEM_STRIDE / PACK_SIZE_O)))[lane_id % 4] = RO_f16[1];
 
         // ! permuted, make sure you know what you are doing
-        ((int32_t*)(smem_O.base + (offset_O ^ 0x1)))[lane_id % 4] = RO_f16[2];
-        ((int32_t*)(smem_O.base + (offset_O ^ 0x1) + 8 * (O_SMEM_STRIDE / PACK_SIZE_O)))[lane_id % 4] = RO_f16[3];
+        ((uint32_t*)(smem_O.base + (offset_O ^ 0x1)))[lane_id % 4] = RO_f16[2];
+        ((uint32_t*)(smem_O.base + (offset_O ^ 0x1) + 8 * (O_SMEM_STRIDE / PACK_SIZE_O)))[lane_id % 4] = RO_f16[3];
       }
       else if constexpr (std::is_same<DTypeSVAccum, half>::value)
       {
-        ((int32_t*)(smem_O.base + offset_O))[lane_id % 4] = ((int32_t*)RO[fq][fv])[0];
-        ((int32_t*)(smem_O.base + offset_O + 8 * (O_SMEM_STRIDE / PACK_SIZE_O)))[lane_id % 4] = ((int32_t*)RO[fq][fv])[1];
+        ((uint32_t*)(smem_O.base + offset_O))[lane_id % 4] = ((uint32_t*)RO[fq][fv])[0];
+        ((uint32_t*)(smem_O.base + offset_O + 8 * (O_SMEM_STRIDE / PACK_SIZE_O)))[lane_id % 4] = ((uint32_t*)RO[fq][fv])[1];
 
         // ! permuted, make sure you know what you are doing
-        ((int32_t*)(smem_O.base + (offset_O ^ 0x1)))[lane_id % 4] = ((int32_t*)RO[fq][fv])[2];
-        ((int32_t*)(smem_O.base + (offset_O ^ 0x1) + 8 * (O_SMEM_STRIDE / PACK_SIZE_O)))[lane_id % 4] = ((int32_t*)RO[fq][fv])[3]; 
+        ((uint32_t*)(smem_O.base + (offset_O ^ 0x1)))[lane_id % 4] = ((uint32_t*)RO[fq][fv])[2];
+        ((uint32_t*)(smem_O.base + (offset_O ^ 0x1) + 8 * (O_SMEM_STRIDE / PACK_SIZE_O)))[lane_id % 4] = ((uint32_t*)RO[fq][fv])[3]; 
       }
     }
   }
