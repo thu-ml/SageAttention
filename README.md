@@ -20,18 +20,19 @@ This is a beta release of SageAttention2. We welcome any feedback on accuracy, p
 Current Features:
 + INT8 quantization for $QK^\top$ with support for varying granularities
 + FP8 quantization for $PV$
-+ FP32 buffer for $PV$ to improve accuracy in FP8 MMA
++ FP32 buffer for $PV$ to improve accuracy in FP8 MMA and WGMMA
 + Support `torch.compile` with non-cudagraphs mode and distributed inference
 
 For a stable version, please use the branch of [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) branch.
 
 ## Project Updates
-- **News** [2025-01-28]: SageAttention is available on Hopper GPUs (H100, H800, H20)! It matches the speed of FlashAttention3-FP8 but offers much better accuracy!
-- **News** [2024-12-20]: Update the [SageAttention2 Paper](https://arxiv.org/abs/2411.10958).
-- **News** [2024-12-20]: We are excited to announce the release of SageAttention 2.0.1 Beta! In this version, we introduce a new feature: per-thread quantization, which offers finer granularity while maintaining hardware efficiency.
-- **News** [2024-11-21]: SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800, and A6000 other than RTX3090 and RTX4090.
-- **News** [2024-11-12]: Support for `sageattn_varlen` is available now.
-- **News** [2024-11-11]: Support for different sequence lengths between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
+- [2025-01-28]: 🔥⚡SageAttention is available on Hopper GPUs (H100, H800, H20)! It matches the speed of FlashAttention3-FP8 but offers much better accuracy!
+- [2025-01-24]: 🎉SageAttention is accepted by ICLR 2025! 
+- [2024-12-20]: 🔥Update the [SageAttention2 Paper](https://arxiv.org/abs/2411.10958).
+- [2024-12-20]: 🔥We are excited to announce the release of SageAttention 2.0.1 Beta! In this version, we introduce a new feature: per-thread quantization, which offers finer granularity while maintaining hardware efficiency.
+- [2024-11-21]: 🔥SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800, and A6000 other than RTX3090 and RTX4090.
+- [2024-11-12]: Support for `sageattn_varlen` is available now.
+- [2024-11-11]: Support for different sequence lengths between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
 
 
 ## Base environment
@@ -79,6 +80,7 @@ attn_output = sageattn(q, k, v, tensor_layout="HND", is_causal=False)
 + `sageattn_qk_int8_pv_fp16_triton`: INT8 quantization for $QK^\top$ and FP16 for $PV$ using Triton backend.
 + `sageattn_qk_int8_pv_fp16_cuda`: INT8 quantization for $QK^\top$ and FP16 for $PV$ using CUDA backend.
 + `sageattn_qk_int8_pv_fp8_cuda`: INT8 quantization for $QK^\top$ and FP8 for $PV$ using CUDA backend.
++ `sageattn_qk_int8_pv_fp8_cuda_sm90`: INT8 quantization for $QK^\top$ and FP8 for $PV$ using CUDA backend, specifically optimized for Hopper GPUs.
 + `sageattn_varlen`: INT8 quantization for $QK^\top$ and FP16 for $PV$ using Triton backend. Support for varying sequence lengths within the same batch.
 
 For optimal speed and accuracy performance on custom devices and models, we strongly recommend referring to the [this file](./sageattention/core.py) for detailed guidance.
@@ -131,7 +133,6 @@ python cogvideox-2b.py --compile --attention_type sage
 
 > **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing.
 
-
 ### End-to-end Performance
 #### **End-to-End Accuracy:**
 
@@ -146,7 +147,6 @@ python cogvideox-2b.py --compile --attention_type sage
 #### **End-to-End Speedup:**
 
 ![Local Image](./assets/26.png)
-
 
 ## Citation
 **If you use this code or find our work valuable, please cite:**
