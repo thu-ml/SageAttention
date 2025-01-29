@@ -486,7 +486,7 @@ def sageattn_qk_int8_pv_fp16_cuda(
     """
 
     dtype = q.dtype
-    assert SM80_ENABLED, "sm80 kernel is not available."
+    assert SM80_ENABLED, "SM80 kernel is not available. make sure you GPUs with compute capability 8.0 or higher."
     assert q.is_cuda, "Input tensors must be on cuda."
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
     assert qk_quant_gran in ["per_warp", "per_thread"], "qk_quant_gran must be either 'per_warp' or 'per_thread'."
@@ -661,7 +661,7 @@ def sageattn_qk_int8_pv_fp8_cuda(
     """
 
     dtype = q.dtype
-    assert SM89_ENABLED, "sm89 kernel is not available."
+    assert SM89_ENABLED, "SM89 kernel is not available. Make sure you GPUs with compute capability 8.9."
     assert q.is_cuda, "Input tensors must be on cuda."
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
     assert qk_quant_gran in ["per_warp", "per_thread"], "qk_quant_gran must be either 'per_warp' or 'per_thread'."
@@ -824,7 +824,7 @@ def sageattn_qk_int8_pv_fp8_cuda_sm90(
     """
 
     dtype = q.dtype
-    assert SM90_ENABLED, "sm90 kernel is not available."
+    assert SM90_ENABLED, "SM90 kernel is not available. Make sure you GPUs with compute capability 9.0."
     assert q.is_cuda, "Input tensors must be on cuda."
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
     assert qk_quant_gran in ["per_warp", "per_thread"], "qk_quant_gran must be either 'per_warp' or 'per_thread'."

@@ -145,7 +145,7 @@ for capability in compute_capabilities:
 
 ext_modules = []
 
-if HAS_SM80 or HAS_SM86 or HAS_SM89:
+if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90:
     qattn_extension = CUDAExtension(
         name="sageattention._qattn_sm80",
         sources=[
