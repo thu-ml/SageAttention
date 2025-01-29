@@ -14,17 +14,16 @@ Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 
 ![Local Image](./assets/2.png)
 
-## SageAttention2
+## Current Features
 <!-- This is a beta release of SageAttention2. We welcome any feedback on accuracy, performance issues, bugs, feature requests, or suggestions. Please feel free to open an issue or launch a pull request! -->
 
-**Current Features:**
 + Optmized kernels for **Ampere, Ada and Hopper GPUs.**
 + INT8 quantization and smoothing for $QK^\top$ with support for varying granularities.
 + FP8 quantization for $PV$.
 + Two-level accumulation strategy for $PV$ to improve accuracy in FP8 MMA and WGMMA.
 + Support `torch.compile` with non-cudagraphs mode and distributed inference.
 
-**🚀 SageAttention achieves superising speedup on most GPUs without compromising accuracy across all models in a plug-and-play way.**
+**🚀 SageAttention achieves surprising speedup on most GPUs without compromising accuracy across all models in a plug-and-play way.**
 
 
 ## Project Updates
@@ -48,16 +47,14 @@ Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 ![Local Image](./assets/4090_hd128.png)  
 
 - [2024-12-20]: 🔥Release SageAttention 2.0.1 Beta! In this version, we introduce a new feature: per-thread quantization, which offers finer granularity while maintaining hardware efficiency.
-- [2024-11-21]: 🔥SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800, and A6000 other than RTX3090 and RTX4090.
+- [2024-11-21]: 🔥SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800, and A6000, RTX3090 and RTX4090.
 - [2024-11-12]: Support for `sageattn_varlen` is available now.
 - [2024-11-11]: Support for different sequence lengths between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
 
 
 ## Installation
 ### Base environment
-+ `python>=3.9`   
-+ `torch>=2.3.0`  
-+ `triton>=3.0.0` 
++ `python>=3.9`   , `torch>=2.3.0`  , `triton>=3.0.0` 
 - `CUDA`:
   + `>=12.4` for fp8 support on Ada
   + `>=12.3` for fp8 support on Hopper
