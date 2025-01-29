@@ -7,12 +7,15 @@ parser = argparse.ArgumentParser(description='Benchmark QK Int8 PV FP8 SM90')
 parser.add_argument('--batch_size', type=int, default=4, help='Batch size')
 parser.add_argument('--num_heads', type=int, default=32, help='Number of heads')
 parser.add_argument('--head_dim', type=int, default=128, help='Head dimension')
+parser.add_argument('--pv_accum_dtype', type=str, default='fp32+fp32', choices=['fp32', 'fp32+fp32'])
 parser.add_argument('--quant_gran', type=str, default='per_warp', choices=['per_warp', 'per_thread'], help='Quantization granularity')
 args = parser.parse_args()
 
 head = args.num_heads
 batch = args.batch_size
 headdim = args.head_dim
+
+assert args.pv_accum_dtype == 'fp32+fp32', "pure fp32 accumulator is not supported for now"
 
 print(f"CUDA QK Int8 PV FP8 SM90 Benchmark")
 print(f"batch: {batch}, head: {head}, headdim: {headdim}")

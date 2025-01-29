@@ -24,7 +24,7 @@ Current Features:
 + Two-level accumulation strategy for $PV$ to improve accuracy in FP8 MMA and WGMMA
 + Support `torch.compile` with non-cudagraphs mode and distributed inference
 
-**Thanks to the accuracy-preserving techniques and efficient kernel implementation, SageAttention achieves exceptional speed without compromising precision🚀.**
+**Thanks to the accuracy-preserving techniques and efficient kernel implementation, SageAttention achieves exceptional speed without compromising accuracy🚀.**
 
 ### **Results for [CogVideoX1.5-5B](https://huggingface.co/THUDM/CogVideoX1.5-5B) on NVIDIA H20 GPU**
 
@@ -37,7 +37,7 @@ Current Features:
 For a stable version, please use the branch of [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) branch.
 
 ## Project Updates
-- [2025-01-28]: 🔥⚡SageAttention is available on Hopper GPUs (H100, H800, H20)! It matches the speed of FlashAttention3-FP8 but offers much better accuracy!
+- [2025-01-28]: 🔥⚡SageAttention is now available on Hopper GPUs (H100, H800, H20)! It matches the speed of FlashAttention3-FP8 but offers much better accuracy!
 - [2025-01-24]: 🎉SageAttention is accepted by ICLR 2025! 
 - [2024-12-20]: 🔥Update the [SageAttention2 Paper](https://arxiv.org/abs/2411.10958).
 - [2024-12-20]: 🔥We are excited to announce the release of SageAttention 2.0.1 Beta! In this version, we introduce a new feature: per-thread quantization, which offers finer granularity while maintaining hardware efficiency.
@@ -64,7 +64,7 @@ For the stable version or Triton-only version, refer to [SageAttention-1](https:
 pip install sageattention==1.0.6
 ```
 
-To use SageAttention 2.0.1, please **compile from source**:
+To use SageAttention 2.1.0, please **compile from source**:
 ```
 git clone https://github.com/thu-ml/SageAttention.git
 cd sageattention 
@@ -73,7 +73,7 @@ python setup.py install  # or pip install -e .
 
 To benchmark the speed against FlashAttention3, please compile FlashAttention3 from source:
 ```
-git clone https://github.com/Dao-AILab/flash-attention.git
+git clone https://github.com/Dao-AILab/flash-attention.git --recursive
 git checkout b7d29fb3b79f0b78b1c369a52aaa6628dabfb0d7 # 2.7.2 release
 cd hopper
 python setup.py install
