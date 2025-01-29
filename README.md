@@ -18,10 +18,21 @@ Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 This is a beta release of SageAttention2. We welcome any feedback on accuracy, performance issues, bugs, feature requests, or suggestions. Please feel free to open an issue or launch a pull request!
 
 Current Features:
++ Optmized kernels for Ampere, Ada and Hopper GPUs
 + INT8 quantization for $QK^\top$ with support for varying granularities
 + FP8 quantization for $PV$
-+ FP32 buffer for $PV$ to improve accuracy in FP8 MMA and WGMMA
++ Two-level accumulation strategy for $PV$ to improve accuracy in FP8 MMA and WGMMA
 + Support `torch.compile` with non-cudagraphs mode and distributed inference
+
+**Thanks to the accuracy-preserving techniques and efficient kernel implementation, SageAttention achieves exceptional speed without compromising precision🚀.**
+
+### **Results for [CogVideoX1.5-5B](https://huggingface.co/THUDM/CogVideoX1.5-5B) on NVIDIA H20 GPU**
+
+| **FlashAttention3** | **SageAttention** | **FlashAttention3-FP8** |
+|----------------------|----------------------|----------------------|
+| ![FlashAttention3](assets/cogvideox1.5_fa3_example.gif) | ![SageAttention](assets/cogvideox1.5_sage_example.gif) | ![FlashAttention3-FP8](assets/cogvideox1.5_fa3fp8_example.gif) |
+| **17:32** | **12:07** | **12:14** |
+
 
 For a stable version, please use the branch of [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) branch.
 
@@ -35,7 +46,8 @@ For a stable version, please use the branch of [SageAttention-1](https://github.
 - [2024-11-11]: Support for different sequence lengths between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
 
 
-## Base environment
+## Installation
+### Base environment
 + `python>=3.9`   
 + `torch>=2.3.0`  
 + `triton>=3.0.0` 
@@ -45,7 +57,7 @@ For a stable version, please use the branch of [SageAttention-1](https://github.
   + `12.0` for Ampere
 + `flash-attn` for benchmarking
 
-## Installation
+### Install Package
 
 For the stable version or Triton-only version, refer to [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) and install using pip:
 ```
@@ -59,7 +71,7 @@ cd sageattention
 python setup.py install  # or pip install -e .
 ```
 
-To benchmark the speed against FlashAttention3, please compile from source:
+To benchmark the speed against FlashAttention3, please compile FlashAttention3 from source:
 ```
 git clone https://github.com/Dao-AILab/flash-attention.git
 git checkout b7d29fb3b79f0b78b1c369a52aaa6628dabfb0d7 # 2.7.2 release
@@ -89,17 +101,18 @@ For optimal speed and accuracy performance on custom devices and models, we stro
 Support for different sequence lengths between `q` and `k,v` and `group-query attention` is available.
 
 
-## **Plug-and-play Example**
+### Plug-and-play Example
 
 We can replace `scaled_dot_product_attention` easily. 
 We will take [CogvideoX](https://huggingface.co/THUDM/CogVideoX-2b) as an example:
 
 Add the following codes and run
-```python
-from sageattention import sageattn
+```diff
 import torch.nn.functional as F
 
-F.scaled_dot_product_attention = sageattn
++ from sageattention import sageattn
++ F.scaled_dot_product_attention = sageattn
+
 ```
 
 Specifically,
@@ -109,11 +122,13 @@ cd example
 python cogvideox-2b.py --compile --attention_type sage
 ```
 
-**You can get a lossless video in** `./example` **faster than by using** `python cogvideox-2b.py --compile`
+**You can get a lossless video in** `./example` **faster than by using** `python cogvideox-2b.py --compile`. More examples and guidance can be found under the `example/` directory.
 
 > **Note:** Not all models works with `F.scaled_dot_product_attention = sageattn`. Technically, you should replace the original Attention by modifying the `Attention Class` of the target model. For image and video models, we suggest only replacing the attention in DiT.
 
-
+### Kernel Benchmarking
+We provide a benchmarking script to compare the speed of different kernels including SageAttention, FlashAttention2 and FlashAttention3. Please refer to the `benchmark/` directory for more details.
+ 
 ## Performance
 ### Speed of Kernels
 
