@@ -1,7 +1,7 @@
 # SageAttention
-We are continuously updating more features. You could **Star** and **Watch** our repository to stay updated.
+<!-- We are continuously updating more features. You could **Star** and **Watch** our repository to stay updated.
 
----
+--- -->
 This repository provides the official implementation of SageAttention and SageAttention2.
 
 **SageAttention: Accurate 8-Bit Attention for Plug-and-play Inference Acceleration**  
@@ -14,33 +14,39 @@ Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 
 ![Local Image](./assets/2.png)
 
-## Beta Version of SageAttention2
-This is a beta release of SageAttention2. We welcome any feedback on accuracy, performance issues, bugs, feature requests, or suggestions. Please feel free to open an issue or launch a pull request!
+## SageAttention2
+<!-- This is a beta release of SageAttention2. We welcome any feedback on accuracy, performance issues, bugs, feature requests, or suggestions. Please feel free to open an issue or launch a pull request! -->
 
-Current Features:
-+ Optmized kernels for Ampere, Ada and Hopper GPUs
-+ INT8 quantization for $QK^\top$ with support for varying granularities
-+ FP8 quantization for $PV$
-+ Two-level accumulation strategy for $PV$ to improve accuracy in FP8 MMA and WGMMA
-+ Support `torch.compile` with non-cudagraphs mode and distributed inference
+**Current Features:**
++ Optmized kernels for **Ampere, Ada and Hopper GPUs.**
++ INT8 quantization and smoothing for $QK^\top$ with support for varying granularities.
++ FP8 quantization for $PV$.
++ Two-level accumulation strategy for $PV$ to improve accuracy in FP8 MMA and WGMMA.
++ Support `torch.compile` with non-cudagraphs mode and distributed inference.
 
-**Thanks to the accuracy-preserving techniques and efficient kernel implementation, SageAttention achieves exceptional speed without compromising accuracy🚀.**
+**🚀 SageAttention achieves superising speedup on most GPUs without compromising accuracy across all models in a plug-and-play way.**
 
-### **Results for [CogVideoX1.5-5B](https://huggingface.co/THUDM/CogVideoX1.5-5B) on NVIDIA H20 GPU**
+
+## Project Updates
+
+- [2025-01-28]: 🔥⚡SageAttention is now available on Hopper GPUs (H100, H800, H20)! It matches the speed of FlashAttention3-FP8 but offers **much better accuracy!**
 
 | **FlashAttention2** | **FlashAttention3** | **FlashAttention3-FP8** | **SageAttention** |
 |----------------------|----------------------|----------------------|----------------------|
 | ![FlashAttention2](assets/cogvideox1.5_fa2_example.gif) | ![FlashAttention3](assets/cogvideox1.5_fa3_example.gif)  | ![FlashAttention3-FP8](assets/cogvideox1.5_fa3fp8_example.gif) | ![SageAttention](assets/cogvideox1.5_sage_example.gif) |
-| **25:34** | **17:32** | **12:14** | **12:07** |
+| **25'34''** | **17'32''** | **12'14''** | **12'07''** |
+*Results for [CogVideoX1.5-5B](https://huggingface.co/THUDM/CogVideoX1.5-5B) on NVIDIA H20 GPU*
 
+![Local Image](./assets/H100_hd128.png)
 
-For a stable version, please use the branch of [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) branch.
+![Local Image](./assets/H20_hd128.png)
 
-## Project Updates
-- [2025-01-28]: 🔥⚡SageAttention is now available on Hopper GPUs (H100, H800, H20)! It matches the speed of FlashAttention3-FP8 but offers much better accuracy!
 - [2025-01-24]: 🎉SageAttention is accepted by ICLR 2025! 
-- [2024-12-20]: 🔥Update the [SageAttention2 Paper](https://arxiv.org/abs/2411.10958).
-- [2024-12-20]: 🔥We are excited to announce the release of SageAttention 2.0.1 Beta! In this version, we introduce a new feature: per-thread quantization, which offers finer granularity while maintaining hardware efficiency.
+- [2024-12-20]: 🔥Update the [SageAttention2 Paper](https://arxiv.org/abs/2411.10958).  
+
+![Local Image](./assets/4090_hd128.png)  
+
+- [2024-12-20]: 🔥Release SageAttention 2.0.1 Beta! In this version, we introduce a new feature: per-thread quantization, which offers finer granularity while maintaining hardware efficiency.
 - [2024-11-21]: 🔥SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800, and A6000 other than RTX3090 and RTX4090.
 - [2024-11-12]: Support for `sageattn_varlen` is available now.
 - [2024-11-11]: Support for different sequence lengths between `q` and `k,v`,  `(batch_size, head_num, seq_len, head_dim)` or `(batch_size, seq_len, head_num, head_dim)` input shapes, and `group-query attention` is available now.
@@ -52,14 +58,14 @@ For a stable version, please use the branch of [SageAttention-1](https://github.
 + `torch>=2.3.0`  
 + `triton>=3.0.0` 
 - `CUDA`:
-  + `12.4` for fp8 support on Ada
-  + `12.3` for fp8 support on Hopper
-  + `12.0` for Ampere
+  + `>=12.4` for fp8 support on Ada
+  + `>=12.3` for fp8 support on Hopper
+  + `>=12.0` for Ampere
 + `flash-attn` for benchmarking
 
 ### Install Package
 
-For the stable version or Triton-only version, refer to [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) and install using pip:
+For the stable Triton-only version, refer to [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) and install using pip:
 ```
 pip install sageattention==1.0.6
 ```
@@ -138,13 +144,13 @@ We provide a benchmarking script to compare the speed of different kernels inclu
 
 ![Local Image](./assets/L20_hd128.png)
 
-![Local Image](./assets/A100_hd128.png)
-
-![Local Image](./assets/3090_hd128.png)
+![Local Image](./assets/H100_hd128.png)
 
 ![Local Image](./assets/H20_hd128.png)
 
-![Local Image](./assets/H100_hd128.png)
+![Local Image](./assets/A100_hd128.png)
+
+![Local Image](./assets/3090_hd128.png)
 
 > **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing.
 
