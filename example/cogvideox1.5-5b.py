@@ -44,13 +44,14 @@ pipe.vae.enable_slicing()
 
 prompt = "A serene night scene in a forested area. The first frame shows a tranquil lake reflecting the star-filled sky above. The second frame reveals a beautiful sunset, casting a warm glow over the landscape. The third frame showcases the night sky, filled with stars and a vibrant Milky Way galaxy. The video is a time-lapse, capturing the transition from day to night, with the lake and forest serving as a constant backdrop. The style of the video is naturalistic, emphasizing the beauty of the night sky and the peacefulness of the forest."
 
-frames = pipe(
-    prompt, 
-    num_videos_per_prompt=1,
-    num_frames=81,
-    guidance_scale=6.0,
-    num_inference_steps=50,
-    generator=torch.Generator(device="cuda").manual_seed(42),
-).frames[0]
+with torch.no_grad():
+    frames = pipe(
+        prompt, 
+        num_videos_per_prompt=1,
+        num_frames=81,
+        guidance_scale=6.0,
+        num_inference_steps=50,
+        generator=torch.Generator(device="cuda").manual_seed(42),
+    ).frames[0]
 
 export_to_video(frames, f"cogvideox-1.5-5b_{args.attention_type}.mp4", fps=8)

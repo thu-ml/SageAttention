@@ -33,13 +33,14 @@ if args.compile:
 pipe.vae.enable_slicing()
 pipe.vae.enable_tiling()
 
-video = pipe(
-    prompt=prompt,
-    num_videos_per_prompt=1,
-    num_inference_steps=50,
-    num_frames=49,
-    guidance_scale=6,
-    generator=torch.Generator(device="cuda").manual_seed(42),
-).frames[0]
+with torch.no_grad():
+    video = pipe(
+        prompt=prompt,
+        num_videos_per_prompt=1,
+        num_inference_steps=50,
+        num_frames=49,
+        guidance_scale=6,
+        generator=torch.Generator(device="cuda").manual_seed(42),
+    ).frames[0]
 
 export_to_video(video, f"cogvideox-2b_{args.attention_type}.mp4", fps=8)

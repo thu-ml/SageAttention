@@ -1,5 +1,5 @@
 
-## **Plug-and-play Example**
+## Plug-and-play Example
 
 **We can replace `scaled_dot_product_attention` easily.**  
 We will take [CogvideoX](https://huggingface.co/THUDM/CogVideoX-2b) as an example:
@@ -23,7 +23,12 @@ python cogvideox-2b.py --compile --attention_type sage
 
 > **Note:** If you set `--compile`, the first run will be slower than the following runs. Please run it twice to get the accurate speed.
 
----
+## Modify Attention From Source Code
+To have finer control over where to use SageAttention, you can modify a small subset of the source code. For example, in the `mochi.py` file, you can replace the `MochiAttnProcessor2_0` from diffusers with your own attention class.
+
+![Local Image](../assets/mochi_example.png)
+
+![Local Image](../assets/hunyuanvideo_example.png)
 
 ## Parallel SageAttention Inference
 

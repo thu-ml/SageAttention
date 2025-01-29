@@ -124,7 +124,7 @@ python cogvideox-2b.py --compile --attention_type sage
 
 **You can get a lossless video in** `./example` **faster than by using** `python cogvideox-2b.py --compile`. More examples and guidance can be found under the `example/` directory.
 
-> **Note:** Not all models works with `F.scaled_dot_product_attention = sageattn`. Technically, you should replace the original Attention by modifying the `Attention Class` of the target model. For image and video models, we suggest only replacing the attention in DiT.
+> **Note:** Not all models works with `F.scaled_dot_product_attention = sageattn`. Technically, you should replace the original Attention by modifying the `Attention Class` of the target model. For image and video models, we suggest only replacing the attention in DiT (see `example/mochi.py` for detail).
 
 ### Kernel Benchmarking
 We provide a benchmarking script to compare the speed of different kernels including SageAttention, FlashAttention2 and FlashAttention3. Please refer to the `benchmark/` directory for more details.
