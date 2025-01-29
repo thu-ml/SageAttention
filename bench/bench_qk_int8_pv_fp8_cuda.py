@@ -1,11 +1,11 @@
 import torch
 from flash_attn.utils.benchmark import benchmark_forward
 
-import sageattention._qattn as qattn
+import sageattention._qattn_sm89 as qattn
 
 import argparse
 
-parser = argparse.ArgumentParser(description='Benchmark QK Int8 PV FP8 CUDA')
+parser = argparse.ArgumentParser(description='Benchmark QK Int8 PV FP8')
 parser.add_argument('--batch_size', type=int, default=4, help='Batch size')
 parser.add_argument('--num_heads', type=int, default=32, help='Number of heads')
 parser.add_argument('--head_dim', type=int, default=128, help='Head dimension')
@@ -17,7 +17,7 @@ head = args.num_heads
 batch = args.batch_size
 headdim = args.head_dim
 
-print(f"CUDA QK Int8 PV FP8")
+print(f"CUDA QK Int8 PV FP8 Benchmark")
 print(f"batch: {batch}, head: {head}, headdim: {headdim}, pv_accum_dtype: {args.pv_accum_dtype}")
 
 WARP_Q = 32

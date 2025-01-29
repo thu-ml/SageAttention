@@ -24,8 +24,13 @@ from setuptools import setup, find_packages
 import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
 
+HAS_SM80 = False
+HAS_SM86 = False
+HAS_SM89 = False
+HAS_SM90 = False
+
 # Supported NVIDIA GPU architectures.
-SUPPORTED_ARCHS = {"8.0", "8.6", "8.7", "8.9", "9.0"}
+SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0"}
 
 # Compiler flags.
 CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
@@ -114,37 +119,74 @@ if not compute_capabilities:
 # Validate the NVCC CUDA version.
 if nvcc_cuda_version < Version("12.0"):
     raise RuntimeError("CUDA 12.0 or higher is required to build the package.")
-if nvcc_cuda_version < Version("12.4"):
-    if any(cc.startswith("8.9") for cc in compute_capabilities):
-        raise RuntimeError(
-            "CUDA 12.4 or higher is required for compute capability 8.9.")
+if nvcc_cuda_version < Version("12.4") and any(cc.startswith("8.9") for cc in compute_capabilities):
+    raise RuntimeError(
+        "CUDA 12.4 or higher is required for compute capability 8.9.")
+if nvcc_cuda_version < Version("12.3") and any(cc.startswith("9.0") for cc in compute_capabilities):
     if any(cc.startswith("9.0") for cc in compute_capabilities):
         raise RuntimeError(
-            "CUDA 12.4 or higher is required for compute capability 9.0.")
+            "CUDA 12.3 or higher is required for compute capability 9.0.")
 
 # Add target compute capabilities to NVCC flags.
 for capability in compute_capabilities:
     num = capability[0] + capability[2]
+    if num == "80":
+        HAS_SM80 = True
+    elif num == "86":
+        HAS_SM86 = True
+    elif num == "89":
+        HAS_SM89 = True
+    elif num == "90":
+        HAS_SM90 = True
+        num = num + "a" # convert sm90 to sm9a
     NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
     if capability.endswith("+PTX"):
         NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=compute_{num}"]
 
 ext_modules = []
 
-# Attention kernels.
-qattn_extension = CUDAExtension(
-    name="sageattention._qattn",
-    sources=[
-        "csrc/qattn/pybind.cpp",
-        "csrc/qattn/qk_int_sv_f16_cuda.cu",
-        "csrc/qattn/qk_int_sv_f8_cuda.cu",
-    ],
-    extra_compile_args={
-        "cxx": CXX_FLAGS,
-        "nvcc": NVCC_FLAGS,
-    },
-)
-ext_modules.append(qattn_extension)
+if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90:
+    qattn_extension = CUDAExtension(
+        name="sageattention._qattn_sm80",
+        sources=[
+            "csrc/qattn/pybind_sm80.cpp",
+            "csrc/qattn/qk_int_sv_f16_cuda_sm80.cu",
+        ],
+        extra_compile_args={
+            "cxx": CXX_FLAGS,
+            "nvcc": NVCC_FLAGS,
+        },
+    )
+    ext_modules.append(qattn_extension)
+
+if HAS_SM89:
+    qattn_extension = CUDAExtension(
+        name="sageattention._qattn_sm89",
+        sources=[
+            "csrc/qattn/pybind_sm89.cpp",
+            "csrc/qattn/qk_int_sv_f8_cuda_sm89.cu",
+        ],
+        extra_compile_args={
+            "cxx": CXX_FLAGS,
+            "nvcc": NVCC_FLAGS,
+        },
+    )
+    ext_modules.append(qattn_extension)
+
+if HAS_SM90:
+    qattn_extension = CUDAExtension(
+        name="sageattention._qattn_sm90",
+        sources=[
+            "csrc/qattn/pybind_sm90.cpp",
+            "csrc/qattn/qk_int_sv_f8_cuda_sm90.cu",
+        ],
+        extra_compile_args={
+            "cxx": CXX_FLAGS,
+            "nvcc": NVCC_FLAGS,
+        },
+        extra_link_args=['-lcuda'],
+    )
+    ext_modules.append(qattn_extension)
 
 # Fused kernels.
 fused_extension = CUDAExtension(
@@ -159,7 +201,7 @@ ext_modules.append(fused_extension)
 
 setup(
     name='sageattention', 
-    version='2.0.1',  
+    version='2.1.0',  
     author='SageAttention team',
     license='Apache 2.0 License',  
     description='Accurate and efficient plug-and-play low-bit attention.',  
