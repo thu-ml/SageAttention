@@ -55,5 +55,9 @@ We provide the benchmarking results on RTX4090, L20, A100, A800, A6000, RTX3090,
 ![Local Image](../assets/H100_hd128.png)
  
 ![Local Image](../assets/H100_hd64.png)
+
+![Local Image](../assets/H800_hd128.png)
+ 
+![Local Image](../assets/H800_hd64.png)
  
 > **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing.
