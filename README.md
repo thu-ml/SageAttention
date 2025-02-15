@@ -27,7 +27,7 @@ Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 
 
 ## Project Updates
-
+- [2025-02-15]: 🔥 The compilation code is updated to support RTX5090! On RTX5090, SageAttention reaches 560T, 2.7x faster than FlashAttention2!
 - [2025-01-28]: 🔥⚡SageAttention is now available on Hopper GPUs (H100, H800, H20)! It matches the speed of FlashAttention3-FP8 but offers **much better accuracy!**
 
 | **FlashAttention2** | **FlashAttention3** | **FlashAttention3-FP8** | **SageAttention** |
@@ -56,6 +56,7 @@ Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 ### Base environment
 + `python>=3.9`   , `torch>=2.3.0`  , `triton>=3.0.0` 
 - `CUDA`:
+  + `>=12.8` for Blackwell
   + `>=12.4` for fp8 support on Ada
   + `>=12.3` for fp8 support on Hopper
   + `>=12.0` for Ampere
@@ -68,7 +69,7 @@ For the stable Triton-only version, refer to [SageAttention-1](https://github.co
 pip install sageattention==1.0.6
 ```
 
-To use SageAttention 2.1.0, please **compile from source**:
+To use SageAttention 2.1.1, please **compile from source**:
 ```
 git clone https://github.com/thu-ml/SageAttention.git
 cd sageattention 

@@ -28,9 +28,10 @@ HAS_SM80 = False
 HAS_SM86 = False
 HAS_SM89 = False
 HAS_SM90 = False
+HAS_SM120 = False
 
 # Supported NVIDIA GPU architectures.
-SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0"}
+SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "12.0"}
 
 # Compiler flags.
 CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
@@ -65,56 +66,21 @@ def get_nvcc_cuda_version(cuda_dir: str) -> Version:
     nvcc_cuda_version = parse(output[release_idx].split(",")[0])
     return nvcc_cuda_version
 
-def get_torch_arch_list() -> Set[str]:
-    # TORCH_CUDA_ARCH_LIST can have one or more architectures,
-    # e.g. "8.0" or "7.5,8.0,8.6+PTX". Here, the "8.6+PTX" option asks the
-    # compiler to additionally include PTX code that can be runtime-compiled
-    # and executed on the 8.6 or newer architectures. While the PTX code will
-    # not give the best performance on the newer architectures, it provides
-    # forward compatibility.
-    env_arch_list = os.environ.get("TORCH_CUDA_ARCH_LIST", None)
-    if env_arch_list is None:
-        return set()
-
-    # List are separated by ; or space.
-    torch_arch_list = set(env_arch_list.replace(" ", ";").split(";"))
-    if not torch_arch_list:
-        return set()
-
-    # Filter out the invalid architectures and print a warning.
-    valid_archs = SUPPORTED_ARCHS.union({s + "+PTX" for s in SUPPORTED_ARCHS})
-    arch_list = torch_arch_list.intersection(valid_archs)
-    # If none of the specified architectures are valid, raise an error.
-    if not arch_list:
-        raise RuntimeError(
-            "None of the CUDA architectures in `TORCH_CUDA_ARCH_LIST` env "
-            f"variable ({env_arch_list}) is supported. "
-            f"Supported CUDA architectures are: {valid_archs}.")
-    invalid_arch_list = torch_arch_list - valid_archs
-    if invalid_arch_list:
-        warnings.warn(
-            f"Unsupported CUDA architectures ({invalid_arch_list}) are "
-            "excluded from the `TORCH_CUDA_ARCH_LIST` env variable "
-            f"({env_arch_list}). Supported CUDA architectures are: "
-            f"{valid_archs}.")
-    return arch_list
-
-# First, check the TORCH_CUDA_ARCH_LIST environment variable.
-compute_capabilities = get_torch_arch_list()
-if not compute_capabilities:
-    # If TORCH_CUDA_ARCH_LIST is not defined or empty, target all available
-    # GPUs on the current machine.
-    device_count = torch.cuda.device_count()
-    for i in range(device_count):
-        major, minor = torch.cuda.get_device_capability(i)
-        if major < 8:
-            raise RuntimeError(
-                "GPUs with compute capability below 8.0 are not supported.")
-        compute_capabilities.add(f"{major}.{minor}")
+# Iterate over all GPUs on the current machine. Also you can modify this part to specify the architecture if you want to build for specific GPU architectures.
+compute_capabilities = set()
+device_count = torch.cuda.device_count()
+for i in range(device_count):
+    major, minor = torch.cuda.get_device_capability(i)
+    if major < 8:
+        warnings.warn(f"skipping GPU {i} with compute capability {major}.{minor}")
+        continue
+    compute_capabilities.add(f"{major}.{minor}")
 
 nvcc_cuda_version = get_nvcc_cuda_version(CUDA_HOME)
 if not compute_capabilities:
     raise RuntimeError("No GPUs found. Please specify the target GPU architectures or build on a machine with GPUs.")
+else:
+    print(f"Detect GPUs with compute capabilities: {compute_capabilities}")
 
 # Validate the NVCC CUDA version.
 if nvcc_cuda_version < Version("12.0"):
@@ -123,29 +89,36 @@ if nvcc_cuda_version < Version("12.4") and any(cc.startswith("8.9") for cc in co
     raise RuntimeError(
         "CUDA 12.4 or higher is required for compute capability 8.9.")
 if nvcc_cuda_version < Version("12.3") and any(cc.startswith("9.0") for cc in compute_capabilities):
-    if any(cc.startswith("9.0") for cc in compute_capabilities):
-        raise RuntimeError(
-            "CUDA 12.3 or higher is required for compute capability 9.0.")
+    raise RuntimeError(
+        "CUDA 12.3 or higher is required for compute capability 9.0.")
+if nvcc_cuda_version < Version("12.8") and any(cc.startswith("12.0") for cc in compute_capabilities):
+    raise RuntimeError(
+        "CUDA 12.8 or higher is required for compute capability 12.0.")
 
 # Add target compute capabilities to NVCC flags.
 for capability in compute_capabilities:
-    num = capability[0] + capability[2]
-    if num == "80":
+    if capability.startswith("8.0"):
         HAS_SM80 = True
-    elif num == "86":
+        num = "80"
+    elif capability.startswith("8.6"):
         HAS_SM86 = True
-    elif num == "89":
+        num = "86"
+    elif capability.startswith("8.9"):
         HAS_SM89 = True
-    elif num == "90":
+        num = "89"
+    elif capability.startswith("9.0"):
         HAS_SM90 = True
-        num = num + "a" # convert sm90 to sm9a
+        num = "90a" # need to use sm90a instead of sm90 to use wgmma ptx instruction.
+    elif capability.startswith("12.0"):
+        HAS_SM120 = True
+        num = "120" # need to use sm120a to use mxfp8/mxfp4/nvfp4 instructions.
     NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
     if capability.endswith("+PTX"):
         NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=compute_{num}"]
 
 ext_modules = []
 
-if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90:
+if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM120:
     qattn_extension = CUDAExtension(
         name="sageattention._qattn_sm80",
         sources=[
@@ -159,7 +132,7 @@ if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90:
     )
     ext_modules.append(qattn_extension)
 
-if HAS_SM89:
+if HAS_SM89 or HAS_SM120:
     qattn_extension = CUDAExtension(
         name="sageattention._qattn_sm89",
         sources=[
@@ -201,7 +174,7 @@ ext_modules.append(fused_extension)
 
 setup(
     name='sageattention', 
-    version='2.1.0',  
+    version='2.1.1',  
     author='SageAttention team',
     license='Apache 2.0 License',  
     description='Accurate and efficient plug-and-play low-bit attention.',  
