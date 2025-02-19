@@ -33,6 +33,22 @@
     throw std::invalid_argument(err_msg.str());                 \
   }
 
+#define DISPATCH_HEAD_DIM_QK(head_dim, HEAD_DIM, ...)              \
+  if (head_dim == 64) {                                         \
+    constexpr int HEAD_DIM = 64;                                \
+    __VA_ARGS__                                                 \
+  } else if (head_dim == 128) {                                 \
+    constexpr int HEAD_DIM = 128;                               \
+    __VA_ARGS__                                                 \
+  } else if (head_dim == 192) {                                 \
+    constexpr int HEAD_DIM = 192;                               \
+    __VA_ARGS__                                                 \
+  } else {                                                      \
+    std::ostringstream err_msg;                                 \
+    err_msg << "Unsupported head dim: " << int(head_dim);       \
+    throw std::invalid_argument(err_msg.str());                 \
+  }
+
 #define DISPATCH_CAUSAL(is_causal, IS_CAUSAL, ...)              \
   if (is_causal == 1) {                                         \
     constexpr bool IS_CAUSAL = true;                            \

@@ -580,15 +580,15 @@ __global__ void qk_int8_sv_f8_attn_dsk_kernel(const __grid_constant__ CUtensorMa
   }
 }
 
-std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90_fwd(
-                  paddle::Tensor& query,
-                  paddle::Tensor& key,
-                  paddle::Tensor& query_pe,
-                  paddle::Tensor& key_pe,
-                  paddle::Tensor& value,
-                  paddle::Tensor& output,
-                  paddle::Tensor& query_scale,
-                  paddle::Tensor& key_scale,
+torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90(
+                  torch::Tensor query,
+                  torch::Tensor key,
+                  torch::Tensor query_pe,
+                  torch::Tensor key_pe,
+                  torch::Tensor value,
+                  torch::Tensor output,
+                  torch::Tensor query_scale,
+                  torch::Tensor key_scale,
                   int tensor_layout,
                   int is_causal,
                   int qk_quant_gran,
@@ -613,13 +613,13 @@ std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90_fwd(
   CHECK_CONTIGUOUS(query_scale);
   CHECK_CONTIGUOUS(key_scale);
 
-  CHECK_DTYPE(query, paddle::DataType::INT8);
-  CHECK_DTYPE(key, paddle::DataType::INT8);
-  CHECK_DTYPE(query_pe, paddle::DataType::INT8);
-  CHECK_DTYPE(key_pe, paddle::DataType::INT8);
-  CHECK_DTYPE(value, paddle::DataType::FLOAT8_E4M3FN);
-  CHECK_DTYPE(query_scale, paddle::DataType::FLOAT32);
-  CHECK_DTYPE(key_scale, paddle::DataType::FLOAT32);
+  CHECK_DTYPE(query, torch::kInt8);
+  CHECK_DTYPE(key, torch::kInt8);
+  CHECK_DTYPE(query_pe, torch::kInt8);
+  CHECK_DTYPE(key_pe, torch::kInt8);
+  CHECK_DTYPE(value, at::ScalarType::Float8_e4m3fn);
+  CHECK_DTYPE(query_scale, torch::kFloat32);
+  CHECK_DTYPE(key_scale, torch::kFloat32);
 
   CHECK_DIMS(query, 4);
   CHECK_DIMS(key, 4);
@@ -630,60 +630,60 @@ std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90_fwd(
   CHECK_DIMS(query_scale, 3);
   CHECK_DIMS(key_scale, 3);
 
-  const int batch_size = query.shape()[0];
-  const int head_dim = query.shape()[3];  // 现在query是正常的128， 多出来的64在query_pe里面，所以这样做没什么问题
+  const int batch_size = query.size(0);
+  const int head_dim = query.size(3);  // 现在query是正常的128， 多出来的64在query_pe里面，所以这样做没什么问题
 
-  int stride_bz_q = query.strides()[0];
-  int stride_bz_k = key.strides()[0];
-  int stride_bz_v = value.strides()[0];
-  int stride_bz_o = output.strides()[0];
+  int stride_bz_q = query.stride(0);
+  int stride_bz_k = key.stride(0);
+  int stride_bz_v = value.stride(0);
+  int stride_bz_o = output.stride(0);
 
   int qo_len, kv_len, padded_kv_len, num_qo_heads, num_kv_heads;
   int stride_seq_q, stride_h_q, stride_seq_k, stride_h_k, stride_h_v, stride_d_v, stride_seq_o, stride_h_o;
 
-  assert(value.shape()[0] == batch_size);
+  assert(value.size(0) == batch_size);
 
   if (tensor_layout == 0)
   {
-    qo_len = query.shape()[1];
-    kv_len = key.shape()[1];
-    num_qo_heads = query.shape()[2];
-    num_kv_heads = key.shape()[2];
+    qo_len = query.size(1);
+    kv_len = key.size(1);
+    num_qo_heads = query.size(2);
+    num_kv_heads = key.size(2);
 
-    stride_seq_q = query.strides()[1];
-    stride_h_q = query.strides()[2];
-    stride_seq_k = key.strides()[1];
-    stride_h_k = key.strides()[2];
-    stride_h_v = value.strides()[2];
-    stride_d_v = value.strides()[1];
-    stride_seq_o = output.strides()[1];
-    stride_h_o = output.strides()[2];
+    stride_seq_q = query.stride(1);
+    stride_h_q = query.stride(2);
+    stride_seq_k = key.stride(1);
+    stride_h_k = key.stride(2);
+    stride_h_v = value.stride(2);
+    stride_d_v = value.stride(1);
+    stride_seq_o = output.stride(1);
+    stride_h_o = output.stride(2);
 
     CHECK_SHAPE(key, batch_size, kv_len, num_kv_heads, head_dim);
     CHECK_SHAPE(output, batch_size, qo_len, num_qo_heads, head_dim);
-    assert(value.shape()[1] == head_dim);
-    assert(value.shape()[2] == num_kv_heads);
+    assert(value.size(1) == head_dim);
+    assert(value.size(2) == num_kv_heads);
   }
   else
   {
-    qo_len = query.shape()[2];
-    kv_len = key.shape()[2];
-    num_qo_heads = query.shape()[1];
-    num_kv_heads = key.shape()[1];
+    qo_len = query.size(2);
+    kv_len = key.size(2);
+    num_qo_heads = query.size(1);
+    num_kv_heads = key.size(1);
 
-    stride_seq_q = query.strides()[2];
-    stride_h_q = query.strides()[1];
-    stride_seq_k = key.strides()[2];
-    stride_h_k = key.strides()[1];
-    stride_h_v = value.strides()[1];
-    stride_d_v = value.strides()[2];
-    stride_seq_o = output.strides()[2];
-    stride_h_o = output.strides()[1];
+    stride_seq_q = query.stride(2);
+    stride_h_q = query.stride(1);
+    stride_seq_k = key.stride(2);
+    stride_h_k = key.stride(1);
+    stride_h_v = value.stride(1);
+    stride_d_v = value.stride(2);
+    stride_seq_o = output.stride(2);
+    stride_h_o = output.stride(1);
 
     CHECK_SHAPE(key, batch_size, num_kv_heads, kv_len, head_dim);
     CHECK_SHAPE(output, batch_size, num_qo_heads, qo_len, head_dim);
-    assert(value.shape()[2] == head_dim);
-    assert(value.shape()[1] == num_kv_heads);
+    assert(value.size(2) == head_dim);
+    assert(value.size(1) == num_kv_heads);
   }
 
   if (num_qo_heads % num_kv_heads != 0) {
@@ -692,20 +692,20 @@ std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90_fwd(
     throw std::invalid_argument(err_msg.str());  
   }
 
-  paddle::Tensor lse = paddle::empty({0}, paddle::DataType::FLOAT32);
+  torch::Tensor lse = torch::empty({0});
   if (return_lse)
   {
-    lse = paddle::empty({batch_size, num_qo_heads, qo_len}, paddle::DataType::FLOAT32);
+    lse = torch::empty({batch_size, num_qo_heads, qo_len}, query.options().dtype(torch::kFloat32));
   }
 
   const int num_kv_groups = num_qo_heads / num_kv_heads;
 
-  auto output_type = output.dtype();
+  auto output_type = output.scalar_type();
 
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
     DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
       DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
-        DISPATCH_PADDLE_DTYPE_TO_CTYPE_FP16(output_type, DTypeOut, {
+        DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_type, DTypeOut, {
           constexpr int CTA_Q = 64;
           constexpr int CTA_K = 128;
           constexpr int NUM_THREADS = 128;
@@ -713,7 +713,7 @@ std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90_fwd(
 
           constexpr MaskMode mask_mode = IS_CAUSAL ? MaskMode::kCausal : MaskMode::kNone;
 
-          assert(value.shape()[3] >= div_ceil(kv_len, CTA_K) * CTA_K);
+          assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
 
           if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp))
           {
@@ -730,12 +730,12 @@ std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90_fwd(
             static_assert(QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp) || QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerThread), "Unsupported quantization granularity");
           }
 
-          CUtensorMap tma_map_Q = create_tensor_map_4D<CTA_Q, HEAD_DIM>(reinterpret_cast<int8_t*>(query.data()), batch_size, num_qo_heads, qo_len, HEAD_DIM, stride_bz_q, stride_h_q, stride_seq_q);
-          CUtensorMap tma_map_K = create_tensor_map_4D<CTA_K, HEAD_DIM>(reinterpret_cast<int8_t*>(key.data()), batch_size, num_kv_heads, kv_len, HEAD_DIM, stride_bz_k, stride_h_k, stride_seq_k);
-          CUtensorMap tma_map_Q_pe = create_tensor_map_4D<CTA_Q, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(query_pe.data()), batch_size, num_qo_heads, qo_len, HEAD_DIM_PE, stride_bz_q, stride_h_q, stride_seq_q);
-          CUtensorMap tma_map_K_pe = create_tensor_map_4D<CTA_K, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(key_pe.data()), batch_size, num_kv_heads, kv_len, HEAD_DIM_PE, stride_bz_k, stride_h_k, stride_seq_k);
+          CUtensorMap tma_map_Q = create_tensor_map_4D<CTA_Q, HEAD_DIM>(reinterpret_cast<int8_t*>(query.data_ptr()), batch_size, num_qo_heads, qo_len, HEAD_DIM, stride_bz_q, stride_h_q, stride_seq_q);
+          CUtensorMap tma_map_K = create_tensor_map_4D<CTA_K, HEAD_DIM>(reinterpret_cast<int8_t*>(key.data_ptr()), batch_size, num_kv_heads, kv_len, HEAD_DIM, stride_bz_k, stride_h_k, stride_seq_k);
+          CUtensorMap tma_map_Q_pe = create_tensor_map_4D<CTA_Q, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(query_pe.data_ptr()), batch_size, num_qo_heads, qo_len, HEAD_DIM_PE, stride_bz_q, stride_h_q, stride_seq_q);
+          CUtensorMap tma_map_K_pe = create_tensor_map_4D<CTA_K, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(key_pe.data_ptr()), batch_size, num_kv_heads, kv_len, HEAD_DIM_PE, stride_bz_k, stride_h_k, stride_seq_k);
           
-          CUtensorMap tma_map_V = create_tensor_map_4D<HEAD_DIM, CTA_K>(reinterpret_cast<int8_t*>(value.data()), batch_size, num_kv_heads, HEAD_DIM, value.shape()[3], stride_bz_v, stride_h_v, stride_d_v);
+          CUtensorMap tma_map_V = create_tensor_map_4D<HEAD_DIM, CTA_K>(reinterpret_cast<int8_t*>(value.data_ptr()), batch_size, num_kv_heads, HEAD_DIM, value.size(3), stride_bz_v, stride_h_v, stride_d_v);
 
           auto* kernel = qk_int8_sv_f8_attn_dsk_kernel<CTA_Q, CTA_K, NUM_THREADS, HEAD_DIM, HEAD_DIM_PE, static_cast<QuantGranularity>(QK_QUANT_GRAN), static_cast<QuantGranularity>(QK_QUANT_GRAN), DTypeOut, mask_mode, false>;
           size_t sMemSize = CTA_Q * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t);
@@ -751,10 +751,10 @@ std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90_fwd(
             tma_map_Q_pe,
             tma_map_K_pe,
             tma_map_V,
-            reinterpret_cast<float*>(query_scale.data()),
-            reinterpret_cast<float*>(key_scale.data()),
+            reinterpret_cast<float*>(query_scale.data_ptr()),
+            reinterpret_cast<float*>(key_scale.data_ptr()),
             nullptr,
-            reinterpret_cast<DTypeOut*>(output.data()),
+            reinterpret_cast<DTypeOut*>(output.data_ptr()),
             stride_bz_o, stride_h_o, stride_seq_o,
             qo_len, kv_len, num_kv_groups, sm_scale);
         });
@@ -762,19 +762,19 @@ std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90_fwd(
     });
   });
 
-  return {lse};
+  return lse;
 }
 
-std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_dsk_sm90_fwd(
-                    paddle::Tensor& query,
-                    paddle::Tensor& key,
-                    paddle::Tensor& query_pe,
-                    paddle::Tensor& key_pe,
-                    paddle::Tensor& value,
-                    paddle::Tensor& output,
-                    paddle::Tensor& query_scale,
-                    paddle::Tensor& key_scale,
-                    paddle::Tensor& value_scale,
+torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_dsk_sm90(
+                    torch::Tensor query,
+                    torch::Tensor key,
+                    torch::Tensor query_pe,
+                    torch::Tensor key_pe,
+                    torch::Tensor value,
+                    torch::Tensor output,
+                    torch::Tensor query_scale,
+                    torch::Tensor key_scale,
+                    torch::Tensor value_scale,
                     int tensor_layout,
                     int is_causal,
                     int qk_quant_gran,
@@ -801,14 +801,14 @@ std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_d
   CHECK_CONTIGUOUS(key_scale);
   CHECK_CONTIGUOUS(value_scale);
 
-  CHECK_DTYPE(query, paddle::DataType::INT8);
-  CHECK_DTYPE(key, paddle::DataType::INT8);
-  CHECK_DTYPE(query_pe, paddle::DataType::INT8);
-  CHECK_DTYPE(key_pe, paddle::DataType::INT8);
-  CHECK_DTYPE(value, paddle::DataType::FLOAT8_E4M3FN);
-  CHECK_DTYPE(query_scale, paddle::DataType::FLOAT32);
-  CHECK_DTYPE(key_scale, paddle::DataType::FLOAT32);
-  CHECK_DTYPE(value_scale, paddle::DataType::FLOAT32);
+  CHECK_DTYPE(query, torch::kInt8);
+  CHECK_DTYPE(key, torch::kInt8);
+  CHECK_DTYPE(query_pe, torch::kInt8);
+  CHECK_DTYPE(key_pe, torch::kInt8);
+  CHECK_DTYPE(value, at::ScalarType::Float8_e4m3fn);
+  CHECK_DTYPE(query_scale, torch::kFloat32);
+  CHECK_DTYPE(key_scale, torch::kFloat32);
+  CHECK_DTYPE(value_scale, torch::kFloat32);
 
   CHECK_DIMS(query, 4);
   CHECK_DIMS(key, 4);
@@ -820,61 +820,61 @@ std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_d
   CHECK_DIMS(key_scale, 3);
   CHECK_DIMS(value_scale, 3);
 
-  const int batch_size = query.shape()[0];
-  const int head_dim = query.shape()[3];
+  const int batch_size = query.size(0);
+  const int head_dim = query.size(3);
 
-  int stride_bz_q = query.strides()[0];
-  int stride_bz_k = key.strides()[0];
-  int stride_bz_v = value.strides()[0];
-  int stride_bz_o = output.strides()[0];
+  int stride_bz_q = query.stride(0);
+  int stride_bz_k = key.stride(0);
+  int stride_bz_v = value.stride(0);
+  int stride_bz_o = output.stride(0);
 
   int qo_len, kv_len, padded_kv_len, num_qo_heads, num_kv_heads;
   int stride_seq_q, stride_h_q, stride_seq_k, stride_h_k, stride_h_v, stride_d_v, stride_seq_o, stride_h_o;
 
-  assert(value.shape()[0] == batch_size);
+  assert(value.size(0) == batch_size);
 
   if (tensor_layout == 0)
   {
-    qo_len = query.shape()[1];
-    kv_len = key.shape()[1];
-    num_qo_heads = query.shape()[2];
-    num_kv_heads = key.shape()[2];
+    qo_len = query.size(1);
+    kv_len = key.size(1);
+    num_qo_heads = query.size(2);
+    num_kv_heads = key.size(2);
 
-    stride_seq_q = query.strides()[1];
-    stride_h_q = query.strides()[2];
-    stride_seq_k = key.strides()[1];
-    stride_h_k = key.strides()[2];
-    stride_h_v = value.strides()[2];
-    stride_d_v = value.strides()[1];
-    stride_seq_o = output.strides()[1];
-    stride_h_o = output.strides()[2];
+    stride_seq_q = query.stride(1);
+    stride_h_q = query.stride(2);
+    stride_seq_k = key.stride(1);
+    stride_h_k = key.stride(2);
+    stride_h_v = value.stride(2);
+    stride_d_v = value.stride(1);
+    stride_seq_o = output.stride(1);
+    stride_h_o = output.stride(2);
 
     CHECK_SHAPE(key, batch_size, kv_len, num_kv_heads, head_dim);
     CHECK_SHAPE(output, batch_size, qo_len, num_qo_heads, head_dim);
     
-    assert(value.shape()[1] == head_dim);
-    assert(value.shape()[2] == num_kv_heads);
+    assert(value.size(1) == head_dim);
+    assert(value.size(2) == num_kv_heads);
   }
   else
   {
-    qo_len = query.shape()[2];
-    kv_len = key.shape()[2];
-    num_qo_heads = query.shape()[1];
-    num_kv_heads = key.shape()[1];
+    qo_len = query.size(2);
+    kv_len = key.size(2);
+    num_qo_heads = query.size(1);
+    num_kv_heads = key.size(1);
 
-    stride_seq_q = query.strides()[2];
-    stride_h_q = query.strides()[1];
-    stride_seq_k = key.strides()[2];
-    stride_h_k = key.strides()[1];
-    stride_h_v = value.strides()[1];
-    stride_d_v = value.strides()[2];
-    stride_seq_o = output.strides()[2];
-    stride_h_o = output.strides()[1];
+    stride_seq_q = query.stride(2);
+    stride_h_q = query.stride(1);
+    stride_seq_k = key.stride(2);
+    stride_h_k = key.stride(1);
+    stride_h_v = value.stride(1);
+    stride_d_v = value.stride(2);
+    stride_seq_o = output.stride(2);
+    stride_h_o = output.stride(1);
 
     CHECK_SHAPE(key, batch_size, num_kv_heads, kv_len, head_dim);
     CHECK_SHAPE(output, batch_size, num_qo_heads, qo_len, head_dim);
-    assert(value.shape()[2] == head_dim);
-    assert(value.shape()[1] == num_kv_heads);
+    assert(value.size(2) == head_dim);
+    assert(value.size(1) == num_kv_heads);
   }
 
   if (num_qo_heads % num_kv_heads != 0) {
@@ -883,20 +883,20 @@ std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_d
     throw std::invalid_argument(err_msg.str());  
   }
 
-  paddle::Tensor lse = paddle::empty({1}, paddle::DataType::FLOAT32);
+  torch::Tensor lse = torch::empty({1});
   if (return_lse)
   {
-    lse = paddle::empty({batch_size, num_qo_heads, qo_len}, paddle::DataType::FLOAT32);
+    lse = torch::empty({batch_size, num_qo_heads, qo_len}, query.options().dtype(torch::kFloat32));
   }
 
   const int num_kv_groups = num_qo_heads / num_kv_heads;
 
-  auto output_dtype = output.dtype();
+  auto output_dtype = output.scalar_type();
 
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
     DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
       DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
-        DISPATCH_PADDLE_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
+        DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(output_dtype, DTypeOut, {
           constexpr int CTA_Q = 64;
           constexpr int CTA_K = 128;
           constexpr int NUM_THREADS = 128;
@@ -904,7 +904,7 @@ std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_d
 
           constexpr MaskMode mask_mode = IS_CAUSAL ? MaskMode::kCausal : MaskMode::kNone;
 
-          assert(value.shape()[3] >= div_ceil(kv_len, CTA_K) * CTA_K);
+          assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
 
           if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp))
           {
@@ -922,12 +922,12 @@ std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_d
           }
 
           CHECK_SHAPE(value_scale, batch_size, num_kv_heads, HEAD_DIM);
-          CUtensorMap tma_map_Q = create_tensor_map_4D<CTA_Q, HEAD_DIM>(reinterpret_cast<int8_t*>(query.data()), batch_size, num_qo_heads, qo_len, HEAD_DIM, stride_bz_q, stride_h_q, stride_seq_q);
-          CUtensorMap tma_map_Q_pe = create_tensor_map_4D<CTA_Q, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(query_pe.data()), batch_size, num_qo_heads, qo_len, HEAD_DIM_PE, stride_bz_q, stride_h_q, stride_seq_q);
-          CUtensorMap tma_map_K = create_tensor_map_4D<CTA_K, HEAD_DIM>(reinterpret_cast<int8_t*>(key.data()), batch_size, num_kv_heads, kv_len, HEAD_DIM, stride_bz_k, stride_h_k, stride_seq_k);
-          CUtensorMap tma_map_K_pe = create_tensor_map_4D<CTA_K, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(key_pe.data()), batch_size, num_kv_heads, kv_len, HEAD_DIM_PE, stride_bz_k, stride_h_k, stride_seq_k);
+          CUtensorMap tma_map_Q = create_tensor_map_4D<CTA_Q, HEAD_DIM>(reinterpret_cast<int8_t*>(query.data_ptr()), batch_size, num_qo_heads, qo_len, HEAD_DIM, stride_bz_q, stride_h_q, stride_seq_q);
+          CUtensorMap tma_map_Q_pe = create_tensor_map_4D<CTA_Q, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(query_pe.data_ptr()), batch_size, num_qo_heads, qo_len, HEAD_DIM_PE, stride_bz_q, stride_h_q, stride_seq_q);
+          CUtensorMap tma_map_K = create_tensor_map_4D<CTA_K, HEAD_DIM>(reinterpret_cast<int8_t*>(key.data_ptr()), batch_size, num_kv_heads, kv_len, HEAD_DIM, stride_bz_k, stride_h_k, stride_seq_k);
+          CUtensorMap tma_map_K_pe = create_tensor_map_4D<CTA_K, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(key_pe.data_ptr()), batch_size, num_kv_heads, kv_len, HEAD_DIM_PE, stride_bz_k, stride_h_k, stride_seq_k);
 
-          CUtensorMap tma_map_V = create_tensor_map_4D<HEAD_DIM, CTA_K>(reinterpret_cast<int8_t*>(value.data()), batch_size, num_kv_heads, HEAD_DIM, value.shape()[3], stride_bz_v, stride_h_v, stride_d_v);
+          CUtensorMap tma_map_V = create_tensor_map_4D<HEAD_DIM, CTA_K>(reinterpret_cast<int8_t*>(value.data_ptr()), batch_size, num_kv_heads, HEAD_DIM, value.size(3), stride_bz_v, stride_h_v, stride_d_v);
 
           auto* kernel = qk_int8_sv_f8_attn_dsk_kernel<CTA_Q, CTA_K, NUM_THREADS, HEAD_DIM, HEAD_DIM_PE, static_cast<QuantGranularity>(QK_QUANT_GRAN), static_cast<QuantGranularity>(QK_QUANT_GRAN), DTypeOut, mask_mode, true>;
           size_t sMemSize = CTA_Q * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t);
@@ -943,10 +943,10 @@ std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_d
             tma_map_Q_pe,
             tma_map_K_pe,
             tma_map_V,
-            reinterpret_cast<float*>(query_scale.data()),
-            reinterpret_cast<float*>(key_scale.data()),
-            reinterpret_cast<float*>(value_scale.data()),
-            reinterpret_cast<DTypeOut*>(output.data()),
+            reinterpret_cast<float*>(query_scale.data_ptr()),
+            reinterpret_cast<float*>(key_scale.data_ptr()),
+            reinterpret_cast<float*>(value_scale.data_ptr()),
+            reinterpret_cast<DTypeOut*>(output.data_ptr()),
             stride_bz_o, stride_h_o, stride_seq_o,
             qo_len, kv_len, num_kv_groups, sm_scale);
         });
@@ -954,5 +954,5 @@ std::vector<paddle::Tensor> qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_d
     });
   });
 
-  return {lse};
+  return lse;
 }
