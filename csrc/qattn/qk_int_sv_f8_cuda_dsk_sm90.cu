@@ -1,8 +1,14 @@
-#include <type_traits>
-#include <stdio.h>
-#include "paddle/extension.h"
+#include "../utils.cuh"
+#include <cuda.h>
+#include <cuda_bf16.h>
+#include <cuda_fp8.h>
+#include <torch/extension.h>
 
-#include "sageattn_utils.cuh"
+#include "../wgmma.cuh"
+#include "../math.cuh"
+#include "../dispatch_utils.h"
+
+#include "attn_utils.cuh"
 
 template <int BlockMajorSize, int BlockMinorSize, bool swizzle=true, CUtensorMapL2promotion_enum promotion_mode=CU_TENSOR_MAP_L2_PROMOTION_NONE, typename T>
 CUtensorMap create_tensor_map_4D(T* gmem_ptr, int d1, int d2, int d3, int d4, int stride1, int stride2, int stride3) {
