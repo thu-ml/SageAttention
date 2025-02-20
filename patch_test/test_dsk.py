@@ -60,7 +60,7 @@ o_sa = sageattn_qk_int8_pv_fp8_cuda_sm90a(q, k, v, tensor_layout=tensor_layout, 
 torch.cuda.synchronize()
 
 sim, l1, max_diff = precision_cmp_torch(o_torch_fa2.transpose(2, 1), o_sa)
-print(f"Sim and Diff of Sage Attn: {sim}, {max_diff}")
+print(f"Sim and Diff of Sage Attn & torch SDPA: {sim}, {max_diff}")
 
 sim, l1, max_diff = precision_cmp_torch(o_torch_fa2, o_torch_sdpa)
-print(f"Sim and Diff of Flash Attn: {sim}, {max_diff}")
+print(f"Sim and Diff of Flash Attn & torch SDPA: {sim}, {max_diff}")

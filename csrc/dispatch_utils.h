@@ -40,8 +40,8 @@
   } else if (head_dim == 128) {                                 \
     constexpr int HEAD_DIM = 128;                               \
     __VA_ARGS__                                                 \
-  } else if (head_dim == 192) {                                 \
-    constexpr int HEAD_DIM = 192;                               \
+  } else if (head_dim == 256) {                                 \
+    constexpr int HEAD_DIM = 256;                               \
     __VA_ARGS__                                                 \
   } else {                                                      \
     std::ostringstream err_msg;                                 \
