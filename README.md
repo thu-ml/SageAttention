@@ -17,7 +17,7 @@ Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 ## Current Features
 <!-- This is a beta release of SageAttention2. We welcome any feedback on accuracy, performance issues, bugs, feature requests, or suggestions. Please feel free to open an issue or launch a pull request! -->
 
-+ Optmized kernels for **Ampere, Ada and Hopper GPUs.**
++ Optimized kernels for **Ampere, Ada and Hopper GPUs.**
 + INT8 quantization and smoothing for $QK^\top$ with support for varying granularities.
 + FP8 quantization for $PV$.
 + Two-level accumulation strategy for $PV$ to improve accuracy in FP8 MMA and WGMMA.
