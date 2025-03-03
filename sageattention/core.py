@@ -988,3 +988,4 @@ def sageattn_qk_int8_pv_fp8_cuda_dsk_sm90(
         return o, lse / 1.44269504 + lse_correction * sm_scale if smooth_k else lse / 1.44269504
     else:
         return o
+

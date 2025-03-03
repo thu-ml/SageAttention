@@ -146,19 +146,12 @@ __global__ void qk_int8_sv_f8_attn_dsk_kernel(const __grid_constant__ CUtensorMa
 
   extern __shared__ __align__(128) int8_t smem_[];
 
-  /* // original:
-   * int8_t *sQ = (int8_t*)smem_;
-   * int8_t *sK = (int8_t*)(smem_ + CTA_Q * head_dim * sizeof(int8_t));
-   * int8_t *sV = (int8_t*)(smem_ + CTA_Q * head_dim * sizeof(int8_t) + CTA_K * head_dim * sizeof(int8_t));
-   * half *sO = (half*)smem_;
-  */
-
-  int8_t *sQ    = (int8_t*)smem_;                                                               // 0
-  int8_t *sQ_pe = (int8_t*)(smem_ + CTA_Q * (head_dim) * sizeof(int8_t));                       // 0 + head_dim
-
-  int8_t *sK    = (int8_t*)(smem_ + CTA_Q * (head_dim + head_dim_pe) * sizeof(int8_t));         // 0 + head_dim + pe
-  int8_t *sK_pe = (int8_t*)(smem_ + CTA_Q * (head_dim + head_dim_pe) * sizeof(int8_t) + CTA_K * (head_dim) * sizeof(int8_t)); // 0 + head_dim + pe + head_dim
-  int8_t *sV    = (int8_t*)(smem_ + CTA_Q * (head_dim + head_dim_pe) * sizeof(int8_t) + CTA_K * (head_dim + head_dim_pe) * sizeof(int8_t));
+  int8_t *sQ    = (int8_t*)smem_;
+  int8_t *sK    = (int8_t*)(smem_ + CTA_Q * head_dim * sizeof(int8_t));
+  int8_t *sV    = (int8_t*)(smem_ + CTA_Q * head_dim * sizeof(int8_t) + CTA_K * head_dim * sizeof(int8_t));
+  int8_t *sQ_pe = (int8_t*)(smem_ + CTA_Q * head_dim * sizeof(int8_t) + CTA_K * head_dim * sizeof(int8_t) + CTA_K * head_dim * sizeof(int8_t));
+  int8_t *sK_pe = (int8_t*)(smem_ + CTA_Q * head_dim * sizeof(int8_t) + CTA_K * head_dim * sizeof(int8_t) + CTA_K * head_dim * sizeof(int8_t) + CTA_Q * head_dim_pe * sizeof(int8_t));
+  
   half *sO = (half*)smem_;
 
   int32_t RS[num_tiles_q][num_tiles_k][8];
@@ -250,10 +243,10 @@ __global__ void qk_int8_sv_f8_attn_dsk_kernel(const __grid_constant__ CUtensorMa
     expect_bytes<(CTA_K * (head_dim)) * sizeof(int8_t)>(&barrier_V);
 
     load_async_4D(sQ, &tensorMapQ, &barrier_Q, 0, bx * CTA_Q, head_id, batch_id);
-    load_async_4D(sQ_pe, &tensorMapQ_pe, &barrier_Q_pe, 0, bx * CTA_Q, head_id, batch_id);
     load_async_4D(sK, &tensorMapK, &barrier_K, 0, 0, kv_head_id, batch_id);
-    load_async_4D(sK_pe, &tensorMapK_pe, &barrier_K_pe, 0, 0, kv_head_id, batch_id);
     load_async_4D(sV, &tensorMapV, &barrier_V, 0, 0, kv_head_id, batch_id);
+    load_async_4D(sQ_pe, &tensorMapQ_pe, &barrier_Q_pe, 0, bx * CTA_Q, head_id, batch_id);
+    load_async_4D(sK_pe, &tensorMapK_pe, &barrier_K_pe, 0, 0, kv_head_id, batch_id);
   }
 
   float q_scale = Q_scale[q_scale_idx];
@@ -634,12 +627,16 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90(
   const int head_dim = query.size(3);  // 现在query是正常的128， 多出来的64在query_pe里面，所以这样做没什么问题
 
   int stride_bz_q = query.stride(0);
+  int stride_bz_q_pe = query_pe.stride(0);
   int stride_bz_k = key.stride(0);
+  int stride_bz_k_pe = key_pe.stride(0);
   int stride_bz_v = value.stride(0);
   int stride_bz_o = output.stride(0);
 
   int qo_len, kv_len, padded_kv_len, num_qo_heads, num_kv_heads;
-  int stride_seq_q, stride_h_q, stride_seq_k, stride_h_k, stride_h_v, stride_d_v, stride_seq_o, stride_h_o;
+  int stride_seq_q, stride_h_q, stride_seq_k, stride_h_k, 
+    stride_seq_q_pe, stride_h_q_pe, stride_seq_k_pe, stride_h_k_pe,
+    stride_h_v, stride_d_v, stride_seq_o, stride_h_o;
 
   assert(value.size(0) == batch_size);
 
@@ -652,8 +649,12 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90(
 
     stride_seq_q = query.stride(1);
     stride_h_q = query.stride(2);
+    stride_seq_q_pe = query_pe.stride(1);
+    stride_h_q_pe = query_pe.stride(2);
     stride_seq_k = key.stride(1);
     stride_h_k = key.stride(2);
+    stride_seq_k_pe = key_pe.stride(1);
+    stride_h_k_pe = key_pe.stride(2);
     stride_h_v = value.stride(2);
     stride_d_v = value.stride(1);
     stride_seq_o = output.stride(1);
@@ -673,8 +674,12 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90(
 
     stride_seq_q = query.stride(2);
     stride_h_q = query.stride(1);
+    stride_seq_q_pe = query_pe.stride(2);
+    stride_h_q_pe = query_pe.stride(1);
     stride_seq_k = key.stride(2);
     stride_h_k = key.stride(1);
+    stride_seq_k_pe = key_pe.stride(2);
+    stride_h_k_pe = key_pe.stride(1);
     stride_h_v = value.stride(1);
     stride_d_v = value.stride(2);
     stride_seq_o = output.stride(2);
@@ -732,8 +737,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90(
 
           CUtensorMap tma_map_Q = create_tensor_map_4D<CTA_Q, HEAD_DIM>(reinterpret_cast<int8_t*>(query.data_ptr()), batch_size, num_qo_heads, qo_len, HEAD_DIM, stride_bz_q, stride_h_q, stride_seq_q);
           CUtensorMap tma_map_K = create_tensor_map_4D<CTA_K, HEAD_DIM>(reinterpret_cast<int8_t*>(key.data_ptr()), batch_size, num_kv_heads, kv_len, HEAD_DIM, stride_bz_k, stride_h_k, stride_seq_k);
-          CUtensorMap tma_map_Q_pe = create_tensor_map_4D<CTA_Q, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(query_pe.data_ptr()), batch_size, num_qo_heads, qo_len, HEAD_DIM_PE, stride_bz_q, stride_h_q, stride_seq_q);
-          CUtensorMap tma_map_K_pe = create_tensor_map_4D<CTA_K, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(key_pe.data_ptr()), batch_size, num_kv_heads, kv_len, HEAD_DIM_PE, stride_bz_k, stride_h_k, stride_seq_k);
+          CUtensorMap tma_map_Q_pe = create_tensor_map_4D<CTA_Q, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(query_pe.data_ptr()), batch_size, num_qo_heads, qo_len, HEAD_DIM_PE, stride_bz_q_pe, stride_h_q_pe, stride_seq_q_pe);
+          CUtensorMap tma_map_K_pe = create_tensor_map_4D<CTA_K, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(key_pe.data_ptr()), batch_size, num_kv_heads, kv_len, HEAD_DIM_PE, stride_bz_k_pe, stride_h_k_pe, stride_seq_k_pe);
           
           CUtensorMap tma_map_V = create_tensor_map_4D<HEAD_DIM, CTA_K>(reinterpret_cast<int8_t*>(value.data_ptr()), batch_size, num_kv_heads, HEAD_DIM, value.size(3), stride_bz_v, stride_h_v, stride_d_v);
 
@@ -824,12 +829,16 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_dsk_sm90(
   const int head_dim = query.size(3);
 
   int stride_bz_q = query.stride(0);
+  int stride_bz_q_pe = query_pe.stride(0);
   int stride_bz_k = key.stride(0);
+  int stride_bz_k_pe = key_pe.stride(0);
   int stride_bz_v = value.stride(0);
   int stride_bz_o = output.stride(0);
 
   int qo_len, kv_len, padded_kv_len, num_qo_heads, num_kv_heads;
-  int stride_seq_q, stride_h_q, stride_seq_k, stride_h_k, stride_h_v, stride_d_v, stride_seq_o, stride_h_o;
+  int stride_seq_q, stride_h_q, stride_seq_k, stride_h_k, 
+  stride_seq_q_pe, stride_h_q_pe, stride_seq_k_pe, stride_h_k_pe,
+  stride_h_v, stride_d_v, stride_seq_o, stride_h_o;
 
   assert(value.size(0) == batch_size);
 
@@ -842,8 +851,12 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_dsk_sm90(
 
     stride_seq_q = query.stride(1);
     stride_h_q = query.stride(2);
+    stride_seq_q_pe = query_pe.stride(1);
+    stride_h_q_pe = query_pe.stride(2);
     stride_seq_k = key.stride(1);
     stride_h_k = key.stride(2);
+    stride_seq_k_pe = key_pe.stride(1);
+    stride_h_k_pe = key_pe.stride(2);
     stride_h_v = value.stride(2);
     stride_d_v = value.stride(1);
     stride_seq_o = output.stride(1);
@@ -864,8 +877,12 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_dsk_sm90(
 
     stride_seq_q = query.stride(2);
     stride_h_q = query.stride(1);
+    stride_seq_q_pe = query_pe.stride(2);
+    stride_h_q_pe = query_pe.stride(1);
     stride_seq_k = key.stride(2);
     stride_h_k = key.stride(1);
+    stride_seq_k_pe = key_pe.stride(2);
+    stride_h_k_pe = key_pe.stride(1);
     stride_h_v = value.stride(1);
     stride_d_v = value.stride(2);
     stride_seq_o = output.stride(2);
@@ -923,9 +940,9 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_dsk_sm90(
 
           CHECK_SHAPE(value_scale, batch_size, num_kv_heads, HEAD_DIM);
           CUtensorMap tma_map_Q = create_tensor_map_4D<CTA_Q, HEAD_DIM>(reinterpret_cast<int8_t*>(query.data_ptr()), batch_size, num_qo_heads, qo_len, HEAD_DIM, stride_bz_q, stride_h_q, stride_seq_q);
-          CUtensorMap tma_map_Q_pe = create_tensor_map_4D<CTA_Q, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(query_pe.data_ptr()), batch_size, num_qo_heads, qo_len, HEAD_DIM_PE, stride_bz_q, stride_h_q, stride_seq_q);
+          CUtensorMap tma_map_Q_pe = create_tensor_map_4D<CTA_Q, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(query_pe.data_ptr()), batch_size, num_qo_heads, qo_len, HEAD_DIM_PE, stride_bz_q_pe, stride_h_q_pe, stride_seq_q_pe);
           CUtensorMap tma_map_K = create_tensor_map_4D<CTA_K, HEAD_DIM>(reinterpret_cast<int8_t*>(key.data_ptr()), batch_size, num_kv_heads, kv_len, HEAD_DIM, stride_bz_k, stride_h_k, stride_seq_k);
-          CUtensorMap tma_map_K_pe = create_tensor_map_4D<CTA_K, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(key_pe.data_ptr()), batch_size, num_kv_heads, kv_len, HEAD_DIM_PE, stride_bz_k, stride_h_k, stride_seq_k);
+          CUtensorMap tma_map_K_pe = create_tensor_map_4D<CTA_K, HEAD_DIM_PE>(reinterpret_cast<int8_t*>(key_pe.data_ptr()), batch_size, num_kv_heads, kv_len, HEAD_DIM_PE, stride_bz_k_pe, stride_h_k_pe, stride_seq_k_pe);
 
           CUtensorMap tma_map_V = create_tensor_map_4D<HEAD_DIM, CTA_K>(reinterpret_cast<int8_t*>(value.data_ptr()), batch_size, num_kv_heads, HEAD_DIM, value.size(3), stride_bz_v, stride_h_v, stride_d_v);
 
@@ -935,7 +952,7 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_dsk_sm90(
           cudaFuncSetAttribute(
               kernel,
               cudaFuncAttributeMaxDynamicSharedMemorySize, sMemSize);
-          
+
           dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
           kernel<<<grid, NUM_THREADS, sMemSize>>>(
             tma_map_Q,
