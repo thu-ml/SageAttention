@@ -178,7 +178,7 @@ setup(
     author='SageAttention team',
     license='Apache 2.0 License',  
     description='Accurate and efficient plug-and-play low-bit attention.',  
-    long_description=open('README.md').read(),  
+    long_description=open('README.md', encoding='utf-8').read(),  
     long_description_content_type='text/markdown', 
     url='https://github.com/thu-ml/SageAttention', 
     packages=find_packages(),
