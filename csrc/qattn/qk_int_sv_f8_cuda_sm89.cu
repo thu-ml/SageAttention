@@ -680,7 +680,7 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
 
     if (lse_idx < qo_len)
     {
-      lse_lane_ptr[0] = (math::ptx_log2(d[fq][k]) + m[fq][k] - S_FP8_OFFSET);
+      lse_lane_ptr[0] = (math::ptx_log2(d[fq][k]) + m[fq][k]);
     }
   }
 }
