@@ -70,11 +70,11 @@ For the stable Triton-only version, refer to [SageAttention-1](https://github.co
 pip install sageattention==1.0.6
 ```
 
-To use SageAttention 2.1.1, please **compile from source**:
+To use SageAttention 2.1.1, please first
+[install PyTorch](https://pytorch.org/get-started/locally/) and then
+**install from source**:
 ```
-git clone https://github.com/thu-ml/SageAttention.git
-cd sageattention 
-python setup.py install  # or pip install -e .
+pip install --no-build-isolation git+https://github.com/thu-ml/SageAttention.git
 ```
 
 To benchmark the speed against FlashAttention3, please compile FlashAttention3 from source:
