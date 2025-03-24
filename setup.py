@@ -34,7 +34,13 @@ HAS_SM120 = False
 SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "12.0"}
 
 # Compiler flags.
-CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
+if os.name == "nt":
+    # TODO: Detect MSVC
+    CXX_FLAGS = ["/O2", "/openmp", "/std:c++17", "-DENABLE_BF16"]
+    EXTRA_LINK_ARGS = ["cuda.lib"]
+else:
+    CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
+    EXTRA_LINK_ARGS = ["-lcuda"]
 NVCC_FLAGS = [
     "-O3",
     "-std=c++17",
@@ -157,7 +163,7 @@ if HAS_SM90:
             "cxx": CXX_FLAGS,
             "nvcc": NVCC_FLAGS,
         },
-        extra_link_args=['-lcuda'],
+        extra_link_args=EXTRA_LINK_ARGS,
     )
     ext_modules.append(qattn_extension)
 
