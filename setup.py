@@ -34,6 +34,7 @@ HAS_SM120 = False
 SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "12.0"}
 
 # Compiler flags.
+TORCH_CUDA_ARCH_LIST = os.environ.get("TORCH_CUDA_ARCH_LIST", "")
 CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
 NVCC_FLAGS = [
     "-O3",
@@ -75,6 +76,11 @@ for i in range(device_count):
         warnings.warn(f"skipping GPU {i} with compute capability {major}.{minor}")
         continue
     compute_capabilities.add(f"{major}.{minor}")
+
+if TORCH_CUDA_ARCH_LIST:
+    for arch in TORCH_CUDA_ARCH_LIST.split(","):
+        compute_capabilities.add(arch)
+
 
 nvcc_cuda_version = get_nvcc_cuda_version(CUDA_HOME)
 if not compute_capabilities:
