@@ -78,9 +78,7 @@ for i in range(device_count):
     compute_capabilities.add(f"{major}.{minor}")
 
 if TORCH_CUDA_ARCH_LIST:
-    for arch in TORCH_CUDA_ARCH_LIST.split(","):
-        compute_capabilities.add(arch)
-
+    compute_capabilities = set(TORCH_CUDA_ARCH_LIST.split(","))
 
 nvcc_cuda_version = get_nvcc_cuda_version(CUDA_HOME)
 if not compute_capabilities:
