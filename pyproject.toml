@@ -1,0 +1,29 @@
+[build-system]
+requires = [
+    "packaging",
+    "setuptools >= 64",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sageattention"
+description = "Accurate and efficient plug-and-play low-bit attention"
+version = "2.1.1"
+readme = "README.md"
+authors = [
+    {name = "SageAttention team"}
+]
+license = "Apache-2.0"
+requires-python = ">= 3.9"
+dependencies = [
+    "torch >= 2.3.0",
+    "triton >= 3.0.0",
+]
+
+[project.urls]
+"Source code" = "https://github.com/thu-ml/SageAttention"
+"Issue tracker" = "https://github.com/thu-ml/SageAttention/issues"
+
+[tool.setuptools.packages.find]
+include = ["sageattention*"]
+namespaces = false
