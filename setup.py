@@ -15,6 +15,7 @@ limitations under the License.
 """
 
 import os
+from pathlib import Path
 import subprocess
 from packaging.version import parse, Version
 from typing import List, Set
@@ -29,6 +30,15 @@ HAS_SM86 = False
 HAS_SM89 = False
 HAS_SM90 = False
 HAS_SM120 = False
+
+def get_instantiations(src_dir: str):
+    # get all .cu files under src_dir
+    base_path = Path(src_dir)
+    return [
+        os.path.join(src_dir, str(path.relative_to(base_path)))
+        for path in base_path.rglob('*')
+        if path.is_file() and path.suffix == ".cu"
+    ]
 
 # Supported NVIDIA GPU architectures.
 SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "12.0"}
@@ -124,7 +134,7 @@ if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM120:
         sources=[
             "csrc/qattn/pybind_sm80.cpp",
             "csrc/qattn/qk_int_sv_f16_cuda_sm80.cu",
-        ],
+        ] + get_instantiations("csrc/qattn/instantiations_sm80"),
         extra_compile_args={
             "cxx": CXX_FLAGS,
             "nvcc": NVCC_FLAGS,
@@ -138,7 +148,7 @@ if HAS_SM89 or HAS_SM120:
         sources=[
             "csrc/qattn/pybind_sm89.cpp",
             "csrc/qattn/qk_int_sv_f8_cuda_sm89.cu",
-        ],
+        ] + get_instantiations("csrc/qattn/instantiations_sm89"),
         extra_compile_args={
             "cxx": CXX_FLAGS,
             "nvcc": NVCC_FLAGS,
@@ -152,7 +162,7 @@ if HAS_SM90:
         sources=[
             "csrc/qattn/pybind_sm90.cpp",
             "csrc/qattn/qk_int_sv_f8_cuda_sm90.cu",
-        ],
+        ] + get_instantiations("csrc/qattn/instantiations_sm90"),
         extra_compile_args={
             "cxx": CXX_FLAGS,
             "nvcc": NVCC_FLAGS,
