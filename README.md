@@ -76,6 +76,7 @@ To use SageAttention 2.1.1, please **compile from source**:
 ```
 git clone https://github.com/thu-ml/SageAttention.git
 cd sageattention 
+pip install -U ninja # enable parallel compiling
 python setup.py install  # or pip install -e .
 ```
 
