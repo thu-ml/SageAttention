@@ -31,6 +31,17 @@ HAS_SM89 = False
 HAS_SM90 = False
 HAS_SM120 = False
 
+def run_instantiations(src_dir: str):
+    base_path = Path(src_dir)
+    py_files = [
+        path for path in base_path.rglob('*.py')
+        if path.is_file()
+    ]
+
+    for py_file in py_files:
+        print(f"Running: {py_file}")
+        os.system(f"python {py_file}")
+
 def get_instantiations(src_dir: str):
     # get all .cu files under src_dir
     base_path = Path(src_dir)
@@ -129,6 +140,7 @@ for capability in compute_capabilities:
 ext_modules = []
 
 if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM120:
+    run_instantiations("csrc/qattn/instantiations_sm80")
     qattn_extension = CUDAExtension(
         name="sageattention._qattn_sm80",
         sources=[
@@ -143,6 +155,7 @@ if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM120:
     ext_modules.append(qattn_extension)
 
 if HAS_SM89 or HAS_SM120:
+    run_instantiations("csrc/qattn/instantiations_sm89")
     qattn_extension = CUDAExtension(
         name="sageattention._qattn_sm89",
         sources=[
@@ -157,6 +170,7 @@ if HAS_SM89 or HAS_SM120:
     ext_modules.append(qattn_extension)
 
 if HAS_SM90:
+    run_instantiations("csrc/qattn/instantiations_sm90")
     qattn_extension = CUDAExtension(
         name="sageattention._qattn_sm90",
         sources=[

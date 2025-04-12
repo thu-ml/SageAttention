@@ -438,8 +438,8 @@ void quant_per_block_int8_cuda(
   CHECK_CUDA(output);
   CHECK_CUDA(scale);
   
-  CHECK_DTYPE(output, torch::kInt8);
-  CHECK_DTYPE(scale, torch::kFloat);
+  CHECK_DTYPE(output, at::ScalarType::Char);
+  CHECK_DTYPE(scale, at::ScalarType::Float);
 
   CHECK_LASTDIM_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(output);
@@ -520,8 +520,8 @@ void quant_per_block_int8_cuda(
   CHECK_CUDA(output);
   CHECK_CUDA(scale);
   
-  CHECK_DTYPE(output, torch::kInt8);
-  CHECK_DTYPE(scale, torch::kFloat);
+  CHECK_DTYPE(output, at::ScalarType::Char);
+  CHECK_DTYPE(scale, at::ScalarType::Float);
 
   CHECK_LASTDIM_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(output);
@@ -604,8 +604,8 @@ void quant_per_block_int8_fuse_sub_mean_cuda(
   CHECK_CUDA(output);
   CHECK_CUDA(scale);
   
-  CHECK_DTYPE(output, torch::kInt8);
-  CHECK_DTYPE(scale, torch::kFloat);
+  CHECK_DTYPE(output, at::ScalarType::Char);
+  CHECK_DTYPE(scale, at::ScalarType::Float);
 
   CHECK_LASTDIM_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(mean);
@@ -694,8 +694,8 @@ void quant_per_warp_int8_cuda(
   CHECK_CUDA(output);
   CHECK_CUDA(scale);
   
-  CHECK_DTYPE(output, torch::kInt8);
-  CHECK_DTYPE(scale, torch::kFloat);
+  CHECK_DTYPE(output, at::ScalarType::Char);
+  CHECK_DTYPE(scale, at::ScalarType::Float);
 
   CHECK_LASTDIM_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(output);
@@ -934,8 +934,8 @@ void scale_fuse_quant_cuda(
   CHECK_CUDA(output);
   CHECK_CUDA(scale);
 
-  // CHECK_DTYPE(output, torch::kInt8);
-  CHECK_DTYPE(scale, torch::kFloat);
+  // CHECK_DTYPE(output, at::ScalarType::Char);
+  CHECK_DTYPE(scale, at::ScalarType::Float);
 
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(output);
@@ -1013,9 +1013,9 @@ void mean_scale_fuse_quant_cuda(
   CHECK_CUDA(mean);
   CHECK_CUDA(scale);
 
-  // CHECK_DTYPE(output, torch::kInt8);
-  CHECK_DTYPE(mean, torch::kFloat);
-  CHECK_DTYPE(scale, torch::kFloat);
+  // CHECK_DTYPE(output, at::ScalarType::Char);
+  CHECK_DTYPE(mean, at::ScalarType::Float);
+  CHECK_DTYPE(scale, at::ScalarType::Float);
 
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(output);

@@ -15,7 +15,6 @@
  */
 
 #include <pybind11/pybind11.h>
-#include <torch/extension.h>
 #include "attn_cuda_sm89.h"
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)

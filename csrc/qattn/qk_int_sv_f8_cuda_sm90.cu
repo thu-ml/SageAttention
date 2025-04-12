@@ -44,11 +44,11 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(
   CHECK_CONTIGUOUS(query_scale);
   CHECK_CONTIGUOUS(key_scale);
 
-  CHECK_DTYPE(query, torch::kInt8);
-  CHECK_DTYPE(key, torch::kInt8);
+  CHECK_DTYPE(query, at::ScalarType::Char);
+  CHECK_DTYPE(key, at::ScalarType::Char);
   CHECK_DTYPE(value, at::ScalarType::Float8_e4m3fn);
-  CHECK_DTYPE(query_scale, torch::kFloat32);
-  CHECK_DTYPE(key_scale, torch::kFloat32);
+  CHECK_DTYPE(query_scale, at::ScalarType::Float);
+  CHECK_DTYPE(key_scale, at::ScalarType::Float);
 
   CHECK_DIMS(query, 4);
   CHECK_DIMS(key, 4);
@@ -123,7 +123,7 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(
   torch::Tensor lse = torch::empty({0});
   if (return_lse)
   {
-    lse = torch::empty({batch_size, num_qo_heads, qo_len}, query.options().dtype(torch::kFloat32));
+    lse = torch::empty({batch_size, num_qo_heads, qo_len}, query.options().dtype(at::ScalarType::Float));
   }
 
   auto output_type = output.scalar_type();
@@ -208,12 +208,12 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
   CHECK_CONTIGUOUS(key_scale);
   CHECK_CONTIGUOUS(value_scale);
 
-  CHECK_DTYPE(query, torch::kInt8);
-  CHECK_DTYPE(key, torch::kInt8);
+  CHECK_DTYPE(query, at::ScalarType::Char);
+  CHECK_DTYPE(key, at::ScalarType::Char);
   CHECK_DTYPE(value, at::ScalarType::Float8_e4m3fn);
-  CHECK_DTYPE(query_scale, torch::kFloat32);
-  CHECK_DTYPE(key_scale, torch::kFloat32);
-  CHECK_DTYPE(value_scale, torch::kFloat32);
+  CHECK_DTYPE(query_scale, at::ScalarType::Float);
+  CHECK_DTYPE(key_scale, at::ScalarType::Float);
+  CHECK_DTYPE(value_scale, at::ScalarType::Float);
 
   CHECK_DIMS(query, 4);
   CHECK_DIMS(key, 4);
@@ -289,7 +289,7 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
   torch::Tensor lse = torch::empty({0});
   if (return_lse)
   {
-    lse = torch::empty({batch_size, num_qo_heads, qo_len}, query.options().dtype(torch::kFloat32));
+    lse = torch::empty({batch_size, num_qo_heads, qo_len}, query.options().dtype(at::ScalarType::Float));
   }
 
   auto output_dtype = output.scalar_type();
