@@ -19,10 +19,10 @@
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
-  m.def("qk_int8_sv_f8_accum_f32_attn", &qk_int8_sv_f8_accum_f32_attn, "QK int8 sv f8 accum f32 attn");
-  m.def("qk_int8_sv_f8_accum_f32_fuse_v_scale_attn", &qk_int8_sv_f8_accum_f32_fuse_v_scale_attn, "QK int8 sv f8 accum f32 fuse v scale attn");
-  m.def("qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn", &qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn, "QK int8 sv f8 accum f32 fuse v scale fuse v mean attn");
+  m.def("qk_int8_sv_f8_accum_f32_attn", &qk_int8_sv_f8_accum_f32_attn, "QK int8 SV f8 accum f32 attention");
+  m.def("qk_int8_sv_f8_accum_f32_fuse_v_scale_attn", &qk_int8_sv_f8_accum_f32_fuse_v_scale_attn, "QK int8 SV f8 accum f32 fuse v scale attention");
+  m.def("qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn", &qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn, "QK int8 SV f8 accum f32 fuse v scale fuse v mean attention");
 
-  m.def("qk_int8_sv_f8_accum_f32_attn_inst_buf", &qk_int8_sv_f8_accum_f32_attn_inst_buf, "QK int8 sv f8 accum f32 attn inst buf");
-  m.def("qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf", &qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf, "QK int8 sv f8 accum f32 fuse v scale attn inst buf");
+  m.def("qk_int8_sv_f8_accum_f32_attn_inst_buf", &qk_int8_sv_f8_accum_f32_attn_inst_buf, "QK int8 SV f8 accum f32 attention inst buf");
+  m.def("qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf", &qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf, "QK int8 SV f8 accum f32 fuse v scale attention inst buf");
 }

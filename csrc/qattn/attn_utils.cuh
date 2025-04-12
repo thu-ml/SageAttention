@@ -32,23 +32,23 @@
 #define div_ceil(M, N) (((M) + (N)-1) / (N))
 
 enum class MaskMode {
-    kNone = 0,
-    kCausal = 1,
+  kNone = 0,
+  kCausal = 1,
 };
 
 enum class DataType {
-    kHalf,
-    kInt8,
-    kInt4,
-    kE4M3,
-    kE5M2,
+  kHalf,
+  kInt8,
+  kInt4,
+  kE4M3,
+  kE5M2,
 };
 
 enum class QuantGranularity {
-    kPerTensor = 0,
-    kPerBlock = 1,
-    kPerWarp = 2,
-    kPerThread = 3,
+  kPerTensor = 0,
+  kPerBlock = 1,
+  kPerWarp = 2,
+  kPerThread = 3,
 };
 
 enum class ComputeUnit {
