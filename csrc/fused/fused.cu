@@ -17,8 +17,7 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/extension.h>
 
-#include "../dispatch_utils.h"
-#include "../utils.cuh"
+#include "../pytorch_extensions_utils.cuh"
 #include "../reduction_utils.cuh"
 #include "../numeric_conversion.cuh"
 #include "../cp_async.cuh"
