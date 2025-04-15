@@ -247,11 +247,8 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
   cp_async::commit_group();
 
   float q_scale = Q_scale[q_scale_idx];
-
+  float k_scale = K_scale[k_scale_idx + 0 * k_scale_advance_offset];
   float original_sm_scale = sm_scale;
-  float dequant_scale = q_scale * K_scale[k_scale_idx + 0 * k_scale_advance_offset];
-
-  sm_scale = original_sm_scale * dequant_scale;
 
   // load V
   // ! we assume that V is padded. If not, there might be illegal memory access or nan issue.
@@ -269,6 +266,8 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
     // ensure K is ready
     cp_async::wait_group<1>();
     __syncthreads();
+
+    sm_scale = original_sm_scale * (q_scale * k_scale);
 
     // compute QK^T
     if constexpr (num_tiles_qk_inner == 1)
@@ -328,8 +327,7 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
       &K_lane_base_ptr, K_smem_offset_load, stride_seq_k, smem_K);
     cp_async::commit_group();
 
-    dequant_scale = q_scale * K_scale[k_scale_idx + iter * k_scale_advance_offset];
-    sm_scale = original_sm_scale * dequant_scale;
+    k_scale = K_scale[k_scale_idx + iter * k_scale_advance_offset];
     
     // ensure V is ready
     cp_async::wait_group<1>();
@@ -365,6 +363,8 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
     // ensure K is ready
     cp_async::wait_group<1>();
     __syncthreads();
+
+    float dequant_scale = q_scale * k_scale;
 
     // compute QK^T
     if constexpr (num_tiles_qk_inner == 1)
@@ -430,8 +430,7 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
       &K_lane_base_ptr, K_smem_offset_load, stride_seq_k, smem_K, K_load_idx_lane_base, kv_len);
     cp_async::commit_group();
 
-    dequant_scale = q_scale * K_scale[k_scale_idx + (num_iterations - 1) * k_scale_advance_offset];
-    sm_scale = original_sm_scale * dequant_scale;
+    k_scale = K_scale[k_scale_idx + (num_iterations - 1) * k_scale_advance_offset];
 
     // ensure V is ready
     cp_async::wait_group<1>();
@@ -466,6 +465,8 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
     // ensure K is ready
     cp_async::wait_group<1>();
     __syncthreads();
+
+    float dequant_scale = q_scale * k_scale;
 
     // compute QK^T
     if constexpr (num_tiles_qk_inner == 1)

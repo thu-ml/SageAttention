@@ -245,9 +245,7 @@ __global__ void qk_int_sv_f16_attn_kernel(int8_t *__restrict__ Q, int8_t *__rest
   float q_scale = Q_scale[q_scale_idx];
 
   float original_sm_scale = sm_scale;
-  float dequant_scale = q_scale * K_scale[k_scale_idx + 0 * k_scale_advance_offset];
-
-  sm_scale = original_sm_scale * dequant_scale;
+  float k_scale = K_scale[k_scale_idx + 0 * k_scale_advance_offset];
 
   // load V with predicate
   load_global_to_share<global_to_shared_line_lanes_V, global_to_shared_copy_lines_per_warp_V, V_smem_iters_row, V_smem_iters_col, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V, CTA_K>(
@@ -263,6 +261,8 @@ __global__ void qk_int_sv_f16_attn_kernel(int8_t *__restrict__ Q, int8_t *__rest
     // ensure K is ready
     cp_async::wait_group<1>();
     __syncthreads();
+
+    sm_scale = original_sm_scale * (q_scale * k_scale);
 
     // compute QK^T
     if constexpr (num_tiles_qk_inner == 1)
@@ -324,8 +324,7 @@ __global__ void qk_int_sv_f16_attn_kernel(int8_t *__restrict__ Q, int8_t *__rest
       &K_lane_base_ptr, K_smem_offset_load, stride_seq_k, smem_K);
     cp_async::commit_group();
 
-    dequant_scale = q_scale * K_scale[k_scale_idx + iter * k_scale_advance_offset];
-    sm_scale = original_sm_scale * dequant_scale;
+    k_scale = K_scale[k_scale_idx + iter * k_scale_advance_offset];
 
     // ensure V is ready
     cp_async::wait_group<1>();
@@ -357,6 +356,8 @@ __global__ void qk_int_sv_f16_attn_kernel(int8_t *__restrict__ Q, int8_t *__rest
     // ensure K is ready
     cp_async::wait_group<1>();
     __syncthreads();
+
+    float dequant_scale = q_scale * k_scale;
 
     // compute QK^T
     if constexpr (num_tiles_qk_inner == 1)
@@ -422,8 +423,7 @@ __global__ void qk_int_sv_f16_attn_kernel(int8_t *__restrict__ Q, int8_t *__rest
       &K_lane_base_ptr, K_smem_offset_load, stride_seq_k, smem_K, K_load_idx_lane_base, kv_len);
     cp_async::commit_group();
 
-    dequant_scale = q_scale * K_scale[k_scale_idx + (num_iterations - 1) * k_scale_advance_offset];
-    sm_scale = original_sm_scale * dequant_scale;
+    k_scale = K_scale[k_scale_idx + (num_iterations - 1) * k_scale_advance_offset];
 
     // ensure V is ready
     cp_async::wait_group<1>();
@@ -454,6 +454,8 @@ __global__ void qk_int_sv_f16_attn_kernel(int8_t *__restrict__ Q, int8_t *__rest
     // ensure K is ready
     cp_async::wait_group<1>();
     __syncthreads();
+
+    float dequant_scale = q_scale * k_scale;
 
     // compute QK^T
     if constexpr (num_tiles_qk_inner == 1)
