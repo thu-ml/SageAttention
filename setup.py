@@ -15,6 +15,7 @@ limitations under the License.
 """
 
 import os
+import re
 import subprocess
 from packaging.version import parse, Version
 from typing import List, Set
@@ -35,20 +36,20 @@ SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "12.0"}
 
 # Compiler flags.
 CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
-NVCC_FLAGS = [
+NVCC_FLAGS_COMMON = [
     "-O3",
     "-std=c++17",
     "-U__CUDA_NO_HALF_OPERATORS__",
     "-U__CUDA_NO_HALF_CONVERSIONS__",
     "--use_fast_math",
-    "--threads=8",
-    "-Xptxas=-v",
+    f"--threads={os.cpu_count()}",
+    # "-Xptxas=-v",
     "-diag-suppress=174", # suppress the specific warning
 ]
 
 ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
 CXX_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
-NVCC_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
+NVCC_FLAGS_COMMON += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
 
 if CUDA_HOME is None:
     raise RuntimeError(
@@ -66,21 +67,41 @@ def get_nvcc_cuda_version(cuda_dir: str) -> Version:
     nvcc_cuda_version = parse(output[release_idx].split(",")[0])
     return nvcc_cuda_version
 
-# Iterate over all GPUs on the current machine. Also you can modify this part to specify the architecture if you want to build for specific GPU architectures.
 compute_capabilities = set()
-device_count = torch.cuda.device_count()
-for i in range(device_count):
-    major, minor = torch.cuda.get_device_capability(i)
-    if major < 8:
-        warnings.warn(f"skipping GPU {i} with compute capability {major}.{minor}")
-        continue
-    compute_capabilities.add(f"{major}.{minor}")
+PARSE_CUDA_ARCH_RE = re.compile(
+    r"(?P<major>[0-9]+)\.(?P<minor>[0-9])(?P<suffix>[a-zA-Z]{0,1})(?P<ptx>\+PTX){0,1}"
+)
+TORCH_CUDA_ARCH_LIST = os.environ.get("TORCH_CUDA_ARCH_LIST")
+if TORCH_CUDA_ARCH_LIST is not None:
+    # Parse the CUDA architecture list from the environment variable.
+    for arch in TORCH_CUDA_ARCH_LIST.replace(" ", ";").split(";"):
+        match = PARSE_CUDA_ARCH_RE.match(arch)
+        if match is None:
+            warnings.warn(f"Invalid CUDA architecture {arch}. Supported architectures are {SUPPORTED_ARCHS}.")
+            continue
+        major = match.group("major")
+        minor = match.group("minor")
+        suffix = match.group("suffix") or ""
+        ptx = match.group("ptx") or ""
+        if f"{major}.{minor}" not in SUPPORTED_ARCHS:
+            warnings.warn(f"Unsupported CUDA architecture {arch}. Supported architectures are {SUPPORTED_ARCHS}.")
+            continue
+        compute_capabilities.add(f"{major}.{minor}{suffix}{ptx}")
+else:
+    # Iterate over all GPUs on the current machine.
+    device_count = torch.cuda.device_count()
+    for i in range(device_count):
+        major, minor = torch.cuda.get_device_capability(i)
+        if major < 8:
+            warnings.warn(f"skipping GPU {i} with compute capability {major}.{minor}")
+            continue
+        compute_capabilities.add(f"{major}.{minor}")
 
 nvcc_cuda_version = get_nvcc_cuda_version(CUDA_HOME)
 if not compute_capabilities:
-    raise RuntimeError("No GPUs found. Please specify the target GPU architectures or build on a machine with GPUs.")
+    raise RuntimeError("No GPUs found. Please specify TORCH_CUDA_ARCH_LIST or build on a machine with GPUs.")
 else:
-    print(f"Detect GPUs with compute capabilities: {compute_capabilities}")
+    print(f"Detected GPUs with compute capabilities: {compute_capabilities}")
 
 # Validate the NVCC CUDA version.
 if nvcc_cuda_version < Version("12.0"):
@@ -95,26 +116,39 @@ if nvcc_cuda_version < Version("12.8") and any(cc.startswith("12.0") for cc in c
     raise RuntimeError(
         "CUDA 12.8 or higher is required for compute capability 12.0.")
 
-# Add target compute capabilities to NVCC flags.
 for capability in compute_capabilities:
     if capability.startswith("8.0"):
         HAS_SM80 = True
-        num = "80"
     elif capability.startswith("8.6"):
         HAS_SM86 = True
-        num = "86"
     elif capability.startswith("8.9"):
         HAS_SM89 = True
-        num = "89"
     elif capability.startswith("9.0"):
         HAS_SM90 = True
-        num = "90a" # need to use sm90a instead of sm90 to use wgmma ptx instruction.
     elif capability.startswith("12.0"):
         HAS_SM120 = True
-        num = "120" # need to use sm120a to use mxfp8/mxfp4/nvfp4 instructions.
-    NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
-    if capability.endswith("+PTX"):
-        NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=compute_{num}"]
+
+def get_nvcc_flags(allowed_nums):
+    NVCC_FLAGS = []
+    # Add target compute capabilities to NVCC flags.
+    for capability in compute_capabilities:
+        if capability.startswith("8.0"):
+            num = "80"
+        elif capability.startswith("8.6"):
+            num = "86"
+        elif capability.startswith("8.9"):
+            num = "89"
+        elif capability.startswith("9.0"):
+            num = "90a" # need to use sm90a instead of sm90 to use wgmma ptx instruction.
+        elif capability.startswith("12.0"):
+            num = "120" # need to use sm120a to use mxfp8/mxfp4/nvfp4 instructions.
+        if num not in allowed_nums:
+            continue
+        NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
+        if capability.endswith("+PTX"):
+            NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=compute_{num}"]
+    NVCC_FLAGS += NVCC_FLAGS_COMMON
+    return NVCC_FLAGS
 
 ext_modules = []
 
@@ -127,7 +161,7 @@ if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM120:
         ],
         extra_compile_args={
             "cxx": CXX_FLAGS,
-            "nvcc": NVCC_FLAGS,
+            "nvcc": get_nvcc_flags(["80", "86", "89", "90a", "120"]),
         },
     )
     ext_modules.append(qattn_extension)
@@ -141,7 +175,7 @@ if HAS_SM89 or HAS_SM120:
         ],
         extra_compile_args={
             "cxx": CXX_FLAGS,
-            "nvcc": NVCC_FLAGS,
+            "nvcc": get_nvcc_flags(["89", "120"]),
         },
     )
     ext_modules.append(qattn_extension)
@@ -155,7 +189,7 @@ if HAS_SM90:
         ],
         extra_compile_args={
             "cxx": CXX_FLAGS,
-            "nvcc": NVCC_FLAGS,
+            "nvcc": get_nvcc_flags(["90a"]),
         },
         extra_link_args=['-lcuda'],
     )
@@ -167,7 +201,7 @@ fused_extension = CUDAExtension(
     sources=["csrc/fused/pybind.cpp", "csrc/fused/fused.cu"],
     extra_compile_args={
         "cxx": CXX_FLAGS,
-        "nvcc": NVCC_FLAGS,
+        "nvcc": get_nvcc_flags(["80", "86", "89", "90a", "120"]),
     },
 )
 ext_modules.append(fused_extension)
