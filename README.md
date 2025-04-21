@@ -2,7 +2,7 @@
 <!-- We are continuously updating more features. You could **Star** and **Watch** our repository to stay updated.
 
 --- -->
-This repository provides the official implementation of SageAttention and SageAttention2.
+This repository provides the official implementation of SageAttention and SageAttention2, which achieve surprising speedup on most GPUs without lossing accuracy across all models in a plug-and-play way.
 
 **SageAttention: Accurate 8-Bit Attention for Plug-and-play Inference Acceleration**  
 Paper: https://arxiv.org/abs/2410.02367  
@@ -23,11 +23,9 @@ Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 + Two-level accumulation strategy for $PV$ to improve accuracy in FP8 MMA and WGMMA.
 + Support `torch.compile` with non-cudagraphs mode and distributed inference.
 
-**🚀 SageAttention achieves surprising speedup on most GPUs without compromising accuracy across all models in a plug-and-play way.**
-
 
 ## Project Updates
-- [2025-03-28]: 🎉SageAttention2 is accepted as an oral paper at SCOPE workshop, ICLR 2025! 
+- [2025-03-28]: 🎉SageAttention2 is accepted as an Oral Paper at SCOPE workshop, ICLR 2025! 
 - [2025-02-25]: 🔥 We release [SpargeAttn](https://github.com/thu-ml/SpargeAttn), a sparse attention based on SageAttention2, which could acclerate any model without training.
 - [2025-02-15]: 🔥 The compilation code is updated to support RTX5090! On RTX5090, SageAttention reaches 560T, 2.7x faster than FlashAttention2!
 - [2025-01-28]: 🔥⚡SageAttention is now available on Hopper GPUs (H100, H800, H20)! It matches the speed of FlashAttention3-FP8 but offers **much better accuracy!**
