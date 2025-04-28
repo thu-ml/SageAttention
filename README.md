@@ -178,13 +178,10 @@ We provide a benchmarking script to compare the speed of different kernels inclu
       year={2025}
 }
 
-@misc{zhang2024sageattention2,
-      title={SageAttention2: Efficient Attention with Thorough Outlier Smoothing and Per-thread INT4 Quantization}, 
-      author={Jintao Zhang and Haofeng Huang and Pengle Zhang and Jia Wei and Jun Zhu and Jianfei Chen},
-      year={2024},
-      eprint={2411.10958},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2411.10958}, 
+@article{zhang2024sageattention2,
+  title={Sageattention2: Efficient attention with thorough outlier smoothing and per-thread int4 quantization},
+  author={Zhang, Jintao and Huang, Haofeng and Zhang, Pengle and Wei, Jia and Zhu, Jun and Chen, Jianfei},
+  journal={arXiv preprint arXiv:2411.10958},
+  year={2024}
 }
 ```
