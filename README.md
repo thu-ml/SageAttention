@@ -25,7 +25,7 @@ Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 
 
 ## Project Updates
-- [2025-05-02]: 🎉SageAttention2 and SpargeAttn are accepted by ICML 2025! 
+- [2025-05-02]: 🎉SageAttention2 and [SpargeAttn](https://github.com/thu-ml/SpargeAttn) are accepted by ICML 2025! 
 - [2025-02-25]: 🔥 We release [SpargeAttn](https://github.com/thu-ml/SpargeAttn), a sparse attention based on SageAttention2, which could acclerate any model without training.
 - [2025-02-15]: 🔥 The compilation code is updated to support RTX5090! On RTX5090, SageAttention reaches 560T, 2.7x faster than FlashAttention2!
 - [2025-01-28]: 🔥⚡SageAttention is now available on Hopper GPUs (H100, H800, H20)! It matches the speed of FlashAttention3-FP8 but offers **much better accuracy!**
@@ -178,10 +178,10 @@ We provide a benchmarking script to compare the speed of different kernels inclu
       year={2025}
 }
 
-@article{zhang2024sageattention2,
+@inproceedings{zhang2024sageattention2,
   title={Sageattention2: Efficient attention with thorough outlier smoothing and per-thread int4 quantization},
   author={Zhang, Jintao and Huang, Haofeng and Zhang, Pengle and Wei, Jia and Zhu, Jun and Chen, Jianfei},
-  journal={arXiv preprint arXiv:2411.10958},
-  year={2024}
+  booktitle={International Conference on Machine Learning (ICML)},
+  year={2025}
 }
 ```
