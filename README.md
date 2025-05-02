@@ -102,7 +102,7 @@ python sageattn_cogvideo.py
 > **Note:** The TOPS results refer only to the Attention Kernel, excluding the quantization and smoothing K.
 
 ### End-to-end performance
-![Local Image](./assets/real_speedup.png)
+![Local Image](./assets/real_speedup.png)  
 
 ![Local Image](./assets/end-to-end_performance.png)
 
