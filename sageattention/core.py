@@ -122,6 +122,11 @@ def sageattn(
     - The tensors `q`, `k`, and `v` must have the dtype ``torch.float16`` or ``torch.bfloat16``
     - All tensors must be on the same cuda device.
     """
+    # NOTE: Ensure the sageattn API is compatible with the official SDPA. 
+    # For example, in SDPA, we pass 'scale' as the softmax scaling factor.
+    if sm_scale is None and kwargs.get("scale", None) is not None:
+        assert isinstance(kwargs["scale"], float), "The scale must be a float."
+        sm_scale = kwargs["scale"]
         
     arch = get_cuda_arch_versions()[q.device.index]
     if arch == "sm80":
@@ -351,6 +356,12 @@ def sageattn_varlen(
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
     assert q.device == k.device == v.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
+
+    # NOTE: Ensure the sageattn API is compatible with the official SDPA. 
+    # For example, in SDPA, we pass 'scale' as the softmax scaling factor.
+    if sm_scale is None and kwargs.get("scale", None) is not None:
+        assert isinstance(kwargs["scale"], float), "The scale must be a float."
+        sm_scale = kwargs["scale"]
 
     # FIXME(DefTruth): make sage attention work compatible with distributed 
     # env, for example, xDiT which launch by torchrun. Without this workaround, 
