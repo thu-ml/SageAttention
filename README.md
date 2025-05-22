@@ -12,6 +12,10 @@ Jintao Zhang, Jia Wei, Haofeng Huang, Pengle Zhang, Jun Zhu, Jianfei Chen
 Paper: https://arxiv.org/abs/2411.10958  
 Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
 
+**SageAttention3: Microscaling FP4 Attention for Inference and An Exploration of 8-Bit Training**  
+Paper: https://arxiv.org/abs/2505.11594  
+Jintao Zhang, Jia Wei, Pengle Zhang, Xiaoming Xu, Haofeng Huang, Haoxu Wang, Kai Jiang, Jun Zhu, Jianfei Chen
+
 ![Local Image](./assets/2.png)
 
 ## Current Features
@@ -182,6 +186,13 @@ We provide a benchmarking script to compare the speed of different kernels inclu
   title={Sageattention2: Efficient attention with thorough outlier smoothing and per-thread int4 quantization},
   author={Zhang, Jintao and Huang, Haofeng and Zhang, Pengle and Wei, Jia and Zhu, Jun and Chen, Jianfei},
   booktitle={International Conference on Machine Learning (ICML)},
+  year={2025}
+}
+
+@article{zhang2025sageattention3,
+  title={SageAttention3: Microscaling FP4 Attention for Inference and An Exploration of 8-Bit Training},
+  author={Zhang, Jintao and Wei, Jia and Zhang, Pengle and Xu, Xiaoming and Huang, Haofeng and Wang, Haoxu and Jiang, Kai and Zhu, Jun and Chen, Jianfei},
+  journal={arXiv preprint arXiv:2505.11594},
   year={2025}
 }
 ```
