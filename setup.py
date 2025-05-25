@@ -34,7 +34,11 @@ HAS_SM120 = False
 SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "12.0"}
 
 # Compiler flags.
-CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
+if os.name == "nt":
+    # TODO: Detect MSVC
+    CXX_FLAGS = ["/O2", "/openmp", "/std:c++17", "-DENABLE_BF16"]
+else:
+    CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
 NVCC_FLAGS = [
     "-O3",
     "-std=c++17",
@@ -153,11 +157,11 @@ if HAS_SM90:
             "csrc/qattn/pybind_sm90.cpp",
             "csrc/qattn/qk_int_sv_f8_cuda_sm90.cu",
         ],
+        libraries=["cuda"],
         extra_compile_args={
             "cxx": CXX_FLAGS,
             "nvcc": NVCC_FLAGS,
         },
-        extra_link_args=['-lcuda'],
     )
     ext_modules.append(qattn_extension)
 
