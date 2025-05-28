@@ -137,7 +137,14 @@ if HAS_SM89 or HAS_SM120:
         name="sageattention._qattn_sm89",
         sources=[
             "csrc/qattn/pybind_sm89.cpp",
-            "csrc/qattn/qk_int_sv_f8_cuda_sm89.cu",
+            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_attn_inst_buf.cu",
+            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f16_attn_inst_buf.cu",
+            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_attn.cu",
+            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn.cu",
+            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_fuse_v_scale_attn.cu",
+            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf.cu",
+            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf.cu"
+            #"csrc/qattn/qk_int_sv_f8_cuda_sm89.cu",
         ],
         extra_compile_args={
             "cxx": CXX_FLAGS,
