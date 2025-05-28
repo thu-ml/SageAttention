@@ -582,7 +582,7 @@ def sageattn_qk_int8_pv_fp8_cuda(
     is_causal: bool = False,
     qk_quant_gran: str = "per_thread",
     sm_scale: Optional[float] = None,
-    pv_accum_dtype: str = "fp32+fp32",
+    pv_accum_dtype: str = "fp32+fp16",
     smooth_k: bool = True,
     smooth_v: bool = False,
     return_lse: bool = False,
@@ -725,7 +725,15 @@ def sageattn_qk_int8_pv_fp8_cuda(
         warnings.warn("pv_accum_dtype is 'fp32+fp32', smooth_v will be ignored.")
         smooth_v = False
 
-    v_fp8, v_scale, vm = per_channel_fp8(v, tensor_layout=tensor_layout, smooth_v=smooth_v)
+    if pv_accum_dtype == 'fp32+fp16' and smooth_v:
+        warnings.warn("pv_accum_dtype is 'fp32+fp16', smooth_v will be ignored.")
+        smooth_v = False
+
+    quant_v_scale_max = 448.0
+    if pv_accum_dtype == 'fp32+fp16':
+        quant_v_scale_max = 2.25
+
+    v_fp8, v_scale, vm = per_channel_fp8(v, tensor_layout=tensor_layout, scale_max=quant_v_scale_max, smooth_v=smooth_v)
 
     if pv_accum_dtype == "fp32":
         if smooth_v:
@@ -734,6 +742,8 @@ def sageattn_qk_int8_pv_fp8_cuda(
             lse = _qattn_sm89.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp32+fp32":
         lse = _qattn_sm89.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+    elif pv_accum_dtype == "fp32+fp16":
+        lse = _qattn_sm89.qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
 
     o = o[..., :head_dim_og]
 
