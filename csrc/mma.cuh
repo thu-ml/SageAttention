@@ -46,7 +46,7 @@ namespace mma{
 #endif
 #endif
 
-#if (__CUDACC_VER_MAJOR__ * 10000 + __CUDACC_VER_MINOR__ * 100 >= 120600)
+#if (__CUDACC_VER_MAJOR__ * 10000 + __CUDACC_VER_MINOR__ * 100 >= 120800)
 #if (!defined(__CUDA_ARCH__) || (__CUDA_ARCH__ >= 890))
 #define MMA_F8F8F16_M16N8K16_ENABLED
 #endif
