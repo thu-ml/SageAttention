@@ -20,14 +20,6 @@ parser.add_argument('--compile', action='store_true', help='Compile the model')
 parser.add_argument('--attention_type', type=str, default='sdpa', choices=['sdpa', 'sage'], help='Attention type')
 args = parser.parse_args()
 
-if args.attention_type == 'sage':
-    F.scaled_dot_product_attention = sageattn
-elif args.attention_type == 'fa3':
-    from sageattention.fa3_wrapper import fa3
-    F.scaled_dot_product_attention = fa3
-elif args.attention_type == 'fa3_fp8':
-    from sageattention.fa3_wrapper import fa3_fp8
-    F.scaled_dot_product_attention = fa3_fp8
 
 
 prompt = "A serene night scene in a forested area. The first frame shows a tranquil lake reflecting the star-filled sky above. The second frame reveals a beautiful sunset, casting a warm glow over the landscape. The third frame showcases the night sky, filled with stars and a vibrant Milky Way galaxy. The video is a time-lapse, capturing the transition from day to night, with the lake and forest serving as a constant backdrop. The style of the video is naturalistic, emphasizing the beauty of the night sky and the peacefulness of the forest."
@@ -38,7 +30,7 @@ torch.manual_seed(42)
 model_id = "Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
 
 pipe = WanPipeline.from_pretrained(model_id, torch_dtype=torch.bfloat16)
-pipe.enable_model_cpu_offload()
+# pipe.enable_model_cpu_offload()
 
 if args.compile:
     pipe.transformer = torch.compile(pipe.transformer, mode="max-autotune-no-cudagraphs")
