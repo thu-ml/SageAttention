@@ -69,10 +69,7 @@ Jintao Zhang, Jia Wei, Pengle Zhang, Xiaoming Xu, Haofeng Huang, Haoxu Wang, Kai
 
 ### Install Package
 
-For the stable Triton-only version, refer to [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) and install using pip:
-```
-pip install sageattention==1.0.6
-```
+For SageAttention V1 in Triton (slower than SageAttention V2/V2++/V3), refer to [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) and install using pip: `pip install sageattention==1.0.6`
 
 To use SageAttention 2.1.1, please **compile from source**:
 ```
