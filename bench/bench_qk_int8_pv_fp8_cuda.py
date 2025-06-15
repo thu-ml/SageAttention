@@ -5,6 +5,19 @@ import sageattention._qattn_sm89 as qattn
 
 import argparse
 
+import subprocess
+import re
+def get_cuda_version():
+    try:
+        output = subprocess.check_output(['nvcc', '--version']).decode()
+        match = re.search(r'release (\d+)\.(\d+)', output)
+        if match:
+            major, minor = int(match.group(1)), int(match.group(2))
+            return major, minor
+    except Exception as e:
+        print("Failed to get CUDA version:", e)
+    return None, None
+
 parser = argparse.ArgumentParser(description='Benchmark QK Int8 PV FP8')
 parser.add_argument('--batch_size', type=int, default=4, help='Batch size')
 parser.add_argument('--num_heads', type=int, default=32, help='Number of heads')
@@ -28,7 +41,11 @@ WARP_K = 64
 #fused_v = False
 
 if fused_v and args.pv_accum_dtype == "fp32":
-    raise SystemExit("fused_v must be used with pv_accum_dtype of fp32+fp32 or fp32+fp16")
+    raise SystemExit("Error: fused_v must be used with pv_accum_dtype of fp32+fp32 or fp32+fp16")
+
+cuda_major_version, cuda_minor_version = get_cuda_version()
+if(cuda_major_version, cuda_minor_version) < (12, 8) and args.pv_accum_dtype == 'fp32+fp16':
+    raise SystemExit("Error: cuda version < 12.8, not support pv_accum_dtype fp32+fp16")
 
 
 if not fused_v:
