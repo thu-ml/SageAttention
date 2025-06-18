@@ -29,6 +29,7 @@ Jintao Zhang, Jia Wei, Pengle Zhang, Xiaoming Xu, Haofeng Huang, Haoxu Wang, Kai
 
 
 ## Project Updates
+- [Here](https://github.com/jt-zhang/Sparse_SageAttention_API) provides a Sparse Attention API based on SageAttention V1, which can compute attention with any block sparse pattern very fast.
 - The code for SageAttention2++ is scheduled for release around June 20, while SageAttention3 is expected to be released around July 15.
 - [2025-05-02]: 🎉SageAttention2 and [SpargeAttn](https://github.com/thu-ml/SpargeAttn) are accepted by ICML 2025! 
 - [2025-02-25]: 🔥 We release [SpargeAttn](https://github.com/thu-ml/SpargeAttn), a sparse attention based on SageAttention2, which could acclerate any model without training.
