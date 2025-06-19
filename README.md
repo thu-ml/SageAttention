@@ -72,11 +72,11 @@ Jintao Zhang, Jia Wei, Pengle Zhang, Xiaoming Xu, Haofeng Huang, Haoxu Wang, Kai
 
 For SageAttention V1 in Triton (slower than SageAttention V2/V2++/V3), refer to [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) and install using pip: `pip install sageattention==1.0.6`
 
-To use SageAttention 2.1.1, please **compile from source**:
+To use SageAttention 2.1.1, please first
+[install PyTorch](https://pytorch.org/get-started/locally/) and then
+**install from source**:
 ```
-git clone https://github.com/thu-ml/SageAttention.git
-cd sageattention 
-python setup.py install  # or pip install -e .
+pip install --no-build-isolation git+https://github.com/thu-ml/SageAttention.git
 ```
 
 To benchmark the speed against FlashAttention3, please compile FlashAttention3 from source:
