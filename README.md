@@ -29,7 +29,7 @@ Jintao Zhang, Jia Wei, Pengle Zhang, Xiaoming Xu, Haofeng Huang, Haoxu Wang, Kai
 
 
 ## Project Updates
-- [2025-06-24]: Please fill out this [Form](https://forms.gle/Q7BWXHhcN4b3ouJ17) to apply for access to the SageAttention2++ code. Applications for the SageAttention3 code are expected to open later.
+- [2025-06-24]: Please access the SageAttention2++ code in [Huggingface](https://huggingface.co/jt-zhang/SageAttention2_plus), where you need to fill out a form first and wait for approval. Applications for the SageAttention3 code are expected to open later.
 - [2025-06-19]: [Here](https://github.com/jt-zhang/Sparse_SageAttention_API) provides a Sparse Attention API based on SageAttention V1, which can compute attention with any block sparse pattern very fast.
 - [2025-05-02]: 🎉SageAttention2 and [SpargeAttn](https://github.com/thu-ml/SpargeAttn) are accepted by ICML 2025! 
 - [2025-02-25]: 🔥 We release [SpargeAttn](https://github.com/thu-ml/SpargeAttn), a sparse attention based on SageAttention2, which could acclerate any model without training.
