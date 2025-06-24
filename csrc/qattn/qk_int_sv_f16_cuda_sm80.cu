@@ -17,6 +17,7 @@
 #include "../utils.cuh"
 #include <cuda_fp16.h>
 #include <cuda_pipeline_primitives.h>
+#include <ATen/cuda/CUDAContext.h>
 #include <torch/extension.h>
 
 #include "../cp_async.cuh"
@@ -718,6 +719,7 @@ torch::Tensor qk_int8_sv_f16_accum_f32_attn(torch::Tensor query,
   int stride_bz_v = value.stride(0);
   int stride_bz_o = output.stride(0);
 
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   int qo_len, kv_len, num_qo_heads, num_kv_heads;
   int stride_seq_q, stride_seq_k, stride_seq_v, stride_seq_o;
   int stride_h_q, stride_h_k, stride_h_v, stride_h_o;
@@ -819,7 +821,7 @@ torch::Tensor qk_int8_sv_f16_accum_f32_attn(torch::Tensor query,
             dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
             dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
 
-            kernel_func<<<grid, block, smem_max>>>(
+            kernel_func<<<grid, block, smem_max, stream>>>(
               query.data_ptr<int8_t>(), 
               key.data_ptr<int8_t>(),
               reinterpret_cast<half*>(value.data_ptr()),
@@ -892,6 +894,7 @@ torch::Tensor qk_int8_sv_f16_accum_f16_attn(torch::Tensor query,
   int stride_bz_v = value.stride(0);
   int stride_bz_o = output.stride(0);
 
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   int qo_len, kv_len, num_qo_heads, num_kv_heads;
   int stride_seq_q, stride_seq_k, stride_seq_v, stride_seq_o;
   int stride_h_q, stride_h_k, stride_h_v, stride_h_o;
@@ -994,7 +997,7 @@ torch::Tensor qk_int8_sv_f16_accum_f16_attn(torch::Tensor query,
             dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
             dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
 
-            kernel_func<<<grid, block, smem_max>>>(
+            kernel_func<<<grid, block, smem_max, stream>>>(
               query.data_ptr<int8_t>(), 
               key.data_ptr<int8_t>(),
               reinterpret_cast<half*>(value.data_ptr()),
@@ -1067,6 +1070,7 @@ torch::Tensor qk_int8_sv_f16_accum_f16_attn_inst_buf(torch::Tensor query,
   int stride_bz_v = value.stride(0);
   int stride_bz_o = output.stride(0);
 
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   int qo_len, kv_len, num_qo_heads, num_kv_heads;
   int stride_seq_q, stride_seq_k, stride_seq_v, stride_seq_o;
   int stride_h_q, stride_h_k, stride_h_v, stride_h_o;
@@ -1169,7 +1173,7 @@ torch::Tensor qk_int8_sv_f16_accum_f16_attn_inst_buf(torch::Tensor query,
             dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
             dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
 
-            kernel_func<<<grid, block, smem_max>>>(
+            kernel_func<<<grid, block, smem_max, stream>>>(
               query.data_ptr<int8_t>(), 
               key.data_ptr<int8_t>(),
               reinterpret_cast<half*>(value.data_ptr()),
@@ -1246,6 +1250,7 @@ torch::Tensor qk_int8_sv_f16_accum_f16_fuse_v_mean_attn(torch::Tensor query,
   int stride_bz_v = value.stride(0);
   int stride_bz_o = output.stride(0);
 
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   int qo_len, kv_len, num_qo_heads, num_kv_heads;
   int stride_seq_q, stride_seq_k, stride_seq_v, stride_seq_o;
   int stride_h_q, stride_h_k, stride_h_v, stride_h_o;
@@ -1353,7 +1358,7 @@ torch::Tensor qk_int8_sv_f16_accum_f16_fuse_v_mean_attn(torch::Tensor query,
             dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
             dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
 
-            kernel_func<<<grid, block, smem_max>>>(
+            kernel_func<<<grid, block, smem_max, stream>>>(
               query.data_ptr<int8_t>(), 
               key.data_ptr<int8_t>(),
               reinterpret_cast<half*>(value.data_ptr()),
