@@ -29,8 +29,8 @@ Jintao Zhang, Jia Wei, Pengle Zhang, Xiaoming Xu, Haofeng Huang, Haoxu Wang, Kai
 
 
 ## Project Updates
-- [Here](https://github.com/jt-zhang/Sparse_SageAttention_API) provides a Sparse Attention API based on SageAttention V1, which can compute attention with any block sparse pattern very fast.
-- The code for SageAttention2++ is scheduled for release around June 20, while SageAttention3 is expected to be released around July 15.
+- [2025-06-24]: Please fill out this [Form](https://forms.gle/Q7BWXHhcN4b3ouJ17) to apply for access to the SageAttention2++ code. Applications for the SageAttention3 code are expected to open later.
+- [2025-06-19]: [Here](https://github.com/jt-zhang/Sparse_SageAttention_API) provides a Sparse Attention API based on SageAttention V1, which can compute attention with any block sparse pattern very fast.
 - [2025-05-02]: 🎉SageAttention2 and [SpargeAttn](https://github.com/thu-ml/SpargeAttn) are accepted by ICML 2025! 
 - [2025-02-25]: 🔥 We release [SpargeAttn](https://github.com/thu-ml/SpargeAttn), a sparse attention based on SageAttention2, which could acclerate any model without training.
 - [2025-02-15]: 🔥 The compilation code is updated to support RTX5090! On RTX5090, SageAttention reaches 560T, 2.7x faster than FlashAttention2!
@@ -180,14 +180,12 @@ We provide a benchmarking script to compare the speed of different kernels inclu
   booktitle={International Conference on Learning Representations (ICLR)},
   year={2025}
 }
-
 @inproceedings{zhang2024sageattention2,
   title={Sageattention2: Efficient attention with thorough outlier smoothing and per-thread int4 quantization},
   author={Zhang, Jintao and Huang, Haofeng and Zhang, Pengle and Wei, Jia and Zhu, Jun and Chen, Jianfei},
   booktitle={International Conference on Machine Learning (ICML)},
   year={2025}
 }
-
 @article{zhang2025sageattention3,
   title={SageAttention3: Microscaling FP4 Attention for Inference and An Exploration of 8-Bit Training},
   author={Zhang, Jintao and Wei, Jia and Zhang, Pengle and Xu, Xiaoming and Huang, Haofeng and Wang, Haoxu and Jiang, Kai and Zhu, Jun and Chen, Jianfei},
