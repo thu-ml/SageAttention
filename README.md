@@ -62,7 +62,7 @@ Jintao Zhang, Jia Wei, Pengle Zhang, Xiaoming Xu, Haofeng Huang, Haoxu Wang, Kai
 ### Base environment
 + `python>=3.9`   , `torch>=2.3.0`  , `triton>=3.0.0` 
 - `CUDA`:
-  + `>=12.8` for Blackwell
+  + `>=12.8` for Blackwell or SageAttn2++
   + `>=12.4` for fp8 support on Ada
   + `>=12.3` for fp8 support on Hopper
   + `>=12.0` for Ampere
