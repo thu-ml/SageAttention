@@ -23,7 +23,7 @@ parser.add_argument('--batch_size', type=int, default=4, help='Batch size')
 parser.add_argument('--num_heads', type=int, default=32, help='Number of heads')
 parser.add_argument('--head_dim', type=int, default=128, help='Head dimension')
 parser.add_argument('--quant_gran', type=str, default='per_warp', choices=['per_warp', 'per_thread'], help='Quantization granularity')
-parser.add_argument('--pv_accum_dtype', type=str, default='fp32+fp32', choices=['fp32', 'fp32+fp32', 'fp32+fp16'])
+parser.add_argument('--pv_accum_dtype', type=str, default='fp32+fp16', choices=['fp32', 'fp32+fp32', 'fp32+fp16'])
 parser.add_argument('--fused_v', action='store_true', help='Enable fused_v kernel to test pv_accumulator accumulator')
 args = parser.parse_args()
 
@@ -45,7 +45,8 @@ if fused_v and args.pv_accum_dtype == "fp32":
 
 cuda_major_version, cuda_minor_version = get_cuda_version()
 if(cuda_major_version, cuda_minor_version) < (12, 8) and args.pv_accum_dtype == 'fp32+fp16':
-    raise SystemExit("Error: cuda version < 12.8, not support pv_accum_dtype fp32+fp16")
+    print("=============\n NOTE: cuda version < 12.8, not support pv_accum_dtype fp32+fp16. \n Swith to 'fp32+fp32' automatically\n=============")
+    args.pv_accum_dtype = 'fp32+fp32'
 
 
 if not fused_v:
