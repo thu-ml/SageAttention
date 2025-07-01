@@ -2,7 +2,7 @@
 <!-- We are continuously updating more features. You could **Star** and **Watch** our repository to stay updated.
 
 --- -->
-This repository provides the official implementation of SageAttention and SageAttention2, which achieve surprising speedup on most GPUs without lossing accuracy across all models in a plug-and-play way.
+This repository provides the official implementation of SageAttention, SageAttention2, and SageAttention2++, which achieve surprising speedup on most GPUs without lossing accuracy across all models in a plug-and-play way.
 
 **SageAttention: Accurate 8-Bit Attention for Plug-and-play Inference Acceleration**  
 Paper: https://arxiv.org/abs/2410.02367  
@@ -17,19 +17,25 @@ Paper: https://arxiv.org/abs/2505.11594
 Jintao Zhang, Jia Wei, Pengle Zhang, Xiaoming Xu, Haofeng Huang, Haoxu Wang, Kai Jiang, Jun Zhu, Jianfei Chen
 
 ![Local Image](./assets/2.png)
+*Note: [SageAttention2++](https://arxiv.org/pdf/2505.21136) achieves higher speed while maintaining the same accuracy performance.*
 
 ## Current Features
 <!-- This is a beta release of SageAttention2. We welcome any feedback on accuracy, performance issues, bugs, feature requests, or suggestions. Please feel free to open an issue or launch a pull request! -->
 
 + Optmized kernels for **Ampere, Ada and Hopper GPUs.**
 + INT8 quantization and smoothing for $QK^\top$ with support for varying granularities.
-+ FP8 quantization for $PV$.
++ FP8 quantization for $PV$, and FP16 accumulator for FP8/FP16 $PV$.
 + Two-level accumulation strategy for $PV$ to improve accuracy in FP8 MMA and WGMMA.
 + Support `torch.compile` with non-cudagraphs mode and distributed inference.
 
 
 ## Project Updates
-- [2025-06-24]: Please access the SageAttention2++ code in [Huggingface](https://huggingface.co/jt-zhang/SageAttention2_plus), where you need to fill out a form first and wait for approval. Applications for the SageAttention3 code are expected to open later.
+- [2025-07-01]: The code of [SageAttention2++](https://arxiv.org/pdf/2505.21136) is released in this repository. We would still greatly appreciate it if you could take a moment to fill out the Form in [Huggingface](https://huggingface.co/jt-zhang/SageAttention2_plus). Thank you very much!
+
+![Local Image](./assets/5090_sageattn2++.png)
+
+![Local Image](./assets/4090_sageattn2++.png)
+
 - [2025-06-19]: [Here](https://github.com/jt-zhang/Sparse_SageAttention_API) provides a Sparse Attention API based on SageAttention V1, which can compute attention with any block sparse pattern very fast.
 - [2025-05-02]: 🎉SageAttention2 and [SpargeAttn](https://github.com/thu-ml/SpargeAttn) are accepted by ICML 2025! 
 - [2025-02-25]: 🔥 We release [SpargeAttn](https://github.com/thu-ml/SpargeAttn), a sparse attention based on SageAttention2, which could acclerate any model without training.
@@ -48,9 +54,7 @@ Jintao Zhang, Jia Wei, Pengle Zhang, Xiaoming Xu, Haofeng Huang, Haoxu Wang, Kai
 ![Local Image](./assets/H20_hd128.png)
 
 - [2025-01-24]: 🎉SageAttention is accepted by ICLR 2025! 
-- [2024-12-20]: 🔥Update the [SageAttention2 Paper](https://arxiv.org/abs/2411.10958).  
-
-![Local Image](./assets/4090_hd128.png)  
+- [2024-12-20]: 🔥Update the [SageAttention2 Paper](https://arxiv.org/abs/2411.10958).   
 
 - [2024-12-20]: 🔥Release SageAttention 2.0.1 Beta! In this version, we introduce a new feature: per-thread quantization, which offers finer granularity while maintaining hardware efficiency.
 - [2024-11-21]: 🔥SageAttention 2.0.0 beta is released! Now SageAttention has measured speedup on L20, L40, A100, A800, and A6000, RTX3090 and RTX4090.
@@ -62,7 +66,7 @@ Jintao Zhang, Jia Wei, Pengle Zhang, Xiaoming Xu, Haofeng Huang, Haoxu Wang, Kai
 ### Base environment
 + `python>=3.9`   , `torch>=2.3.0`  , `triton>=3.0.0` 
 - `CUDA`:
-  + `>=12.8` for Blackwell or SageAttn2++
+  + `>=12.8` for Blackwell or SageAttention2++
   + `>=12.4` for fp8 support on Ada
   + `>=12.3` for fp8 support on Hopper
   + `>=12.0` for Ampere
@@ -72,7 +76,7 @@ Jintao Zhang, Jia Wei, Pengle Zhang, Xiaoming Xu, Haofeng Huang, Haoxu Wang, Kai
 
 For SageAttention V1 in Triton (slower than SageAttention V2/V2++/V3), refer to [SageAttention-1](https://github.com/thu-ml/SageAttention/tree/sageattention-1) and install using pip: `pip install sageattention==1.0.6`
 
-To use SageAttention 2.1.1, please **compile from source**:
+To use SageAttention 2.2.0 (containing SageAttention2++), please **compile from source**:
 ```
 git clone https://github.com/thu-ml/SageAttention.git
 cd sageattention 
@@ -99,7 +103,7 @@ attn_output = sageattn(q, k, v, tensor_layout="HND", is_causal=False)
 + `sageattn`: Automatically selects the optimal kernel based on the GPU to achieve a good performance-accuracy trade-off.
 + `sageattn_qk_int8_pv_fp16_triton`: INT8 quantization for $QK^\top$ and FP16 for $PV$ using Triton backend.
 + `sageattn_qk_int8_pv_fp16_cuda`: INT8 quantization for $QK^\top$ and FP16 for $PV$ using CUDA backend.
-+ `sageattn_qk_int8_pv_fp8_cuda`: INT8 quantization for $QK^\top$ and FP8 for $PV$ using CUDA backend.
++ `sageattn_qk_int8_pv_fp8_cuda`: INT8 quantization for $QK^\top$ and FP8 for $PV$ using CUDA backend. (Note that setting `pv_accum_dtype=fp32+fp16` corresponds to SageAttention2++.)
 + `sageattn_qk_int8_pv_fp8_cuda_sm90`: INT8 quantization for $QK^\top$ and FP8 for $PV$ using CUDA backend, specifically optimized for Hopper GPUs.
 + `sageattn_varlen`: INT8 quantization for $QK^\top$ and FP16 for $PV$ using Triton backend. Support for varying sequence lengths within the same batch.
 
@@ -142,6 +146,10 @@ We provide a benchmarking script to compare the speed of different kernels inclu
 
 `8+8` means the kernel with INT8 quantization for $QK^\top$ and FP8 quantization for $PV$. `8+16` uses FP16 with FP16 accumulator for $PV$.
 
+![Local Image](./assets/5090_sageattn2++.png)
+
+![Local Image](./assets/4090_sageattn2++.png)
+
 ![Local Image](./assets/4090_hd128.png)
 
 ![Local Image](./assets/L20_hd128.png)
@@ -170,6 +178,7 @@ We provide a benchmarking script to compare the speed of different kernels inclu
 #### **End-to-End Speedup:**
 
 ![Local Image](./assets/26.png)
+*Note: SageAttention2++ achieves higher speed.*
 
 ## Citation
 **If you use this code or find our work valuable, please cite:**
@@ -184,6 +193,12 @@ We provide a benchmarking script to compare the speed of different kernels inclu
   title={Sageattention2: Efficient attention with thorough outlier smoothing and per-thread int4 quantization},
   author={Zhang, Jintao and Huang, Haofeng and Zhang, Pengle and Wei, Jia and Zhu, Jun and Chen, Jianfei},
   booktitle={International Conference on Machine Learning (ICML)},
+  year={2025}
+}
+@article{zhang2025sageattention2++,
+  title={Sageattention2++: A more efficient implementation of sageattention2},
+  author={Zhang, Jintao and Xu, Xiaoming and Wei, Jia and Huang, Haofeng and Zhang, Pengle and Xiang, Chendong and Zhu, Jun and Chen, Jianfei},
+  journal={arXiv preprint arXiv:2505.21136},
   year={2025}
 }
 @article{zhang2025sageattention3,
