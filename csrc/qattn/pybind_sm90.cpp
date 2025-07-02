@@ -22,4 +22,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
   m.def("qk_int8_sv_f8_accum_f32_attn_inst_buf", &qk_int8_sv_f8_accum_f32_attn_inst_buf);
   m.def("qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf", &qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf);
+  m.def("qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90", &qk_int8_sv_f8_accum_f32_attn_inst_buf_dsk_sm90);
+  m.def("qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_dsk_sm90", &qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_dsk_sm90);
 }
