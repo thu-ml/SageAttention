@@ -55,7 +55,8 @@ import warnings
 
 import subprocess
 import re
-def get_cuda_version():
+# Get CUDA version once at module load
+def _detect_cuda_version():
     try:
         output = subprocess.check_output(['nvcc', '--version']).decode()
         match = re.search(r'release (\d+)\.(\d+)', output)
@@ -65,6 +66,13 @@ def get_cuda_version():
     except Exception as e:
         print("Failed to get CUDA version:", e)
     return None, None
+
+# Store it in a module-level variable
+_CUDA_VERSION = _detect_cuda_version()
+
+# Now the function just returns the cached value
+def get_cuda_version():
+    return _CUDA_VERSION
 
 def get_cuda_arch_versions():
     cuda_archs = []
