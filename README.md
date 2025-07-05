@@ -79,7 +79,7 @@ For SageAttention V1 in Triton (slower than SageAttention V2/V2++/V3), refer to 
 To use SageAttention 2.2.0 (containing SageAttention2++), please **compile from source**:
 ```
 git clone https://github.com/thu-ml/SageAttention.git
-cd sageattention 
+cd SageAttention 
 python setup.py install  # or pip install -e .
 ```
 
