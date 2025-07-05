@@ -581,7 +581,8 @@ void SageAttentionSM90Dispatched(
   const uint32_t stride_bz_k, const uint32_t stride_seq_k, const uint32_t stride_h_k,
   const uint32_t stride_bz_v, const uint32_t stride_h_v, const uint32_t stride_d_v,
   const uint32_t stride_bz_o, const uint32_t stride_seq_o, const uint32_t stride_h_o,
-  float sm_scale)
+  float sm_scale,
+  cudaStream_t stream)
 {
   constexpr MaskMode mask_mode = is_causal ? MaskMode::kCausal : MaskMode::kNone;
 
@@ -596,7 +597,7 @@ void SageAttentionSM90Dispatched(
       cudaFuncAttributeMaxDynamicSharedMemorySize, sMemSize);
   
   dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
-  kernel<<<grid, NUM_THREADS, sMemSize>>>(
+  kernel<<<grid, NUM_THREADS, sMemSize, stream>>>(
     tma_map_Q,
     tma_map_K,
     tma_map_V,

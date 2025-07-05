@@ -692,7 +692,8 @@ void SageAttentionSM89Dispatched(
   const uint32_t stride_bz_k, const uint32_t stride_seq_k, const uint32_t stride_h_k,
   const uint32_t stride_bz_v, const uint32_t stride_h_v, const uint32_t stride_d_v,
   const uint32_t stride_bz_o, const uint32_t stride_seq_o, const uint32_t stride_h_o,
-  float sm_scale)
+  float sm_scale,
+  cudaStream_t stream)
 {
   constexpr MaskMode mask_mode = is_causal ? MaskMode::kCausal : MaskMode::kNone;
 
@@ -706,7 +707,7 @@ void SageAttentionSM89Dispatched(
   dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
   dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
 
-  kernel_func<<<grid, block, smem_max>>>(
+  kernel_func<<<grid, block, smem_max, stream>>>(
     Q, 
     K,
     reinterpret_cast<int8_t*>(V), // legacy

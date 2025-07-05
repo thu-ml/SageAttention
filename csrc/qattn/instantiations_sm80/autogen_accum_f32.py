@@ -33,7 +33,8 @@ param_list = (
     "  const uint32_t stride_bz_k, const uint32_t stride_seq_k, const uint32_t stride_h_k,\n"
     "  const uint32_t stride_bz_v, const uint32_t stride_seq_v, const uint32_t stride_h_v,\n"
     "  const uint32_t stride_bz_o, const uint32_t stride_seq_o, const uint32_t stride_h_o,\n"
-    "  float sm_scale\n"
+    "  float sm_scale,\n"
+    "  cudaStream_t stream\n"
 )
 
 # Generate all combinations

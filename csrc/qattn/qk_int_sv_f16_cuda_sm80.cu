@@ -126,6 +126,9 @@ torch::Tensor qk_int8_sv_f16_accum_f32_attn(torch::Tensor query,
 
   auto output_dtype = output.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{query.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
     DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
       DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
@@ -165,7 +168,8 @@ torch::Tensor qk_int8_sv_f16_accum_f32_attn(torch::Tensor query,
               stride_bz_k, stride_seq_k, stride_h_k,
               stride_bz_v, stride_seq_v, stride_h_v,
               stride_bz_o, stride_seq_o, stride_h_o,
-              sm_scale);
+              sm_scale,
+              stream);
           });
         });
       });
@@ -283,6 +287,9 @@ torch::Tensor qk_int8_sv_f16_accum_f16_attn(torch::Tensor query,
 
   auto output_dtype = output.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{query.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
     DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
       DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
@@ -323,7 +330,8 @@ torch::Tensor qk_int8_sv_f16_accum_f16_attn(torch::Tensor query,
               stride_bz_k, stride_seq_k, stride_h_k,
               stride_bz_v, stride_seq_v, stride_h_v,
               stride_bz_o, stride_seq_o, stride_h_o,
-              sm_scale);
+              sm_scale,
+              stream);
           });
         });
       });
@@ -441,6 +449,9 @@ torch::Tensor qk_int8_sv_f16_accum_f16_attn_inst_buf(torch::Tensor query,
 
   auto output_dtype = output.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{query.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
     DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
       DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
@@ -481,7 +492,8 @@ torch::Tensor qk_int8_sv_f16_accum_f16_attn_inst_buf(torch::Tensor query,
               stride_bz_k, stride_seq_k, stride_h_k,
               stride_bz_v, stride_seq_v, stride_h_v,
               stride_bz_o, stride_seq_o, stride_h_o,
-              sm_scale);
+              sm_scale,
+              stream);
           });
         });
       });
@@ -604,6 +616,9 @@ torch::Tensor qk_int8_sv_f16_accum_f16_fuse_v_mean_attn(torch::Tensor query,
   auto output_dtype = output.scalar_type();
   auto value_mean_dtype = value_mean.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{query.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   TORCH_CHECK(value_mean_dtype == output_dtype, "value_mean and output must have the same dtype");
 
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
@@ -648,7 +663,8 @@ torch::Tensor qk_int8_sv_f16_accum_f16_fuse_v_mean_attn(torch::Tensor query,
               stride_bz_k, stride_seq_k, stride_h_k,
               stride_bz_v, stride_seq_v, stride_h_v,
               stride_bz_o, stride_seq_o, stride_h_o,
-              sm_scale);
+              sm_scale,
+              stream);
           });
         });
       });

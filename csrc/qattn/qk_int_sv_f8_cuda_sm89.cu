@@ -126,6 +126,9 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn(torch::Tensor query,
 
   auto output_dtype = output.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{query.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
     DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
       DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
@@ -169,7 +172,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn(torch::Tensor query,
               stride_bz_k, stride_seq_k, stride_h_k,
               stride_bz_v, stride_h_v, stride_d_v,
               stride_bz_o, stride_seq_o, stride_h_o,
-              sm_scale);
+              sm_scale,
+              stream);
           });
         });
       });
@@ -286,6 +290,9 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(torch::Tensor query,
 
   auto output_dtype = output.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{query.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
     DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
       DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
@@ -329,7 +336,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(torch::Tensor query,
               stride_bz_k, stride_seq_k, stride_h_k,
               stride_bz_v, stride_h_v, stride_d_v,
               stride_bz_o, stride_seq_o, stride_h_o,
-              sm_scale);
+              sm_scale,
+              stream);
           });
         });
       });
@@ -456,6 +464,9 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn(torch::Tenso
 
   auto output_dtype = output.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{query.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
     DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
       DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
@@ -502,7 +513,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn(torch::Tenso
               stride_bz_k, stride_seq_k, stride_h_k,
               stride_bz_v, stride_h_v, stride_d_v,
               stride_bz_o, stride_seq_o, stride_h_o,
-              sm_scale);
+              sm_scale,
+              stream);
           });
         });
       });
@@ -624,6 +636,9 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn(torch::Tensor query,
 
   auto output_dtype = output.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{query.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
     DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
       DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
@@ -670,7 +685,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn(torch::Tensor query,
               stride_bz_k, stride_seq_k, stride_h_k,
               stride_bz_v, stride_h_v, stride_d_v,
               stride_bz_o, stride_seq_o, stride_h_o,
-              sm_scale);
+              sm_scale,
+              stream);
           });
         });
       });
@@ -792,6 +808,9 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(torch::Tensor q
 
   auto output_dtype = output.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{query.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
     DISPATCH_CAUSAL(is_causal, IS_CAUSAL, {
       DISPATCH_QK_QUANT_GRAN(qk_quant_gran, QK_QUANT_GRAN, {
@@ -838,7 +857,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(torch::Tensor q
               stride_bz_k, stride_seq_k, stride_h_k,
               stride_bz_v, stride_h_v, stride_d_v,
               stride_bz_o, stride_seq_o, stride_h_o,
-              sm_scale);
+              sm_scale,
+              stream);
           });
         });
       });

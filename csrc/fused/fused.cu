@@ -478,6 +478,9 @@ void quant_per_block_int8_cuda(
 
   auto input_dtype = input.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{input.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(input_dtype, c_type, {
     DISPATCH_BLOCK_SIZE(block_size, BLOCK_SIZE, {
       DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
@@ -491,7 +494,7 @@ void quant_per_block_int8_cuda(
 
         dim3 block(BLOCK_SIZE * (HEAD_DIM / 8) / num_pack_per_thread);
 
-        QuantInt8Kernel<HEAD_DIM, BLOCK_SIZE, num_pack_per_thread, true, false, c_type><<<grid, block>>>(
+        QuantInt8Kernel<HEAD_DIM, BLOCK_SIZE, num_pack_per_thread, true, false, c_type><<<grid, block, 0, stream>>>(
           reinterpret_cast<c_type*>(input.data_ptr()),
           nullptr,
           output.data_ptr<int8_t>(),
@@ -560,6 +563,9 @@ void quant_per_block_int8_cuda(
 
   auto input_dtype = input.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{input.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(input_dtype, c_type, {
     DISPATCH_BLOCK_SIZE(block_size, BLOCK_SIZE, {
       DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
@@ -573,7 +579,7 @@ void quant_per_block_int8_cuda(
 
         dim3 block(BLOCK_SIZE * (HEAD_DIM / 8) / num_pack_per_thread);
 
-        QuantInt8Kernel<HEAD_DIM, BLOCK_SIZE, num_pack_per_thread, false, false, c_type><<<grid, block>>>(
+        QuantInt8Kernel<HEAD_DIM, BLOCK_SIZE, num_pack_per_thread, false, false, c_type><<<grid, block, 0, stream>>>(
           reinterpret_cast<c_type*>(input.data_ptr()),
           nullptr,
           output.data_ptr<int8_t>(),
@@ -647,6 +653,9 @@ void quant_per_block_int8_fuse_sub_mean_cuda(
   auto input_dtype = input.scalar_type();
   auto mean_dtype = mean.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{input.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   TORCH_CHECK(input_dtype == mean_dtype, "Input and mean must have the same data type");
 
   DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(input_dtype, c_type, {
@@ -663,7 +672,7 @@ void quant_per_block_int8_fuse_sub_mean_cuda(
 
         dim3 block(BLOCK_SIZE * (HEAD_DIM / 8) / num_pack_per_thread);
 
-        QuantInt8Kernel<HEAD_DIM, BLOCK_SIZE, num_pack_per_thread, false, true, c_type><<<grid, block>>>(
+        QuantInt8Kernel<HEAD_DIM, BLOCK_SIZE, num_pack_per_thread, false, true, c_type><<<grid, block, 0, stream>>>(
           reinterpret_cast<c_type*>(input.data_ptr()),
           reinterpret_cast<c_type*>(mean.data_ptr()),
           output.data_ptr<int8_t>(),
@@ -734,6 +743,9 @@ void quant_per_warp_int8_cuda(
 
   auto input_dtype = input.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{input.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(input_dtype, c_type, {
     DISPATCH_BLOCK_SIZE(block_size, BLOCK_SIZE, {
       DISPATCH_WARP_BLOCK_SIZE(warp_block_size, WARP_BLOCK_SIZE, {
@@ -748,7 +760,7 @@ void quant_per_warp_int8_cuda(
 
           dim3 block(WARP_BLOCK_SIZE * (HEAD_DIM / 8) / num_pack_per_thread);
 
-          QuantInt8Kernel<HEAD_DIM, WARP_BLOCK_SIZE, num_pack_per_thread, false, false, c_type><<<grid, block>>>(
+          QuantInt8Kernel<HEAD_DIM, WARP_BLOCK_SIZE, num_pack_per_thread, false, false, c_type><<<grid, block, 0, stream>>>(
             reinterpret_cast<c_type*>(input.data_ptr()),
             nullptr,
             output.data_ptr<int8_t>(),
@@ -817,6 +829,9 @@ void sub_mean_cuda(
   auto input_dtype = input.scalar_type();
   auto mean_dtype = mean.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{input.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   TORCH_CHECK(input_dtype == mean_dtype, "Input and mean must have the same data type");
 
   DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(input_dtype, c_type, {
@@ -833,7 +848,7 @@ void sub_mean_cuda(
 
         dim3 block(BLOCK_SIZE * (HEAD_DIM / 8) / num_pack_per_thread);
 
-        SubMeanKernel<HEAD_DIM, BLOCK_SIZE, num_pack_per_thread><<<grid, block>>>(
+        SubMeanKernel<HEAD_DIM, BLOCK_SIZE, num_pack_per_thread><<<grid, block, 0, stream>>>(
           reinterpret_cast<c_type*>(input.data_ptr()),
           reinterpret_cast<c_type*>(mean.data_ptr()),
           reinterpret_cast<half*>(output.data_ptr()),
@@ -900,6 +915,9 @@ void transpose_pad_permute_cuda(
   auto input_dtype = input.scalar_type();
   auto output_dtype = output.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{input.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   TORCH_CHECK(input_dtype == output_dtype, "Input and output must have the same data type");
 
   DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(input_dtype, c_type, {
@@ -910,7 +928,7 @@ void transpose_pad_permute_cuda(
 
       dim3 block(CTA_SIZE * (HEAD_DIM / 8));
 
-      TransposePadPermuteKernel<HEAD_DIM, CTA_SIZE, true, c_type><<<grid, block>>>(
+      TransposePadPermuteKernel<HEAD_DIM, CTA_SIZE, true, c_type><<<grid, block, 0, stream>>>(
         reinterpret_cast<c_type*>(input.data_ptr()),
         reinterpret_cast<c_type*>(output.data_ptr()),
         num_tokens,
@@ -982,8 +1000,11 @@ void scale_fuse_quant_cuda(
 
   auto input_dtype = input.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{input.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(input_dtype, c_type, {
-    MeanScaleKernel<64, false, c_type><<<grid, block>>>(
+    MeanScaleKernel<64, false, c_type><<<grid, block, 0, stream>>>(
       reinterpret_cast<c_type*>(input.data_ptr()),
       reinterpret_cast<int8_t*>(output.data_ptr()),
       nullptr,
@@ -1065,8 +1086,11 @@ void mean_scale_fuse_quant_cuda(
 
   auto input_dtype = input.scalar_type();
 
+  at::cuda::CUDAGuard device_guard{input.device()};
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+
   DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(input_dtype, c_type, {
-    MeanScaleKernel<64, true, c_type><<<grid, block>>>(
+    MeanScaleKernel<64, true, c_type><<<grid, block, 0, stream>>>(
       reinterpret_cast<c_type*>(input.data_ptr()),
       reinterpret_cast<int8_t*>(output.data_ptr()),
       reinterpret_cast<float*>(mean.data_ptr()),
