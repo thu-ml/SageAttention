@@ -159,6 +159,7 @@ if HAS_SM90:
         sources=[
             "csrc/qattn/pybind_sm90.cpp",
             "csrc/qattn/qk_int_sv_f8_cuda_sm90.cu",
+            "csrc/qattn/qk_int_sv_f8_cuda_dsk_sm90.cu",
         ],
         extra_compile_args={
             "cxx": CXX_FLAGS,
