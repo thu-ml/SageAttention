@@ -21,6 +21,7 @@
 #include "../cp_async.cuh"
 #include "../mma.cuh"
 #include "../permuted_smem.cuh"
+#include "../math.cuh"
 #include "../numeric_conversion.cuh"
 
 #define WARP_SIZE 32
