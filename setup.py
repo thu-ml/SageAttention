@@ -16,8 +16,8 @@ limitations under the License.
 
 import os
 import subprocess
+import threading
 from packaging.version import parse, Version
-from typing import List, Set
 import warnings
 
 from setuptools import setup, find_packages
@@ -160,7 +160,14 @@ if HAS_SM89 or HAS_SM120:
         name="sageattention._qattn_sm89",
         sources=[
             "csrc/qattn/pybind_sm89.cpp",
-            "csrc/qattn/qk_int_sv_f8_cuda_sm89.cu",
+            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_attn_inst_buf.cu",
+            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f16_attn_inst_buf.cu",
+            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_attn.cu",
+            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn.cu",
+            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_fuse_v_scale_attn.cu",
+            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf.cu",
+            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf.cu"
+            #"csrc/qattn/qk_int_sv_f8_cuda_sm89.cu",
         ],
         extra_compile_args={
             "cxx": CXX_FLAGS,
@@ -195,9 +202,47 @@ fused_extension = CUDAExtension(
 )
 ext_modules.append(fused_extension)
 
+
+parallel = None
+if 'EXT_PARALLEL' in os.environ:
+    try:
+        parallel = int(os.getenv('EXT_PARALLEL'))
+    finally:
+        pass
+
+
+# Prevent file conflicts when multiple extensions are compiled simultaneously
+class BuildExtensionSeparateDir(BuildExtension):
+    build_extension_patch_lock = threading.Lock()
+    thread_ext_name_map = {}
+
+    def finalize_options(self):
+        if parallel is not None:
+            self.parallel = parallel
+        super().finalize_options()
+
+    def build_extension(self, ext):
+        with self.build_extension_patch_lock:
+            if not getattr(self.compiler, "_compile_separate_output_dir", False):
+                compile_orig = self.compiler.compile
+
+                def compile_new(*args, **kwargs):
+                    return compile_orig(*args, **{
+                        **kwargs,
+                        "output_dir": os.path.join(
+                            kwargs["output_dir"],
+                            self.thread_ext_name_map[threading.current_thread().ident]),
+                    })
+                self.compiler.compile = compile_new
+                self.compiler._compile_separate_output_dir = True
+        self.thread_ext_name_map[threading.current_thread().ident] = ext.name
+        objects = super().build_extension(ext)
+        return objects
+
+
 setup(
     name='sageattention', 
-    version='2.1.1',  
+    version='2.2.0',  
     author='SageAttention team',
     license='Apache 2.0 License',  
     description='Accurate and efficient plug-and-play low-bit attention.',  
@@ -207,5 +252,5 @@ setup(
     packages=find_packages(),
     python_requires='>=3.9',
     ext_modules=ext_modules,
-    cmdclass={"build_ext": BuildExtension},
+    cmdclass={"build_ext": BuildExtensionSeparateDir} if ext_modules else {},
 )
