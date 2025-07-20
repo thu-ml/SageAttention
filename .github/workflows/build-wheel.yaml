@@ -1,0 +1,148 @@
+name: Build and Release Wheel
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "pyproject.toml"
+
+permissions:
+  contents: write
+
+jobs:
+  build-wheel-linux:
+    runs-on: ubuntu-latest
+    container:
+      image: "pytorch/manylinux2_28-builder:cuda${{ matrix.cuda }}"
+    strategy:
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+        torch: ["2.7", "2.8"]
+        cuda: ["12.8"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Check current PyTorch version
+        id: check-torch-version
+        run: |
+          echo "Fetching PyTorch latest stable release..."
+          LATEST_STABLE=$(curl -s https://api.github.com/repos/pytorch/pytorch/releases/latest | grep '"tag_name"' | sed -E 's/.*"v?([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
+          if [ -z "$LATEST_STABLE" ]; then
+            echo "Failed to fetch latest stable version, falling back to checking PyPI"
+            LATEST_STABLE=$(curl -s https://pypi.org/pypi/torch/json | grep -o '"version":"[0-9]\+\.[0-9]\+\.[0-9]\+"' | head -1 | sed 's/"version":"\([^"]*\)"/\1/')
+          fi
+          echo "Latest stable PyTorch version: $LATEST_STABLE"
+          echo "PYTORCH_LATEST_STABLE=$LATEST_STABLE" >> $GITHUB_ENV
+
+      - name: Set environment variables
+        id: set-env
+        run: |
+          echo "Reading version from setup.py"
+          PACKAGE_VERSION=$(grep -E "^\s*version\s*=\s*['\"][^'\"]*['\"]" setup.py | sed -E "s/.*version\s*=\s*['\"]([^'\"]*)['\"].*/\1/")
+          echo "Package version: $PACKAGE_VERSION"
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> $GITHUB_ENV
+
+          CUDA_VERSION_NUM=$(echo ${{ matrix.cuda }} | tr -d '.')
+          echo "CUDA_VERSION_NUM=$CUDA_VERSION_NUM" >> $GITHUB_ENV
+
+          PYTHON_VERSION_NUM=$(echo ${{ matrix.python }} | tr -d '.')
+          echo "PYTHON_VERSION_NUM=$PYTHON_VERSION_NUM" >> $GITHUB_ENV
+
+          PYTHON_ROOT_PATH=/opt/python/cp$PYTHON_VERSION_NUM-cp$PYTHON_VERSION_NUM
+          echo "PYTHON_ROOT_PATH=$PYTHON_ROOT_PATH" >> $GITHUB_ENV
+
+          if [ -n "${{ env.PYTORCH_LATEST_STABLE }}" ]; then
+            PYTORCH_LATEST_MAJOR=$(echo ${{ env.PYTORCH_LATEST_STABLE }} | cut -d. -f1)
+            PYTORCH_LATEST_MINOR=$(echo ${{ env.PYTORCH_LATEST_STABLE }} | cut -d. -f2)
+            PYTORCH_MATRIX_MAJOR=$(echo ${{ matrix.torch }} | cut -d. -f1)
+            PYTORCH_MATRIX_MINOR=$(echo ${{ matrix.torch }} | cut -d. -f2)
+
+            if [ "$PYTORCH_MATRIX_MAJOR" -gt "$PYTORCH_LATEST_MAJOR" ] || ([ "$PYTORCH_MATRIX_MAJOR" -eq "$PYTORCH_LATEST_MAJOR" ] && [ "$PYTORCH_MATRIX_MINOR" -gt "$PYTORCH_LATEST_MINOR" ]); then
+              echo "PyTorch ${{ matrix.torch }} is newer than stable version $PYTORCH_LATEST_MAJOR.$PYTORCH_LATEST_MINOR, will use nightly"
+              echo "PYTORCH_NIGHTLY=true" >> $GITHUB_ENV
+              echo "PYTORCH_INDEX_URL=https://download.pytorch.org/whl/nightly/cu$CUDA_VERSION_NUM" >> $GITHUB_ENV
+            else
+              echo "PyTorch ${{ matrix.torch }} is a stable version"
+              echo "PYTORCH_NIGHTLY=false" >> $GITHUB_ENV
+              echo "PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu$CUDA_VERSION_NUM" >> $GITHUB_ENV
+            fi
+          else
+            echo "Could not determine latest stable version, assuming ${{ matrix.torch }} is stable"
+            echo "PYTORCH_NIGHTLY=false" >> $GITHUB_ENV
+            echo "PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu$CUDA_VERSION_NUM" >> $GITHUB_ENV
+          fi
+
+          if [ "${{ env.CUDA_VERSION_NUM }}" -ge "128" ]; then
+            echo "TORCH_CUDA_ARCH_LIST=8.0;8.6;8.9;9.0;12.0" >> $GITHUB_ENV
+          else
+            echo "TORCH_CUDA_ARCH_LIST=8.0;8.6;8.9;9.0" >> $GITHUB_ENV
+          fi
+
+      - name: Install dependencies
+        run: |
+          rm -rf build
+          gcc --version && g++ --version
+
+          if [ "$PYTORCH_NIGHTLY" = "true" ]; then
+            echo "Installing PyTorch ${{ matrix.torch }} from nightly channel..."
+            ${{ env.PYTHON_ROOT_PATH }}/bin/pip install --no-cache-dir --pre torch==${{ matrix.torch }}.* torchvision torchaudio --index-url ${{ env.PYTORCH_INDEX_URL }}
+          else
+            echo "Installing PyTorch ${{ matrix.torch }} from stable channel..."
+            ${{ env.PYTHON_ROOT_PATH }}/bin/pip install --no-cache-dir torch==${{ matrix.torch }}.* torchvision torchaudio --index-url ${{ env.PYTORCH_INDEX_URL }}
+          fi
+
+          ${{ env.PYTHON_ROOT_PATH }}/bin/pip install -U build ninja wheel setuptools triton>=3.0.0
+
+      - name: Build wheel
+        run: |
+          export MAX_JOBS=2
+          export LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:$LIBRARY_PATH
+          ${{ env.PYTHON_ROOT_PATH }}/bin/python -m build --wheel --no-isolation
+
+      - name: Rename wheel with version info
+        working-directory: dist
+        run: |
+          for whl in *.whl; do
+            prefix="sageattention-${{ env.PACKAGE_VERSION }}"
+            suffix="${whl#${prefix}-}"
+            new_name="${prefix}+cu${{ env.CUDA_VERSION_NUM }}torch${{ matrix.torch }}-${suffix}"
+            
+            mv "$whl" "$new_name"
+            echo "Renamed: $whl -> $new_name"
+          done
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-torch${{ matrix.torch }}-cu${{ env.CUDA_VERSION_NUM }}-cp${{ env.PYTHON_VERSION_NUM }}
+          path: dist/*.whl
+
+  create-release:
+    needs: build-wheel-linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get package version
+        id: get-version
+        run: |
+          PACKAGE_VERSION=$(grep -E "^\s*version\s*=\s*['\"][^'\"]*['\"]" setup.py | sed -E "s/.*version\s*=\s*['\"]([^'\"]*)['\"].*/\1/")
+          echo "Package version: $PACKAGE_VERSION"
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> $GITHUB_ENV
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: wheels
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.PACKAGE_VERSION }}
+          name: v${{ env.PACKAGE_VERSION }}
+          draft: false
+          prerelease: false
+          files: wheels/*.whl
