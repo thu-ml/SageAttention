@@ -46,6 +46,12 @@ namespace mma{
 #endif
 #endif
 
+#if (__CUDACC_VER_MAJOR__ * 10000 + __CUDACC_VER_MINOR__ * 100 >= 120800)
+#if (!defined(__CUDA_ARCH__) || (__CUDA_ARCH__ >= 890))
+#define MMA_F8F8F16_M16N8K16_ENABLED
+#endif
+#endif
+
 #if defined(__CUDA_ARCH__)
 #define RUNTIME_ASSERT(x) __brkpt()
 #else
@@ -551,6 +557,66 @@ __device__ __forceinline__ void mma_sync_m16n8k32_row_col_f8f8f32(float* C, uint
   RUNTIME_ASSERT("Unsupported CUDA architecture for mma instruction");
 #endif
 }
+
+/*!
+ * \brief Wrapper of the mma m16n16k32 instruction for row major and column major fp8 matrix
+ *   multiplication, accumulated in fp16.
+ * \tparam mma_mode The mode of mma instruction, either kInit or kInplaceUpdate
+ * \param C pointer to the accumulator
+ * \param A pointer to the fragment of matrix A
+ * \param B pointer to the fragment of matrix B
+ */
+template <MMAMode mma_mode = MMAMode::kInplaceUpdate>
+__device__ __forceinline__ void mma_sync_m16n16k32_row_col_f8f8f16(uint32_t* C_uint32, uint32_t* A,
+                                                                   uint32_t* B) {
+ //uint32_t* C_uint32 = reinterpret_cast<uint32_t*>(C);
+#ifdef MMA_F8F8F16_M16N8K16_ENABLED
+  if constexpr (mma_mode == MMAMode::kInplaceUpdate)
+  {
+    asm volatile(
+        "mma.sync.aligned.m16n8k32.row.col.f16.e4m3.e4m3.f16 "
+        "{%0,  %1},"
+        "{%2,  %3,  %4,  %5},"
+        "{%6,  %7},"
+        "{%8,  %9};\n"
+        : "=r"(C_uint32[0]), "=r"(C_uint32[1])
+        : "r"(A[0]), "r"(A[1]), "r"(A[2]), "r"(A[3]), "r"(B[0]), "r"(B[1]), "r"(C_uint32[0]), "r"(C_uint32[1]));
+    
+    asm volatile(
+        "mma.sync.aligned.m16n8k32.row.col.f16.e4m3.e4m3.f16 "
+        "{%0,  %1},"
+        "{%2,  %3,  %4,  %5},"
+        "{%6,  %7},"
+        "{%8,  %9};\n"
+        : "=r"(C_uint32[2]), "=r"(C_uint32[3])
+        : "r"(A[0]), "r"(A[1]), "r"(A[2]), "r"(A[3]), "r"(B[2]), "r"(B[3]), "r"(C_uint32[2]), "r"(C_uint32[3]));
+  }
+  else if constexpr (mma_mode == MMAMode::kInit)
+  {
+    asm volatile(
+        "mma.sync.aligned.m16n8k32.row.col.f16.e4m3.e4m3.f16 "
+        "{%0,  %1},"
+        "{%2,  %3,  %4,  %5},"
+        "{%6,  %7},"
+        "{%8,  %9};\n"
+        : "=r"(C_uint32[0]), "=r"(C_uint32[1])
+        : "r"(A[0]), "r"(A[1]), "r"(A[2]), "r"(A[3]), "r"(B[0]), "r"(B[1]), "r"(0), "r"(0));
+
+    asm volatile(
+        "mma.sync.aligned.m16n8k32.row.col.f16.e4m3.e4m3.f16 "
+        "{%0,  %1},"
+        "{%2,  %3,  %4,  %5},"
+        "{%6,  %7},"
+        "{%8,  %9};\n"
+        : "=r"(C_uint32[2]), "=r"(C_uint32[3])
+        : "r"(A[0]), "r"(A[1]), "r"(A[2]), "r"(A[3]), "r"(B[2]), "r"(B[3]), "r"(0), "r"(0));
+  }
+#else
+  RUNTIME_ASSERT("Unsupported CUDA architecture for mma instruction");
+#endif
+}
+
+
 
 /*!
  * \brief Wrapper of the mma m16n16k32 instruction for row major and column major fp8 matrix

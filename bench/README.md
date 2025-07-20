@@ -16,12 +16,12 @@ python setup.py install
 ## Available Arguments
 Some kernels support passing the following arguments:
 + `--quant_gran`: Quantization granularity for $Q$ and $K$.
-+ `--pv_accum_dtype`: Accumulation data type for $PV$. Those with `+` corresponds to the two-level accumulation strategy.
++ `--pv_accum_dtype`: Accumulation data type for $PV$. Those with `+` corresponds to the two-level accumulation strategy. **`fp32+fp16` means SageAttention2++.**
 
 Example usage:
 ```bash
 # on RTX 4090
-python bench_qk_int8_pv_fp8_cuda.py --pv_accum_dtype fp32+fp32 --quant_gran per_warp
+python bench_qk_int8_pv_fp8_cuda.py --pv_accum_dtype fp32+fp16 --quant_gran per_warp
 
 # on H100
 python bench_qk_int8_pv_fp8_cuda_sm90.py --pv_accum_dtype fp32+fp32 --quant_gran per_thread
