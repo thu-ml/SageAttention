@@ -128,7 +128,7 @@ for capability in compute_capabilities:
     elif capability.startswith("12.0"):
         HAS_SM120 = True
 
-def get_nvcc_flags(allowed_nums):
+def get_nvcc_flags(allowed_nums, compute_capabilities=compute_capabilities):
     NVCC_FLAGS = []
     # Add target compute capabilities to NVCC flags.
     for capability in compute_capabilities:
