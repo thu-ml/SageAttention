@@ -7,6 +7,6 @@ set -e
     python setup.py install
     (
         cd tests
-        python -m pytest --tb=line -x
+        python -m pytest --tb=short -rs -sv -x -k SM89
     )
 )

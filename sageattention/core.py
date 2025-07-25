@@ -27,19 +27,19 @@ from .triton.attn_qk_int8_per_block_causal_varlen import forward as attn_true_va
 from .triton.quant_per_thread import per_thread_int8 as per_thread_int8_triton
 
 try:
-    from . import _qattn_sm80
+    from . import sm80_compile
     SM80_ENABLED = True
 except:
     SM80_ENABLED = False
 
 try:
-    from . import _qattn_sm89
+    from . import sm89_compile
     SM89_ENABLED = True
 except:
     SM89_ENABLED = False
 
 try:
-    from . import _qattn_sm90
+    from . import sm90_compile
     SM90_ENABLED = True
 except:
     SM90_ENABLED = False
@@ -74,135 +74,6 @@ def get_cuda_arch_versions():
         major, minor = torch.cuda.get_device_capability(i)
         cuda_archs.append(f"sm{major}{minor}")
     return cuda_archs
-
-
-@torch.library.custom_op("sageattention::qk_int8_sv_f16_accum_f16_attn", mutates_args=(), device_types="cuda")
-def qk_int8_sv_f16_accum_f16_attn(
-    query: torch.Tensor, 
-    key: torch.Tensor, 
-    value: torch.Tensor, 
-    output: torch.Tensor, 
-    query_scale: torch.Tensor, 
-    key_scale: torch.Tensor, 
-    tensor_layout: int, 
-    is_causal: int, 
-    qk_quant_gran: int, 
-    sm_scale: float,
-    return_lse: int,
-) -> torch.Tensor:
-    """
-    Custom CUDA kernel for SageAttention with INT8 quantization for Q and K, FP16 PV with FP16 accumulation.
-    """
-    return _qattn_sm80.qk_int8_sv_f16_accum_f16_attn(
-        query, key, value, output, query_scale, key_scale, tensor_layout,
-        is_causal, qk_quant_gran, sm_scale, return_lse
-    )
-
-
-@torch.library.custom_op("sageattention::qk_int8_sv_f16_accum_f32_attn", mutates_args=(), device_types="cuda")
-def qk_int8_sv_f16_accum_f32_attn(
-    query: torch.Tensor, 
-    key: torch.Tensor, 
-    value: torch.Tensor, 
-    output: torch.Tensor, 
-    query_scale: torch.Tensor, 
-    key_scale: torch.Tensor, 
-    tensor_layout: int, 
-    is_causal: int, 
-    qk_quant_gran: int, 
-    sm_scale: float,
-    return_lse: int,
-) -> torch.Tensor:
-    """
-    Custom CUDA kernel for SageAttention with INT8 quantization for Q and K, FP16 PV with FP32 accumulation.
-    """
-    return _qattn_sm80.qk_int8_sv_f16_accum_f32_attn(
-        query, key, value, output, query_scale, key_scale, tensor_layout,
-        is_causal, qk_quant_gran, sm_scale, return_lse
-    )
-
-
-@torch.library.custom_op("sageattention::qk_int8_sv_f16_accum_f16_attn_inst_buf", mutates_args=(), device_types="cuda")
-def qk_int8_sv_f16_accum_f16_attn_inst_buf(
-    query: torch.Tensor, 
-    key: torch.Tensor, 
-    value: torch.Tensor, 
-    output: torch.Tensor, 
-    query_scale: torch.Tensor, 
-    key_scale: torch.Tensor, 
-    tensor_layout: int, 
-    is_causal: int, 
-    qk_quant_gran: int, 
-    sm_scale: float,
-    return_lse: int,
-) -> torch.Tensor:
-    """
-    Custom CUDA kernel for SageAttention with INT8 quantization for Q and K, FP16 PV with FP16 accumulation.
-    """
-    return _qattn_sm80.qk_int8_sv_f16_accum_f16_attn_inst_buf(
-        query, key, value, output, query_scale, key_scale, tensor_layout,
-        is_causal, qk_quant_gran, sm_scale, return_lse
-    )
-
-
-def qk_int8_sv_f16_accum_attn_fake(
-    query: torch.Tensor, 
-    key: torch.Tensor, 
-    value: torch.Tensor, 
-    output: torch.Tensor, 
-    query_scale: torch.Tensor, 
-    key_scale: torch.Tensor, 
-    tensor_layout: int, 
-    is_causal: int, 
-    qk_quant_gran: int, 
-    sm_scale: float,
-    return_lse: int,
-) -> torch.Tensor:
-
-    batch_size = query.size(0)
-    num_qo_heads = query.size(2)
-
-    if tensor_layout == 0:
-        qo_len = query.size(1)
-    else:
-        qo_len = query.size(2)
-
-    if return_lse:
-        lse = torch.empty((batch_size, num_qo_heads, qo_len), dtype=torch.float32, device="cuda")
-    else:
-        lse = torch.empty((0))
-    return lse
-
-
-torch.library.register_fake("sageattention::qk_int8_sv_f16_accum_f16_attn")(qk_int8_sv_f16_accum_attn_fake)
-torch.library.register_fake("sageattention::qk_int8_sv_f16_accum_f32_attn")(qk_int8_sv_f16_accum_attn_fake)
-torch.library.register_fake("sageattention::qk_int8_sv_f16_accum_f16_attn_inst_buf")(qk_int8_sv_f16_accum_attn_fake)
-
-
-# @torch.library.custom_op("sageattention::qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn", mutates_args=(), device_types="cuda")
-# def qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn(
-#     query: torch.Tensor, 
-#     key: torch.Tensor, 
-#     value: torch.Tensor, 
-#     output: torch.Tensor, 
-#     query_scale: torch.Tensor, 
-#     key_scale: torch.Tensor, 
-#     value_scale: torch.Tensor, 
-#     value_mean: torch.Tensor, 
-#     tensor_layout: int, 
-#     is_causal: int, 
-#     qk_quant_gran: int, 
-#     sm_scale: float,
-#     return_lse: int,
-# ) -> torch.Tensor:
-#     """
-#     Custom CUDA kernel for SageAttention with INT8 quantization for Q and K, FP16 PV with FP16 accumulation.
-#     """
-#     return _qattn_sm89.qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn(
-#         query, key, value, output, query_scale, key_scale, value_scale,
-#         value_mean, tensor_layout, is_causal, qk_quant_gran, sm_scale,
-#         return_lse
-#     )
 
 
 def sageattn(
@@ -698,17 +569,17 @@ def sageattn_qk_int8_pv_fp16_cuda(
 
     if pv_accum_dtype == 'fp32':
         v = v.to(torch.float16)
-        lse = qk_int8_sv_f16_accum_f32_attn(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+        lse = sm80_compile.qk_int8_sv_f16_accum_f32_attn(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp16":
         if smooth_v:
             smoothed_v, vm = sub_mean(v, tensor_layout=tensor_layout)
-            lse = qk_int8_sv_f16_accum_f16_fuse_v_mean_attn(q_int8, k_int8, smoothed_v, o, q_scale, k_scale, vm, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+            lse = sm80_compile.qk_int8_sv_f16_accum_f16_fuse_v_mean_attn(q_int8, k_int8, smoothed_v, o, q_scale, k_scale, vm, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
         else:
             v = v.to(torch.float16)
-            lse = qk_int8_sv_f16_accum_f16_attn(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+            lse = sm80_compile.qk_int8_sv_f16_accum_f16_attn(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp16+fp32":
         v = v.to(torch.float16)
-        lse = qk_int8_sv_f16_accum_f16_attn_inst_buf(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+        lse = sm80_compile.qk_int8_sv_f16_accum_f16_attn_inst_buf(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     else:
         raise ValueError(f"Unsupported pv_accum_dtype: {pv_accum_dtype}")
 
@@ -888,13 +759,13 @@ def sageattn_qk_int8_pv_fp8_cuda(
 
     if pv_accum_dtype == "fp32":
         if smooth_v:
-            lse = _qattn_sm89.qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, vm, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+            lse = sm89_compile.qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, vm, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
         else:
-            lse = _qattn_sm89.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+            lse = sm89_compile.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp32+fp32":
-        lse = _qattn_sm89.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+        lse = sm89_compile.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp32+fp16":
-        lse = _qattn_sm89.qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+        lse = sm89_compile.qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
 
     o = o[..., :head_dim_og]
 
@@ -1053,9 +924,9 @@ def sageattn_qk_int8_pv_fp8_cuda_sm90(
 
     if pv_accum_dtype == "fp32":
         raise NotImplementedError("Please use pv_accum_dtype='fp32+fp32' for sm90.")
-        lse = _qattn_sm90.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+        lse = sm90_compile.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp32+fp32":
-        lse = _qattn_sm90.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+        lse = sm90_compile.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
 
     o = o[..., :head_dim_og]
 
