@@ -38,16 +38,14 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
         k_mask = offs_n[None, :] < (kv_len - start_n)   
         k = tl.load(K_ptrs, mask = k_mask)
         k_scale = tl.load(K_scale_ptr)
-        qk = tl.dot(q, k).to(tl.float32) * q_scale * k_scale 
+        qk = tl.dot(q, k).to(tl.float32) * (q_scale * k_scale)
 
+        mask = k_mask
         if STAGE == 2:
-            mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk + tl.where(mask, 0, -1.0e6)
-            m_ij = tl.maximum(m_i, tl.max(qk, 1))
-            qk -= m_ij[:, None]
-        else:
-            m_ij = tl.maximum(m_i, tl.max(qk, 1))
-            qk = qk - m_ij[:, None]
+            mask &= offs_m[:, None] >= (start_n + offs_n[None, :])
+        qk += tl.where(mask, 0, float('-inf'))
+        m_ij = tl.maximum(m_i, tl.max(qk, 1))
+        qk -= m_ij[:, None]
         
         p = tl.math.exp2(qk)
         l_ij = tl.sum(p, 1)
