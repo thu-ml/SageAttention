@@ -5,3 +5,7 @@
 /dist
 /test
 __pycache__
+*.png
+*test.py
+*unmask.py
+*.so
