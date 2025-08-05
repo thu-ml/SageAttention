@@ -22,8 +22,6 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, qo_len, kv_len,
                     skip = True
             else:
                 mask_block = tl.load(mask_ptrs + start_n * stride_maskn, mask=(offs_m[:, None] < qo_len) & (offs_n[None, :] < kv_len - start_n), other=-1.0e6)
-                if tl.max(mask_block) == 0 and tl.min(mask_block) == 0:
-                    skip = True
         if not skip:
             k_mask = offs_n[None, :] < (kv_len - start_n)
             k = tl.load(K_ptrs, mask=k_mask)
