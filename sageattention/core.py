@@ -241,7 +241,7 @@ def sageattn_qk_int8_pv_fp16_triton(
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
 
     if attn_mask is not None:
-        assert attn_mask.dtype in [torch.bool, torch.float32], "attn_mask must be of dtype bool or float32."
+        assert attn_mask.dtype == torch.bool or attn_mask.dtype == q.dtype, "attn_mask must be of dtype bool or the same dtype as q."
         assert attn_mask.device == q.device, "All tensors must be on the same device."
 
     # FIXME(DefTruth): make sage attention work compatible with distributed 

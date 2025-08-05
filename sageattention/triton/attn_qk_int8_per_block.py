@@ -31,11 +31,12 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, qo_len, kv_len,
         mask_block = None
         skip = False
         if mask_ptrs is not None:
-            mask_block = tl.load(mask_ptrs + start_n * stride_maskn, mask=(offs_m[:, None] < qo_len) & (offs_n[None, :] < kv_len - start_n))
-            if mask_block.dtype == tl.int1:
+            if mask_ptrs.dtype.element_ty == tl.int1:
+                mask_block = tl.load(mask_ptrs + start_n * stride_maskn, mask=(offs_m[:, None] < qo_len) & (offs_n[None, :] < kv_len - start_n), other=False)
                 if tl.max(mask_block) == 0:
                     skip = True
             else:
+                mask_block = tl.load(mask_ptrs + start_n * stride_maskn, mask=(offs_m[:, None] < qo_len) & (offs_n[None, :] < kv_len - start_n), other=-1.0e6)
                 if tl.max(mask_block) == 0 and tl.min(mask_block) == 0:
                     skip = True
         if not skip:
@@ -43,7 +44,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, qo_len, kv_len,
             k = tl.load(K_ptrs, mask=k_mask)
             k_scale = tl.load(K_scale_ptr)
 
-            qk = tl.dot(q, k).to(tl.float32) * q_scale * k_scale
+            qk = tl.dot(q, k).to(tl.float32) * (q_scale * k_scale)
             
             if mask_block is not None:
                 if mask_block.dtype == tl.int1:
@@ -181,5 +182,5 @@ def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", attn_mask=None, outp
         STAGE=stage, RETURN_LSE=return_lse,
         num_warps=4 if head_dim == 64 else 8,
         num_stages=3 if head_dim == 64 else 4)
-    
+
     return o, lse
