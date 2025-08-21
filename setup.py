@@ -46,6 +46,36 @@ NVCC_FLAGS = [
     "-diag-suppress=174", # suppress the specific warning
 ]
 
+# Platform-specific compiler flags.
+if os.name == 'nt':  # Windows
+    CXX_FLAGS = ["/Zi", "/O2", "/openmp", "/std:c++17", "/DENABLE_BF16", "/MD"]
+    NVCC_FLAGS = [
+        "-O3",
+        "-std=c++17",
+        "--use-local-env",  # specific to windows NVCC builds
+        "-U__CUDA_NO_HALF_OPERATORS__",
+        "-U__CUDA_NO_HALF_CONVERSIONS__",
+        "--use_fast_math",
+        "--threads=8",
+        "-Xptxas=-v",
+        "-diag-suppress=174",
+        # NVCC forwards flags to MSVC differently (-Xcompiler is needed).
+        "-Xcompiler", "/openmp",
+        "-Xcompiler", "/std:c++17",
+    ]
+else:  # Linux, macOS, etc.
+    CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
+    NVCC_FLAGS = [
+        "-O3",
+        "-std=c++17",
+        "-U__CUDA_NO_HALF_OPERATORS__",
+        "-U__CUDA_NO_HALF_CONVERSIONS__",
+        "--use_fast_math",
+        "--threads=8",
+        "-Xptxas=-v",
+        "-diag-suppress=174",
+    ]
+
 ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
 CXX_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
 NVCC_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
