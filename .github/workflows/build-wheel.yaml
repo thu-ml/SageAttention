@@ -16,9 +16,27 @@ jobs:
       image: "pytorch/manylinux2_28-builder:cuda${{ matrix.cuda }}"
     strategy:
       matrix:
-        python: ["3.10", "3.11", "3.12"]
-        torch: ["2.7", "2.8", "2.9"]
-        cuda: ["12.8", "12.9"]
+        include:
+          # torch2.7+cu128
+          - torch: "2.7"
+            cuda: "12.8"
+            python: "3.10"
+          - torch: "2.7"
+            cuda: "12.8"
+            python: "3.11"
+          - torch: "2.7"
+            cuda: "12.8"
+            python: "3.12"
+          # torch2.8+cu129
+          - torch: "2.8"
+            cuda: "12.9"
+            python: "3.10"
+          - torch: "2.8"
+            cuda: "12.9"
+            python: "3.11"
+          - torch: "2.8"
+            cuda: "12.9"
+            python: "3.12"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
