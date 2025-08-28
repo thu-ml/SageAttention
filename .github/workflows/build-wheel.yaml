@@ -43,14 +43,6 @@ jobs:
             cuda: "cu129"
             python: "3.12"
     steps:
-      - name: Maximize build disk space
-        uses: easimon/maximize-build-space@master
-        with:
-          remove-android: "true"
-          remove-dotnet: "true"
-          remove-haskell: "true"
-          remove-codeql: "true"
-
       - name: Checkout code
         uses: actions/checkout@v4
 
