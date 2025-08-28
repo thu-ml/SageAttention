@@ -90,7 +90,7 @@ jobs:
             echo "PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu$CUDA_VERSION_NUM" >> $GITHUB_ENV
           fi
 
-          if [ "${{ env.CUDA_VERSION_NUM }}" -ge "128" ]; then
+          if [ "$CUDA_VERSION_NUM" -ge "128" ]; then
             echo "TORCH_CUDA_ARCH_LIST=8.0;8.6;8.9;9.0;12.0" >> $GITHUB_ENV
           else
             echo "TORCH_CUDA_ARCH_LIST=8.0;8.6;8.9;9.0" >> $GITHUB_ENV
