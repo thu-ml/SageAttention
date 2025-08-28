@@ -17,8 +17,8 @@ jobs:
     strategy:
       matrix:
         python: ["3.10", "3.11", "3.12"]
-        torch: ["2.7", "2.8"]
-        cuda: ["12.8"]
+        torch: ["2.7", "2.8", "2.9"]
+        cuda: ["12.8", "12.9", "13.0"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
