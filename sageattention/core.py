@@ -159,6 +159,7 @@ def sageattn_qk_int8_pv_fp16_triton(
     tensor_layout: str = "HND",
     quantization_backend: str = "triton",
     is_causal: bool =False, 
+    attn_mask: Optional[torch.Tensor] = None,
     sm_scale: Optional[float] = None, 
     smooth_k: bool = True,
     return_lse: bool = False,
@@ -197,6 +198,11 @@ def sageattn_qk_int8_pv_fp16_triton(
         Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len.
         Default: False.
 
+    attn_mask : Optional[torch.Tensor]
+        The attention mask tensor, of dtype bool or float32.
+        Should be able to broadcast to the shape of the matrix qk^T.
+        Default: None.
+
     sm_scale : Optional[float]
         The scale used in softmax, if not provided, will be set to ``1.0 / sqrt(head_dim)``.
 
@@ -233,6 +239,10 @@ def sageattn_qk_int8_pv_fp16_triton(
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
     assert q.device == k.device == v.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
+
+    if attn_mask is not None:
+        assert attn_mask.dtype == torch.bool or attn_mask.dtype == q.dtype, "attn_mask must be of dtype bool or the same dtype as q."
+        assert attn_mask.device == q.device, "All tensors must be on the same device."
 
     # FIXME(DefTruth): make sage attention work compatible with distributed 
     # env, for example, xDiT which launch by torchrun. Without this workaround, 
@@ -283,9 +293,21 @@ def sageattn_qk_int8_pv_fp16_triton(
     else:
         raise ValueError(f"Unsupported quantization backend: {quantization_backend}")
     if is_causal:
+        assert attn_mask is None, "Mask should be None for causal attention."
         o, lse = attn_true(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, return_lse=return_lse)
     else:
-        o, lse = attn_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, return_lse=return_lse)
+        if attn_mask is not None:
+            if tensor_layout == "HND":
+                target_shape = (q.shape[0], q.shape[1], q.shape[2], k.shape[2])
+            elif tensor_layout == "NHD":
+                target_shape = (q.shape[0], q.shape[2], q.shape[1], k.shape[1])
+            else:
+                raise ValueError(f"tensor_layout {tensor_layout} not supported")
+            try:
+                attn_mask = attn_mask.expand(target_shape)
+            except Exception:
+                raise AssertionError(f"attn_mask shape {attn_mask.shape} cannot be broadcast to {target_shape}")
+        o, lse = attn_false(q_int8, k_int8, v, q_scale, k_scale, tensor_layout=tensor_layout, output_dtype=dtype, attn_mask=attn_mask, return_lse=return_lse)
 
     o = o[..., :head_dim_og]
 
