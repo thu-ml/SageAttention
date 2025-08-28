@@ -12,34 +12,57 @@ permissions:
 jobs:
   build-wheel-linux:
     runs-on: ubuntu-latest
-    container:
-      image: "pytorch/manylinux2_28-builder:cuda${{ matrix.cuda }}"
+    env:
+      CUDA_VERSION_MAP: >-
+        {
+          "cu128": "12.8.1",
+          "cu129": "12.9.1",
+          "cu130": "13.0.0"
+        }
     strategy:
       matrix:
         include:
           # torch2.7+cu128
           - torch: "2.7"
-            cuda: "12.8"
+            cuda: "cu128"
             python: "3.10"
           - torch: "2.7"
-            cuda: "12.8"
+            cuda: "cu128"
             python: "3.11"
           - torch: "2.7"
-            cuda: "12.8"
+            cuda: "cu128"
             python: "3.12"
           # torch2.8+cu129
           - torch: "2.8"
-            cuda: "12.9"
+            cuda: "cu129"
             python: "3.10"
           - torch: "2.8"
-            cuda: "12.9"
+            cuda: "cu129"
             python: "3.11"
           - torch: "2.8"
-            cuda: "12.9"
+            cuda: "cu129"
             python: "3.12"
     steps:
+      - name: Maximize build disk space
+        uses: easimon/maximize-build-space@master
+        with:
+          remove-android: "true"
+          remove-dotnet: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: Jimver/cuda-toolkit@master
+        id: cuda-toolkit
+        with:
+          cuda: ${{ fromJSON(env.CUDA_VERSION_MAP)[matrix.cuda] }}
+
       - name: Check current PyTorch version
         id: check-torch-version
         run: |
@@ -60,14 +83,8 @@ jobs:
           echo "Package version: $PACKAGE_VERSION"
           echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> $GITHUB_ENV
 
-          CUDA_VERSION_NUM=$(echo ${{ matrix.cuda }} | tr -d '.')
-          echo "CUDA_VERSION_NUM=$CUDA_VERSION_NUM" >> $GITHUB_ENV
-
           PYTHON_VERSION_NUM=$(echo ${{ matrix.python }} | tr -d '.')
           echo "PYTHON_VERSION_NUM=$PYTHON_VERSION_NUM" >> $GITHUB_ENV
-
-          PYTHON_ROOT_PATH=/opt/python/cp$PYTHON_VERSION_NUM-cp$PYTHON_VERSION_NUM
-          echo "PYTHON_ROOT_PATH=$PYTHON_ROOT_PATH" >> $GITHUB_ENV
 
           if [ -n "${{ env.PYTORCH_LATEST_STABLE }}" ]; then
             PYTORCH_LATEST_MAJOR=$(echo ${{ env.PYTORCH_LATEST_STABLE }} | cut -d. -f1)
@@ -78,18 +95,19 @@ jobs:
             if [ "$PYTORCH_MATRIX_MAJOR" -gt "$PYTORCH_LATEST_MAJOR" ] || ([ "$PYTORCH_MATRIX_MAJOR" -eq "$PYTORCH_LATEST_MAJOR" ] && [ "$PYTORCH_MATRIX_MINOR" -gt "$PYTORCH_LATEST_MINOR" ]); then
               echo "PyTorch ${{ matrix.torch }} is newer than stable version $PYTORCH_LATEST_MAJOR.$PYTORCH_LATEST_MINOR, will use nightly"
               echo "PYTORCH_NIGHTLY=true" >> $GITHUB_ENV
-              echo "PYTORCH_INDEX_URL=https://download.pytorch.org/whl/nightly/cu$CUDA_VERSION_NUM" >> $GITHUB_ENV
+              echo "PYTORCH_INDEX_URL=https://download.pytorch.org/whl/nightly/${{ matrix.cuda }}" >> $GITHUB_ENV
             else
               echo "PyTorch ${{ matrix.torch }} is a stable version"
               echo "PYTORCH_NIGHTLY=false" >> $GITHUB_ENV
-              echo "PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu$CUDA_VERSION_NUM" >> $GITHUB_ENV
+              echo "PYTORCH_INDEX_URL=https://download.pytorch.org/whl/${{ matrix.cuda }}" >> $GITHUB_ENV
             fi
           else
             echo "Could not determine latest stable version, assuming ${{ matrix.torch }} is stable"
             echo "PYTORCH_NIGHTLY=false" >> $GITHUB_ENV
-            echo "PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu$CUDA_VERSION_NUM" >> $GITHUB_ENV
+            echo "PYTORCH_INDEX_URL=https://download.pytorch.org/whl/${{ matrix.cuda }}" >> $GITHUB_ENV
           fi
 
+          CUDA_VERSION_NUM=$(echo "${{ matrix.cuda }}" | tr -d 'cu')
           if [ "$CUDA_VERSION_NUM" -ge "128" ]; then
             echo "TORCH_CUDA_ARCH_LIST=8.0;8.6;8.9;9.0;12.0" >> $GITHUB_ENV
           else
@@ -103,20 +121,20 @@ jobs:
 
           if [ "$PYTORCH_NIGHTLY" = "true" ]; then
             echo "Installing PyTorch ${{ matrix.torch }} from nightly channel..."
-            ${{ env.PYTHON_ROOT_PATH }}/bin/pip install --no-cache-dir --pre torch==${{ matrix.torch }}.* torchvision torchaudio --index-url ${{ env.PYTORCH_INDEX_URL }}
+            python -m pip install --no-cache-dir --pre torch==${{ matrix.torch }}.* torchvision torchaudio --index-url ${{ env.PYTORCH_INDEX_URL }}
           else
             echo "Installing PyTorch ${{ matrix.torch }} from stable channel..."
-            ${{ env.PYTHON_ROOT_PATH }}/bin/pip install --no-cache-dir torch==${{ matrix.torch }}.* torchvision torchaudio --index-url ${{ env.PYTORCH_INDEX_URL }}
+            python -m pip install --no-cache-dir torch==${{ matrix.torch }}.* torchvision torchaudio --index-url ${{ env.PYTORCH_INDEX_URL }}
           fi
 
-          ${{ env.PYTHON_ROOT_PATH }}/bin/pip install -U build ninja wheel setuptools triton>=3.0.0
+          python -m pip install -U build ninja wheel setuptools triton>=3.0.0
 
       - name: Build wheel
         run: |
           export MAX_JOBS=2
           export LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:$LD_LIBRARY_PATH
           export LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:$LIBRARY_PATH
-          ${{ env.PYTHON_ROOT_PATH }}/bin/python -m build --wheel --no-isolation
+          python -m build --wheel --no-isolation
 
       - name: Rename wheel with version info
         working-directory: dist
@@ -124,7 +142,7 @@ jobs:
           for whl in *.whl; do
             prefix="sageattention-${{ env.PACKAGE_VERSION }}"
             suffix="${whl#${prefix}-}"
-            new_name="${prefix}+cu${{ env.CUDA_VERSION_NUM }}torch${{ matrix.torch }}-${suffix}"
+            new_name="${prefix}+${{ matrix.cuda }}torch${{ matrix.torch }}-${suffix}"
             
             mv "$whl" "$new_name"
             echo "Renamed: $whl -> $new_name"
@@ -133,7 +151,7 @@ jobs:
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-torch${{ matrix.torch }}-cu${{ env.CUDA_VERSION_NUM }}-cp${{ env.PYTHON_VERSION_NUM }}
+          name: wheel-torch${{ matrix.torch }}-${{ matrix.cuda }}-cp${{ env.PYTHON_VERSION_NUM }}
           path: dist/*.whl
 
   create-release:
