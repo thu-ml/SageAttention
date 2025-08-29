@@ -123,13 +123,13 @@ jobs:
 
           if [ "$PYTORCH_NIGHTLY" = "true" ]; then
             echo "Installing PyTorch ${{ matrix.torch }} from nightly channel..."
-            python -m pip install --no-cache-dir --pre torch==${{ matrix.torch }}.* torchvision torchaudio --index-url ${{ env.PYTORCH_INDEX_URL }}
+            python -m pip install --no-cache-dir --pre torch==${{ matrix.torch }}.* torchvision torchaudio triton>=3.0.0 --index-url ${{ env.PYTORCH_INDEX_URL }}
           else
             echo "Installing PyTorch ${{ matrix.torch }} from stable channel..."
-            python -m pip install --no-cache-dir torch==${{ matrix.torch }}.* torchvision torchaudio --index-url ${{ env.PYTORCH_INDEX_URL }}
+            python -m pip install --no-cache-dir torch==${{ matrix.torch }}.* torchvision torchaudio triton>=3.0.0 --index-url ${{ env.PYTORCH_INDEX_URL }}
           fi
 
-          python -m pip install -U build ninja wheel setuptools triton>=3.0.0
+          python -m pip install -U build ninja wheel setuptools
 
       - name: Build wheel
         run: |
