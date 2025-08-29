@@ -63,6 +63,7 @@ jobs:
         id: cuda-toolkit
         with:
           cuda: ${{ fromJSON(env.CUDA_VERSION_MAP)[matrix.cuda] }}
+          log-file-suffix: torch${{ matrix.torch }}-${{ matrix.cuda }}-python${{ matrix.python }}
 
       - name: Check current PyTorch version
         id: check-torch-version
@@ -133,8 +134,9 @@ jobs:
       - name: Build wheel
         run: |
           export MAX_JOBS=2
-          export LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:$LD_LIBRARY_PATH
-          export LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:$LIBRARY_PATH
+          CUDA_PATH=${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$CUDA_PATH/lib64/stubs:$LD_LIBRARY_PATH
+          export LIBRARY_PATH=$CUDA_PATH/lib64:$CUDA_PATH/lib64/stubs:$LIBRARY_PATH
           python -m build --wheel --no-isolation
 
       - name: Rename wheel with version info
