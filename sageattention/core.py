@@ -269,7 +269,7 @@ def sageattn_qk_int8_pv_fp16_triton(
     assert q.stride(-1) == 1 and k.stride(-1) == 1 and v.stride(-1) == 1, "Last dim of qkv must be contiguous."
 
     seq_dim = 1 if tensor_layout == "NHD" else 2
-    nh_dim = 2 if _tensor_layout == 0 else 1
+    nh_dim = 2 if tensor_layout == 0 else 1
 
     if smooth_k:
         km = k.mean(dim=seq_dim, keepdim=True)
