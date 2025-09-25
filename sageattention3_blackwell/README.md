@@ -1,8 +1,3 @@
----
-license: apache-2.0   (Commercial applications are also allowed!)
----
-
-
 # SageAttention3
 <!-- We are continuously updating more features. You could **Star** and **Watch** our repository to stay updated.
 
