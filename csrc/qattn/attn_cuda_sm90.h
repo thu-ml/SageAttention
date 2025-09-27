@@ -16,6 +16,7 @@
 
 #include <torch/extension.h>
 
+bool is_available();
 torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(
                     torch::Tensor query,
                     torch::Tensor key,

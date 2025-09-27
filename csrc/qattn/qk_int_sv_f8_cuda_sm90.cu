@@ -26,6 +26,54 @@
 
 #include "attn_utils.cuh"
 
+struct _CudaDriverApiLoader {
+    static bool initialized;
+    static bool init() {
+    #define LOAD(name) name = load_api<name##_t>((const char *)#name)
+        LOAD(cuTensorMapEncodeTiled);
+    #undef LOAD
+        return true;
+    }
+
+#define DECL_API(name)                  \
+    using name##_t = decltype(&::name); \
+    static name##_t name
+    DECL_API(cuTensorMapEncodeTiled);
+#undef DECL_API
+
+    template <typename FuncType>
+    static FuncType load_api(const char *name) {
+        void *func = nullptr;
+        cudaDriverEntryPointQueryResult qres = {};
+        auto ret =
+        #if defined(CUDA_VERSION) && (CUDA_VERSION >= 12050)
+            cudaGetDriverEntryPointByVersion(name, &func, CUDA_VERSION, cudaEnableDefault, &qres);
+        #else
+            cudaGetDriverEntryPoint(name, &func, cudaEnableDefault, &qres);
+        #endif
+        if (ret == cudaSuccess && qres == cudaDriverEntryPointSuccess && func != nullptr) {
+            return reinterpret_cast<FuncType>(func);
+        } else {
+            return nullptr;
+        }
+    }
+
+    static bool is_available() {
+        return cuTensorMapEncodeTiled != nullptr;
+    }
+};
+
+bool _CudaDriverApiLoader::initialized = _CudaDriverApiLoader::init();
+
+bool is_available() {
+    return _CudaDriverApiLoader::is_available();
+}
+
+#define DECL_API(name) _CudaDriverApiLoader::name##_t _CudaDriverApiLoader::name
+DECL_API(cuTensorMapEncodeTiled);
+#undef DECL_API
+
+
 template <int BlockMajorSize, int BlockMinorSize, bool swizzle=true, CUtensorMapL2promotion_enum promotion_mode=CU_TENSOR_MAP_L2_PROMOTION_NONE, typename T>
 CUtensorMap create_tensor_map_4D(T* gmem_ptr, int d1, int d2, int d3, int d4, int stride1, int stride2, int stride3) {
     constexpr int smem_stride = BlockMinorSize * sizeof(T);
@@ -39,7 +87,7 @@ CUtensorMap create_tensor_map_4D(T* gmem_ptr, int d1, int d2, int d3, int d4, in
     uint32_t smem_box_shape[5] = {uint32_t(BlockMinorSize), uint32_t(BlockMajorSize), 1, 1, 1};
     uint32_t smem_box_stride[5] = {1, 1, 1, 1, 1};
 
-    CUresult result = cuTensorMapEncodeTiled(
+    CUresult result = _CudaDriverApiLoader::cuTensorMapEncodeTiled(
         &tma_map, (sizeof(T) == 2) ? CU_TENSOR_MAP_DATA_TYPE_BFLOAT16 : CU_TENSOR_MAP_DATA_TYPE_UINT8, 4, gmem_address, gmem_prob_shape,
         gmem_prob_stride, smem_box_shape, smem_box_stride, CU_TENSOR_MAP_INTERLEAVE_NONE,
         (swizzle == false) ? CU_TENSOR_MAP_SWIZZLE_NONE : (smem_stride == 128) ? CU_TENSOR_MAP_SWIZZLE_128B : (smem_stride == 64) ? CU_TENSOR_MAP_SWIZZLE_64B : CU_TENSOR_MAP_SWIZZLE_32B, 
