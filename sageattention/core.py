@@ -55,7 +55,8 @@ import warnings
 
 import subprocess
 import re
-def get_cuda_version():
+# Get CUDA version once at module load
+def _detect_cuda_version():
     try:
         output = subprocess.check_output(['nvcc', '--version']).decode()
         match = re.search(r'release (\d+)\.(\d+)', output)
@@ -65,6 +66,13 @@ def get_cuda_version():
     except Exception as e:
         print("Failed to get CUDA version:", e)
     return None, None
+
+# Store it in a module-level variable
+_CUDA_VERSION = _detect_cuda_version()
+
+# Now the function just returns the cached value
+def get_cuda_version():
+    return _CUDA_VERSION
 
 def get_cuda_arch_versions():
     cuda_archs = []
@@ -724,10 +732,10 @@ def sageattn_qk_int8_pv_fp8_cuda(
     assert q.device == k.device == v.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
 
-    # cuda_major_version, cuda_minor_version = get_cuda_version()
-    # if(cuda_major_version, cuda_minor_version) < (12, 8) and pv_accum_dtype == 'fp32+fp16':
-    #     warnings.warn("cuda version < 12.8, change pv_accum_dtype to 'fp32+fp32'")
-    #     pv_accum_dtype = 'fp32+fp32'
+    cuda_major_version, cuda_minor_version = get_cuda_version()
+    if(cuda_major_version, cuda_minor_version) < (12, 8) and pv_accum_dtype == 'fp32+fp16':
+        warnings.warn("cuda version < 12.8, change pv_accum_dtype to 'fp32+fp32'")
+        pv_accum_dtype = 'fp32+fp32'
 
     # FIXME(DefTruth): make sage attention work compatible with distributed 
     # env, for example, xDiT which launch by torchrun. Without this workaround, 
