@@ -62,10 +62,10 @@ if not SKIP_CUDA_BUILD:
     cc_major, cc_minor = torch.cuda.get_device_capability()
     if (cc_major, cc_minor) == (10, 0):  # sm_100
         cc_flag.append("-gencode")
-        cc_flag.append("arch=compute_100,code=sm_100")
+        cc_flag.append("arch=compute_100a,code=sm_100a")
     elif (cc_major, cc_minor) == (12, 0):  # sm_120
         cc_flag.append("-gencode")
-        cc_flag.append("arch=compute_120,code=sm_120")
+        cc_flag.append("arch=compute_120a,code=sm_120a")
     else:
         raise RuntimeError("Unsupported GPU")
 
