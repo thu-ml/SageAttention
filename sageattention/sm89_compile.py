@@ -90,7 +90,7 @@ def sm89_qk_with_key_value(
         qo_len = query.size(2)
 
     if return_lse:
-        lse = torch.empty((batch_size, num_qo_heads, qo_len), dtype=torch.float32, device="cuda")
+        lse = torch.empty((batch_size, num_qo_heads, qo_len), dtype=torch.float32, device=query.device)
     else:
         lse = torch.empty((0))
     return lse
