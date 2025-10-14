@@ -29,8 +29,8 @@ This hybrid approach may achieve **lossless acceleration**.
 
 To use SageAttention3, please **compile from source**:
 ```
-git clone https://huggingface.co/jt-zhang/SageAttention3
-cd SageAttention3 
+git clone https://github.com/thu-ml/SageAttention
+cd sageattention3_blackwell 
 python setup.py install
 ```
 
