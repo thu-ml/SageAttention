@@ -17,7 +17,7 @@ jobs:
         {
           "cu128": "12.8.1",
           "cu129": "12.9.1",
-          "cu130": "13.0.0"
+          "cu130": "13.0.1"
         }
     strategy:
       matrix:
@@ -41,6 +41,15 @@ jobs:
             python: "3.11"
           - torch: "2.8"
             cuda: "cu129"
+            python: "3.12"
+          - torch: "2.9"
+            cuda: "cu130"
+            python: "3.10"
+          - torch: "2.9"
+            cuda: "cu130"
+            python: "3.11"
+          - torch: "2.9"
+            cuda: "cu130"
             python: "3.12"
     steps:
       - name: Maximize build disk space
