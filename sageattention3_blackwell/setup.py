@@ -59,8 +59,15 @@ if not SKIP_CUDA_BUILD:
     _, bare_metal_version = get_cuda_bare_metal_version(CUDA_HOME)
     if bare_metal_version < Version("12.8"):
         raise RuntimeError("Sage3 is only supported on CUDA 12.8 and above")
-    cc_flag.append("-gencode")
-    cc_flag.append("arch=compute_120a,code=sm_120a")
+    cc_major, cc_minor = torch.cuda.get_device_capability()
+    if (cc_major, cc_minor) == (10, 0):  # sm_100
+        cc_flag.append("-gencode")
+        cc_flag.append("arch=compute_100a,code=sm_100a")
+    elif (cc_major, cc_minor) == (12, 0):  # sm_120
+        cc_flag.append("-gencode")
+        cc_flag.append("arch=compute_120a,code=sm_120a")
+    else:
+        raise RuntimeError("Unsupported GPU")
 
     # HACK: The compiler flag -D_GLIBCXX_USE_CXX11_ABI is set to be the same as
     # torch._C._GLIBCXX_USE_CXX11_ABI
