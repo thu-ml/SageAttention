@@ -2,7 +2,7 @@ from . import _qattn_sm80
 import torch
 
 
-@torch.library.custom_op("sageattention::qk_int8_sv_f16_accum_f16_attn", mutates_args=("output"), device_types="cuda")
+@torch.library.custom_op("sageattention::qk_int8_sv_f16_accum_f16_attn", mutates_args=("output",), device_types="cuda")
 def qk_int8_sv_f16_accum_f16_attn(
     query: torch.Tensor, 
     key: torch.Tensor, 
@@ -25,7 +25,7 @@ def qk_int8_sv_f16_accum_f16_attn(
     )
 
 
-@torch.library.custom_op("sageattention::qk_int8_sv_f16_accum_f32_attn", mutates_args=("output"), device_types="cuda")
+@torch.library.custom_op("sageattention::qk_int8_sv_f16_accum_f32_attn", mutates_args=("output",), device_types="cuda")
 def qk_int8_sv_f16_accum_f32_attn(
     query: torch.Tensor, 
     key: torch.Tensor, 
@@ -48,7 +48,7 @@ def qk_int8_sv_f16_accum_f32_attn(
     )
 
 
-@torch.library.custom_op("sageattention::qk_int8_sv_f16_accum_f16_attn_inst_buf", mutates_args=("output"), device_types="cuda")
+@torch.library.custom_op("sageattention::qk_int8_sv_f16_accum_f16_attn_inst_buf", mutates_args=("output",), device_types="cuda")
 def qk_int8_sv_f16_accum_f16_attn_inst_buf(
     query: torch.Tensor, 
     key: torch.Tensor, 
@@ -71,7 +71,7 @@ def qk_int8_sv_f16_accum_f16_attn_inst_buf(
     )
 
 
-@torch.library.custom_op("sageattention::qk_int8_sv_f16_accum_f16_fuse_v_mean_attn", mutates_args=("output"), device_types="cuda")
+@torch.library.custom_op("sageattention::qk_int8_sv_f16_accum_f16_fuse_v_mean_attn", mutates_args=("output",), device_types="cuda")
 def qk_int8_sv_f16_accum_f16_fuse_v_mean_attn(
     query: torch.Tensor, 
     key: torch.Tensor, 
