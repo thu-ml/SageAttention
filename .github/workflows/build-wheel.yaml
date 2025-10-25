@@ -13,6 +13,8 @@ jobs:
   build-wheel-linux:
     runs-on: ubuntu-latest
     env:
+      PYTHON_BUILDER_VERSION: "3.10"
+      PY_LIMITED_API_TAG: "cp39"
       CUDA_VERSION_MAP: >-
         {
           "cu128": "12.8.1",
@@ -25,32 +27,12 @@ jobs:
           # torch2.7+cu128
           - torch: "2.7"
             cuda: "cu128"
-            python: "3.10"
-          - torch: "2.7"
-            cuda: "cu128"
-            python: "3.11"
-          - torch: "2.7"
-            cuda: "cu128"
-            python: "3.12"
           # torch2.8+cu129
           - torch: "2.8"
             cuda: "cu129"
-            python: "3.10"
-          - torch: "2.8"
-            cuda: "cu129"
-            python: "3.11"
-          - torch: "2.8"
-            cuda: "cu129"
-            python: "3.12"
+          # torch2.9+cu130
           - torch: "2.9"
             cuda: "cu130"
-            python: "3.10"
-          - torch: "2.9"
-            cuda: "cu130"
-            python: "3.11"
-          - torch: "2.9"
-            cuda: "cu130"
-            python: "3.12"
     steps:
       - name: Maximize build disk space
         uses: easimon/maximize-build-space@master
@@ -66,13 +48,13 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: ${{ env.PYTHON_BUILDER_VERSION }}
 
       - uses: Jimver/cuda-toolkit@master
         id: cuda-toolkit
         with:
           cuda: ${{ fromJSON(env.CUDA_VERSION_MAP)[matrix.cuda] }}
-          log-file-suffix: torch${{ matrix.torch }}-${{ matrix.cuda }}-python${{ matrix.python }}
+          log-file-suffix: torch${{ matrix.torch }}-${{ matrix.cuda }}-${{ env.PY_LIMITED_API_TAG }}-abi3
 
       - name: Check current PyTorch version
         id: check-torch-version
@@ -93,9 +75,6 @@ jobs:
           PACKAGE_VERSION=$(grep -E "^\s*version\s*=\s*['\"][^'\"]*['\"]" setup.py | sed -E "s/.*version\s*=\s*['\"]([^'\"]*)['\"].*/\1/")
           echo "Package version: $PACKAGE_VERSION"
           echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> $GITHUB_ENV
-
-          PYTHON_VERSION_NUM=$(echo ${{ matrix.python }} | tr -d '.')
-          echo "PYTHON_VERSION_NUM=$PYTHON_VERSION_NUM" >> $GITHUB_ENV
 
           if [ -n "${{ env.PYTORCH_LATEST_STABLE }}" ]; then
             PYTORCH_LATEST_MAJOR=$(echo ${{ env.PYTORCH_LATEST_STABLE }} | cut -d. -f1)
@@ -146,12 +125,16 @@ jobs:
           CUDA_PATH=${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$CUDA_PATH/lib64/stubs:$LD_LIBRARY_PATH
           export LIBRARY_PATH=$CUDA_PATH/lib64:$CUDA_PATH/lib64/stubs:$LIBRARY_PATH
-          python -m build --wheel --no-isolation
+          python -m build --wheel --no-isolation -C--build-option=--py-limited-api=${{ env.PY_LIMITED_API_TAG }}
 
       - name: Rename wheel with version info
         working-directory: dist
         run: |
           for whl in *.whl; do
+            if [[ "$whl" != *"abi3"* ]]; then
+              echo "Expected abi3 tag in $whl but none found"
+              exit 1
+            fi
             prefix="sageattention-${{ env.PACKAGE_VERSION }}"
             suffix="${whl#${prefix}-}"
             new_name="${prefix}+${{ matrix.cuda }}torch${{ matrix.torch }}-${suffix}"
@@ -163,7 +146,7 @@ jobs:
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-torch${{ matrix.torch }}-${{ matrix.cuda }}-cp${{ env.PYTHON_VERSION_NUM }}
+          name: wheel-torch${{ matrix.torch }}-${{ matrix.cuda }}-${{ env.PY_LIMITED_API_TAG }}-abi3
           path: dist/*.whl
 
   create-release:
