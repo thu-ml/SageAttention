@@ -68,7 +68,7 @@ if not SKIP_CUDA_BUILD:
         cc_flag.append("arch=compute_120a,code=sm_120a")
     elif (cc_major, cc_minor) == (12, 1):  # sm_121
         cc_flag.append("-gencode")
-        cc_flag.append("arch=compute_120a,code=sm_120a")
+        cc_flag.append("arch=compute_121a,code=sm_121a")
     else:
         raise RuntimeError("Unsupported GPU")
 
