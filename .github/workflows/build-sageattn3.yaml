@@ -1,11 +1,11 @@
-name: Build and Release Wheel
+name: Build and Pre-release SageAttention3
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - "pyproject.toml"
-      - "setup.py"
+      - ".github/workflows/build-sageattn3.yaml"
+      - "sageattention3_blackwell/**"
 
 permissions:
   contents: write
@@ -14,8 +14,7 @@ jobs:
   build-wheel-linux:
     runs-on: ubuntu-latest
     env:
-      PYTHON_BUILDER_VERSION: "3.10"
-      PY_LIMITED_API_TAG: "cp39"
+      PYTHON_BUILDER_VERSION: "3.13"
       CUDA_VERSION_MAP: >-
         {
           "cu128": "12.8.1",
@@ -55,7 +54,7 @@ jobs:
         id: cuda-toolkit
         with:
           cuda: ${{ fromJSON(env.CUDA_VERSION_MAP)[matrix.cuda] }}
-          log-file-suffix: torch${{ matrix.torch }}-${{ matrix.cuda }}-${{ env.PY_LIMITED_API_TAG }}-abi3
+          log-file-suffix: sageattn3-torch${{ matrix.torch }}-${{ matrix.cuda }}
 
       - name: Check current PyTorch version
         id: check-torch-version
@@ -98,16 +97,11 @@ jobs:
             echo "PYTORCH_INDEX_URL=https://download.pytorch.org/whl/${{ matrix.cuda }}" >> $GITHUB_ENV
           fi
 
-          CUDA_VERSION_NUM=$(echo "${{ matrix.cuda }}" | tr -d 'cu')
-          if [ "$CUDA_VERSION_NUM" -ge "128" ]; then
-            echo "TORCH_CUDA_ARCH_LIST=8.0;8.6;8.9;9.0;12.0" >> $GITHUB_ENV
-          else
-            echo "TORCH_CUDA_ARCH_LIST=8.0;8.6;8.9;9.0" >> $GITHUB_ENV
-          fi
+          echo "TORCH_CUDA_ARCH_LIST=10.0,12.0" >> $GITHUB_ENV
 
       - name: Install dependencies
         run: |
-          rm -rf build
+          rm -rf sageattention3_blackwell/build sageattention3_blackwell/dist
           gcc --version && g++ --version
 
           if [ "$PYTORCH_NIGHTLY" = "true" ]; then
@@ -118,28 +112,27 @@ jobs:
             python -m pip install --no-cache-dir torch==${{ matrix.torch }}.* torchvision torchaudio triton>=3.0.0 --index-url ${{ env.PYTORCH_INDEX_URL }}
           fi
 
-          python -m pip install -U build ninja wheel setuptools
+          python -m pip install -U build ninja wheel setuptools einops
 
       - name: Build wheel
+        working-directory: sageattention3_blackwell
+        env:
+          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
         run: |
           export MAX_JOBS=2
-          CUDA_PATH=${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          export CUDA_HOME=$CUDA_PATH
           export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$CUDA_PATH/lib64/stubs:$LD_LIBRARY_PATH
           export LIBRARY_PATH=$CUDA_PATH/lib64:$CUDA_PATH/lib64/stubs:$LIBRARY_PATH
-          python -m build --wheel --no-isolation -C--build-option=--py-limited-api=${{ env.PY_LIMITED_API_TAG }}
+          python -m build --wheel --no-isolation
 
       - name: Rename wheel with version info
-        working-directory: dist
+        working-directory: sageattention3_blackwell/dist
         run: |
           for whl in *.whl; do
-            if [[ "$whl" != *"abi3"* ]]; then
-              echo "Expected abi3 tag in $whl but none found"
-              exit 1
-            fi
             prefix="sageattention-${{ env.PACKAGE_VERSION }}"
             suffix="${whl#${prefix}-}"
             new_name="${prefix}+${{ matrix.cuda }}torch${{ matrix.torch }}-${suffix}"
-            
+
             mv "$whl" "$new_name"
             echo "Renamed: $whl -> $new_name"
           done
@@ -147,10 +140,10 @@ jobs:
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-torch${{ matrix.torch }}-${{ matrix.cuda }}-${{ env.PY_LIMITED_API_TAG }}-abi3
-          path: dist/*.whl
+          name: sageattn3-wheel-torch${{ matrix.torch }}-${{ matrix.cuda }}
+          path: sageattention3_blackwell/dist/*.whl
 
-  create-release:
+  create-pre-release:
     needs: build-wheel-linux
     runs-on: ubuntu-latest
     steps:
@@ -167,14 +160,15 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: wheels
+          path: sageattn3-wheels
+          pattern: sageattn3-wheel-*
           merge-multiple: true
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.PACKAGE_VERSION }}
-          name: v${{ env.PACKAGE_VERSION }}
+          tag_name: sageattn3-v${{ env.PACKAGE_VERSION }}
+          name: SageAttention3 v${{ env.PACKAGE_VERSION }}
           draft: false
-          prerelease: false
-          files: wheels/*.whl
+          prerelease: true
+          files: sageattn3-wheels/*.whl
