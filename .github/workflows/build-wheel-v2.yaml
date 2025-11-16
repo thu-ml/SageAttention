@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - "pyproject.toml"
+      - "setup.py"
 
 permissions:
   contents: write
