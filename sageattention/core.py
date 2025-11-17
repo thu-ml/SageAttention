@@ -272,12 +272,12 @@ def sageattn_qk_int8_pv_fp16_triton(
     assert q.stride(-1) == 1 and k.stride(-1) == 1 and v.stride(-1) == 1, "Last dim of qkv must be contiguous."
 
     seq_dim = 1 if tensor_layout == "NHD" else 2
-    nh_dim = 2 if tensor_layout == 0 else 1
+    nh_dim = 2 if tensor_layout == "NHD" else 1
 
     if smooth_k:
         km = k.mean(dim=seq_dim, keepdim=True)
-        nqheads = q.size(2)
-        nkheads = k.size(2)
+        nqheads = q.size(nh_dim)
+        nkheads = k.size(nh_dim)
         q_per_kv_heads = nqheads // nkheads
         if q_per_kv_heads > 1:
             # nheads_k => nheads_q
@@ -580,8 +580,8 @@ def sageattn_qk_int8_pv_fp16_cuda(
 
     if smooth_k:
         km = k.mean(dim=seq_dim, keepdim=True)
-        nqheads = q.size(2)
-        nkheads = k.size(2)
+        nqheads = q.size(nh_dim)
+        nkheads = k.size(nh_dim)
         q_per_kv_heads = nqheads // nkheads
         if q_per_kv_heads > 1:
             # nheads_k => nheads_q
@@ -769,8 +769,8 @@ def sageattn_qk_int8_pv_fp8_cuda(
 
     if smooth_k:
         km = k.mean(dim=seq_dim, keepdim=True)
-        nqheads = q.size(2)
-        nkheads = k.size(2)
+        nqheads = q.size(nh_dim)
+        nkheads = k.size(nh_dim)
         q_per_kv_heads = nqheads // nkheads
         if q_per_kv_heads > 1:
             # nheads_k => nheads_q
@@ -945,8 +945,8 @@ def sageattn_qk_int8_pv_fp8_cuda_sm90(
 
     if smooth_k:
         km = k.mean(dim=seq_dim, keepdim=True)
-        nqheads = q.size(2)
-        nkheads = k.size(2)
+        nqheads = q.size(nh_dim)
+        nkheads = k.size(nh_dim)
         q_per_kv_heads = nqheads // nkheads
         if q_per_kv_heads > 1:
             # nheads_k => nheads_q
