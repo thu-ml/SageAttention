@@ -74,7 +74,7 @@ def qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
 
 
 @torch.library.register_fake("sageattention_sm90::qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf")
-def qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
+def qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_fake_impl(
     query: torch.Tensor, 
     key: torch.Tensor, 
     value: torch.Tensor, 
