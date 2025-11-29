@@ -39,6 +39,7 @@ pipe = CogVideoXPipeline.from_pretrained(
 if args.compile:
     pipe.transformer = torch.compile(pipe.transformer, mode="max-autotune-no-cudagraphs")
 
+pipe.enable_model_cpu_offload()
 pipe.vae.enable_tiling()
 pipe.vae.enable_slicing()
 

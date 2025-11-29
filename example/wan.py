@@ -30,7 +30,7 @@ torch.manual_seed(42)
 model_id = "Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
 
 pipe = WanPipeline.from_pretrained(model_id, torch_dtype=torch.bfloat16)
-# pipe.enable_model_cpu_offload()
+pipe.enable_model_cpu_offload()
 
 if args.compile:
     pipe.transformer = torch.compile(pipe.transformer, mode="max-autotune-no-cudagraphs")
