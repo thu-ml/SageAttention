@@ -34,7 +34,7 @@ pipe = CogVideoXPipeline.from_pretrained(
     model_id,
     transformer=transformer,
     torch_dtype=torch.bfloat16,
-).to("cuda")
+)
 
 if args.compile:
     pipe.transformer = torch.compile(pipe.transformer, mode="max-autotune-no-cudagraphs")
