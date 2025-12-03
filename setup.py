@@ -47,8 +47,9 @@ if not SKIP_CUDA_BUILD:
     # Supported NVIDIA GPU architectures.
     SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "10.0", "12.0", "12.1"}
 
-    # Compiler flags.
+    # Compiler flags.  
     CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
+    +
     NVCC_FLAGS = [
         "-O3",
         "-std=c++17",
@@ -68,6 +69,13 @@ if not SKIP_CUDA_BUILD:
     if nvcc_append:
         NVCC_FLAGS += nvcc_append.split()
 
+if os.name == "nt":
+    # https://github.com/pytorch/pytorch/issues/148317
+    NVCC_FLAGS_COMMON += [
+        "-D_WIN32=1",
+        "-DUSE_CUDA=1",
+    ]
+    
     ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
     CXX_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
     NVCC_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
