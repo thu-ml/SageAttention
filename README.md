@@ -1,3 +1,79 @@
+# Another Sage Attention Windows Fork (Sage Attention 3)
+
+This is **another Sage Attention Windows fork**, adding support for **Sage Attention 3**.
+
+It is based on the official Sage Attention repository, with **minimal changes**: the goal is only to fix Windows-specific build issues and provide a Windows build with **feature parity** to upstream Sage Attention.
+
+---
+
+## What This Fork Provides
+
+- Based on **official Sage Attention** with the smallest possible patch set.
+- Only changes related to:
+  - Windows build fixes
+  - Packaging / wheel generation
+- No new features are added on top of upstream; the functionality should be **identical** to the official project, just **buildable and usable on Windows**.
+
+Due to limitations of my local environment, I can currently only provide wheels for:
+
+- **PyTorch:** 2.6.0 – 2.9.1  
+- **Python:** 3.11 – 3.13  
+
+---
+
+## CUDA Architectures
+
+CUDA architectures are kept **aligned with the official Windows PyTorch builds**:
+
+- During build, the script calls:
+
+  ```python
+  torch.cuda.get_arch_list()
+  ```
+
+- The result is used to populate the `TORCH_CUDA_ARCH_LIST` environment variable.
+- This keeps Sage Attention’s supported architectures **as close as possible** to those of the installed PyTorch wheel.
+
+However, the **upstream constraints still apply** and are **not** bypassed in this fork:
+
+- **Sage 2++** does **not** support architectures **below 8.0**.
+- **Sage 3** only supports architectures **below 10.0**.
+- This fork does **not** extend or change those architecture limits.
+
+---
+
+## Why Does This Fork Exist?
+
+Sage Attention is a great project: it uses **quantized attention** to achieve significant speedups while keeping the CUDA kernels relatively straightforward (especially compared to something like FlashAttention). For me, it’s a **must-have attention implementation for ComfyUI**.
+
+Unfortunately, I am a **Windows user**, and Sage Attention’s Windows support is, as many people know, quite poor.
+
+Thankfully, there are some excellent forks out there, especially **woct0rdho**’s Windows fork. That fork:
+
+- Ships Windows wheels
+- Fixes multiple platform-specific issues
+- In my experience, is sometimes even **more stable** than the original upstream
+
+I have been using their wheels for a long time and absolutely love that branch.
+
+Then **Sage Attention 3** arrived — and that’s where the problems started.
+
+woct0rdho used **Python abi3** wheels to avoid version hell, which is a brilliant idea. However, Sage Attention 3 seems to rely on some new pieces that make it impossible (or at least very difficult) to keep using abi3 for building the wheels.
+
+That was pretty frustrating.
+
+Fortunately, I managed to get Sage Attention 3 building locally on Windows after some not-too-complicated fixes (huge thanks to:
+
+- woct0rdho’s fork, and  
+- relevant PRs from **pamparamm**  
+
+which were very helpful).
+
+Given the current level of Windows support in the main Sage Attention project, I felt it would be a shame to keep this to myself — so I decided to publish this fork and share the Windows builds.
+
+The following is the original Readme
+---
+
 # SageAttention
 <!-- We are continuously updating more features. You could **Star** and **Watch** our repository to stay updated.
 
