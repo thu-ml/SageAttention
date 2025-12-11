@@ -1,5 +1,4 @@
 import torch
-from torch.testing._internal.optests import fake_check
 from flash_attn.utils.benchmark import benchmark_forward
 
 import sageattention._qattn_sm80 as qattn
