@@ -132,7 +132,7 @@ if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM120:
     )
     ext_modules.append(qattn_extension)
 
-if HAS_SM89 or HAS_SM90 or HAS_SM120:
+if HAS_SM89 or HAS_SM120:
     qattn_extension = CUDAExtension(
         name="sageattention._qattn_sm89",
         sources=[
