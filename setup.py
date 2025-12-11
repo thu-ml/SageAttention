@@ -40,11 +40,10 @@ if not SKIP_CUDA_BUILD:
     HAS_SM86 = False
     HAS_SM89 = False
     HAS_SM90 = False
-    HAS_SM100 = False
     HAS_SM120 = False
 
     # Supported NVIDIA GPU architectures.
-    SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "10.0" "12.0"}
+    SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "12.0"}
 
     # Compiler flags.
     CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
@@ -152,12 +151,9 @@ if not SKIP_CUDA_BUILD:
         elif capability.startswith("9.0"):
             HAS_SM90 = True
             num = "90a"
-        elif capability.startswith("10.0"):
-            HAS_SM100 = True
-            num = "100a"
         elif capability.startswith("12.0"):
             HAS_SM120 = True
-            num = "120a"
+            num = "120"
         else:
             continue
         NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
@@ -167,7 +163,7 @@ if not SKIP_CUDA_BUILD:
     # Fused kernels and QAttn variants
     from torch.utils.cpp_extension import CUDAExtension
 
-    if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM100 or HAS_SM120:
+    if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM120:
         ext_modules.append(
             CUDAExtension(
                 name="sageattention._qattn_sm80",
@@ -179,7 +175,7 @@ if not SKIP_CUDA_BUILD:
             )
         )
 
-    if HAS_SM89 or HAS_SM90 or HAS_SM100 or HAS_SM120:
+    if HAS_SM89 or HAS_SM90 or HAS_SM120:
         ext_modules.append(
             CUDAExtension(
                 name="sageattention._qattn_sm89",
