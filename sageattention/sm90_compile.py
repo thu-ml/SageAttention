@@ -52,7 +52,11 @@ def qk_int8_sv_f8_accum_f32_attn_inst_buf_fake_impl(
     return lse
 
 
+<<<<<<< HEAD
 @torch.library.custom_op("sageattention_sm90::qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf", mutates_args=(), device_types="cuda")
+=======
+@torch.library.custom_op("sageattention_sm90::qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf", mutates_args=("output"), device_types="cuda")
+>>>>>>> parent of 223cc7e (Ensure mutates_args is a tuple)
 def qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
     query: torch.Tensor, 
     key: torch.Tensor, 
