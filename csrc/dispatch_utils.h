@@ -27,6 +27,9 @@
   } else if (head_dim == 128) {                                 \
     constexpr int HEAD_DIM = 128;                               \
     __VA_ARGS__                                                 \
+  } else if (head_dim == 256) {                                 \
+    constexpr int HEAD_DIM = 256;                               \
+    __VA_ARGS__                                                 \
   } else {                                                      \
     std::ostringstream err_msg;                                 \
     err_msg << "Unsupported head dim: " << int(head_dim);       \
