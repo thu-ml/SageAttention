@@ -989,3 +989,90 @@ def sageattn_qk_int8_pv_fp8_cuda_sm90(
         return o, lse / 1.44269504 + lse_correction * sm_scale if smooth_k else lse / 1.44269504
     else:
         return o
+
+
+def sageattn_qk_int8_pv_fp8_cuda_dsk_sm90(
+    q: torch.Tensor, 
+    k: torch.Tensor, 
+    v: torch.Tensor,
+    tensor_layout: str = "HND",
+    is_causal: bool = False,
+    qk_quant_gran: str = "per_warp",
+    sm_scale: Optional[float] = None,
+    pv_accum_dtype: str = "fp32+fp32",
+    smooth_k: bool = True,
+    return_lse: bool = False,
+    **kwargs: Any,
+) -> torch.Tensor:
+    dtype = q.dtype
+    assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
+    assert qk_quant_gran in ["per_warp", "per_thread"], "qk_quant_gran must be either 'per_warp' or 'per_thread'."
+    assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
+
+    torch.cuda.set_device(v.device)
+
+    _tensor_layout = 0 if tensor_layout == "NHD" else 1
+    _is_causal = 1 if is_causal else 0
+    _qk_quant_gran = 3 if qk_quant_gran == "per_thread" else 2
+    _return_lse = 1 if return_lse else 0
+
+    head_dim_og = q.size(-1)
+
+    if head_dim_og < 64:
+        q = torch.nn.functional.pad(q, (0, 64 - head_dim_og))
+        k = torch.nn.functional.pad(k, (0, 64 - head_dim_og))
+        v = torch.nn.functional.pad(v, (0, 64 - head_dim_og))
+    elif head_dim_og > 64 and head_dim_og < 128:
+        q = torch.nn.functional.pad(q, (0, 128 - head_dim_og))
+        k = torch.nn.functional.pad(k, (0, 128 - head_dim_og))
+        v = torch.nn.functional.pad(v, (0, 128 - head_dim_og))
+    elif head_dim_og > 128 and head_dim_og < 256:
+        q = torch.nn.functional.pad(q, (0, 256 - head_dim_og))
+        k = torch.nn.functional.pad(k, (0, 256 - head_dim_og))
+    elif head_dim_og > 256:
+        raise ValueError(f"Unsupported head_dim: {head_dim_og}")
+    
+    assert q.stride(-1) == 1 and k.stride(-1) == 1 and v.stride(-1) == 1, "Last dim of qkv must be contiguous."
+
+    if sm_scale is None:
+        sm_scale = head_dim_og**-0.5
+        
+    seq_dim = 1 if _tensor_layout == 0 else 2
+
+    if smooth_k:
+        km = k.mean(dim=seq_dim, keepdim=True)
+        if return_lse:
+            if tensor_layout == "NHD":
+                lse_correction = torch.matmul(q.transpose(1, 2), km.transpose(1, 2).transpose(2, 3)).squeeze(-1).to(torch.float32)
+            else:
+                lse_correction = torch.matmul(q, km.transpose(2, 3)).squeeze(-1).to(torch.float32)
+    else:
+        km = None
+
+    if qk_quant_gran == "per_warp":
+        q_int8, q_scale, k_int8, k_scale = per_warp_int8_cuda(q, k, km, tensor_layout=tensor_layout, BLKQ=64, WARPQ=16, BLKK=128)
+
+    o = torch.empty(v.size(), dtype=dtype, device=q.device)
+
+    kv_len = k.size(seq_dim)
+    v_pad_len = 128 - (kv_len % 128) if kv_len % 128 != 0 else 0
+    if v_pad_len > 0:
+        if tensor_layout == "HND":
+            v = torch.cat([v, torch.zeros(v.size(0), v.size(1), v_pad_len, v.size(3), dtype=v.dtype, device=v.device)], dim=2)
+        else:
+            v = torch.cat([v, torch.zeros(v.size(0), v_pad_len, v.size(2), v.size(3), dtype=v.dtype, device=v.device)], dim=1)
+
+    v_fp8, v_scale, _ = per_channel_fp8(v, tensor_layout=tensor_layout, smooth_v=False)
+    q_int8_nope, q_int8_pe, _ = torch.split(q_int8, [128, 64, 64], dim=-1)
+    k_int8_nope, k_int8_pe, _ = torch.split(k_int8, [128, 64, 64], dim=-1)
+
+    lse = _qattn_sm90.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf_dsk_sm90(q_int8_nope, k_int8_nope, q_int8_pe, k_int8_pe, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_causal, _qk_quant_gran, sm_scale, _return_lse)
+
+    head_dim_og = v.shape[-1]
+    o = o[..., :head_dim_og]
+
+    if return_lse:
+        return o, lse / 1.44269504 + lse_correction * sm_scale if smooth_k else lse / 1.44269504
+    else:
+        return o
+
