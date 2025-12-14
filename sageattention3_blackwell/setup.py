@@ -59,7 +59,7 @@ if not SKIP_CUDA_BUILD:
     _, bare_metal_version = get_cuda_bare_metal_version(CUDA_HOME)
     if bare_metal_version < Version("12.8"):
         raise RuntimeError("Sage3 is only supported on CUDA 12.8 and above")
-
+    
     compute_capabilities = set()
 
     # Prefer TORCH_CUDA_ARCH_LIST if explicitly specified (works without GPUs)
@@ -78,7 +78,7 @@ if not SKIP_CUDA_BUILD:
                 if len(it) == 2 and it.isdigit():
                     it = f"{it[0]}.{it[1]}"
                 compute_capabilities.add(it)
-        
+
         for capability in compute_capabilities:
             if capability.startswith("10.0"):
                 cc_flag.append("-gencode")
@@ -86,12 +86,9 @@ if not SKIP_CUDA_BUILD:
             elif capability.startswith("12.0"):
                 cc_flag.append("-gencode")
                 cc_flag.append("arch=compute_120a,code=sm_120a")
-            elif capability.startswith("12.1"):
-                cc_flag.append("-gencode")
-                cc_flag.append("arch=compute_121a,code=sm_121a")
             else:
                 raise RuntimeError(f"Unsupported GPU capability specified: {capability}")
-            
+
     # If no TORCH_CUDA_ARCH_LIST, try to detect the GPU capability (only works with GPUs)
     else:
         cc_major, cc_minor = torch.cuda.get_device_capability()
@@ -101,11 +98,6 @@ if not SKIP_CUDA_BUILD:
         elif (cc_major, cc_minor) == (12, 0):  # sm_120
             cc_flag.append("-gencode")
             cc_flag.append("arch=compute_120a,code=sm_120a")
-        elif (cc_major, cc_minor) == (12, 1):  # sm_121
-            cc_flag.append("-gencode")
-            cc_flag.append("arch=compute_121a,code=sm_121a")
-        else:
-            raise RuntimeError("Unsupported GPU")
 
     # HACK: The compiler flag -D_GLIBCXX_USE_CXX11_ABI is set to be the same as
     # torch._C._GLIBCXX_USE_CXX11_ABI
@@ -155,10 +147,6 @@ if not SKIP_CUDA_BUILD:
         cxx_flags = ["/std:c++17", "/Zc:__cplusplus", "/bigobj", "/MD", "/permissive-"]
         nvcc_flags += [f"-Xcompiler={flag}" for flag in cxx_flags]
         cxx_flags += ["/O2"]
-
-        #keep_dir = Path("F:/project/SageAttention/SageAttention/sageattention3_blackwell/nvcc_keep")
-        #keep_dir.mkdir(parents=True, exist_ok=True)        
-        #nvcc_flags += ["--keep", f"--keep-dir={keep_dir}"]
     else:
         cxx_flags = ["-O3", "-std=c++17"]        
 
