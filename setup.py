@@ -83,7 +83,6 @@ def get_nvcc_cuda_version(cuda_dir: str) -> Version:
     nvcc_cuda_version = parse(output[release_idx].split(",")[0])
     return nvcc_cuda_version
 
- Also you can specify TORCH_CUDA_ARCH_LIST for your GPU architectures.
 compute_capabilities = set()
 
 # Prefer TORCH_CUDA_ARCH_LIST if explicitly specified (works without GPUs)
