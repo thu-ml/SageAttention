@@ -151,7 +151,7 @@ struct Flash_fwd_kernel_traits {
     using SmemCopyAtomDS = Copy_Atom<UniversalCopy<float>, float>;
 #if defined(_MSC_VER)
 
-    using BlkScaledConfig = ::flash::BlockScaledConfig<16>;
+    using BlkScaledConfig = ::flash::BlockScaledConfig<SFVectorSize>;
     // Inline the definitions to avoid MSVC dependent-name quirks
     using SfAtom = Layout<
         Shape< Shape<_16, _4>, Shape<Int<SFVectorSize>, Int<4>>>,
@@ -166,10 +166,10 @@ struct Flash_fwd_kernel_traits {
         )
       )
     );    
-    using SmemLayoutAtomSFQ = decltype(::flash::BlockScaledConfig<16>::deduce_smem_layoutSFQ(TiledMmaQK{}, TileShape_MNK{}));
-    using SmemLayoutAtomSFK = decltype(::flash::BlockScaledConfig<16>::deduce_smem_layoutSFKV(TiledMmaQK{}, TileShape_MNK{}));
-    using SmemLayoutAtomSFV = decltype(::flash::BlockScaledConfig<16>::deduce_smem_layoutSFKV(TiledMmaPV{}, TileShape_MNK{}));
-    using SmemLayoutAtomSFVt = decltype(::flash::BlockScaledConfig<16>::deduce_smem_layoutSFVt(TiledMmaPV{}, Shape<Int<kBlockM>, Int<kHeadDim>, Int<kBlockN>>{}));
+    using SmemLayoutAtomSFQ = decltype(::flash::BlockScaledConfig<SFVectorSize>::deduce_smem_layoutSFQ(TiledMmaQK{}, TileShape_MNK{}));
+    using SmemLayoutAtomSFK = decltype(::flash::BlockScaledConfig<SFVectorSize>::deduce_smem_layoutSFKV(TiledMmaQK{}, TileShape_MNK{}));
+    using SmemLayoutAtomSFV = decltype(::flash::BlockScaledConfig<SFVectorSize>::deduce_smem_layoutSFKV(TiledMmaPV{}, TileShape_MNK{}));
+    using SmemLayoutAtomSFVt = decltype(::flash::BlockScaledConfig<SFVectorSize>::deduce_smem_layoutSFVt(TiledMmaPV{}, Shape<Int<kBlockM>, Int<kHeadDim>, Int<kBlockN>>{}));
 #else
     using BlkScaledConfig = flash::BlockScaledConfig<SFVectorSize>;
     using LayoutSF = typename BlkScaledConfig::LayoutSF;

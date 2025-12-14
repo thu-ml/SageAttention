@@ -152,10 +152,15 @@ if not SKIP_CUDA_BUILD:
 
     if os.name == "nt":
         nvcc_flags += ["-D_WIN32=1", "-DUSE_CUDA=1"]
-        cxx_flags = ["/Zi", "/O2", "/std:c++17", "/MD", "/permissive-"]
+        cxx_flags = ["/std:c++17", "/Zc:__cplusplus", "/bigobj", "/MD", "/permissive-"]
+        nvcc_flags += [f"-Xcompiler={flag}" for flag in cxx_flags]
+        cxx_flags += ["/O2"]
+
+        #keep_dir = Path("F:/project/SageAttention/SageAttention/sageattention3_blackwell/nvcc_keep")
+        #keep_dir.mkdir(parents=True, exist_ok=True)        
+        #nvcc_flags += ["--keep", f"--keep-dir={keep_dir}"]
     else:
-        cxx_flags = ["-O3", "-std=c++17"]
-        
+        cxx_flags = ["-O3", "-std=c++17"]        
 
     ext_modules.append(
         CUDAExtension(

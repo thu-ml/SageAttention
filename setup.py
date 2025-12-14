@@ -49,7 +49,7 @@ if not SKIP_CUDA_BUILD:
 
     # Compiler flags.
     if os.name == "nt":
-        CXX_FLAGS = ["/Zi", "/O2", "/openmp", "/std:c++17", "/DENABLE_BF16", "/MD", "/permissive-"]
+        CXX_FLAGS = ["/openmp", "/std:c++17", "/Zc:__cplusplus", "/DENABLE_BF16", "/MD", "/permissive-"]
         NVCC_FLAGS = [
             "-O3",
             "-std=c++17",
@@ -63,6 +63,8 @@ if not SKIP_CUDA_BUILD:
             "-D_WIN32=1",
             "-DUSE_CUDA=1",
         ]
+        NVCC_FLAGS += [f"-Xcompiler={flag}" for flag in CXX_FLAGS]
+        CXX_FLAGS += ["/O2"]
     else:
         CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
         NVCC_FLAGS = [
