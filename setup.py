@@ -67,7 +67,8 @@ def get_nvcc_cuda_version(cuda_dir: str) -> Version:
     return nvcc_cuda_version
 
 # Iterate over all GPUs on the current machine. Also you can modify this part to specify the architecture if you want to build for specific GPU architectures.
-compute_capabilities = set()
+compute_capabilities = {arch for arch in os.getenv("TORCH_CUDA_ARCH_LIST", "").split(";")
+                        if arch in SUPPORTED_ARCHS or (arch.endswith("+PTX") and arch[:-len("+PTX")] in SUPPORTED_ARCHS)}
 device_count = torch.cuda.device_count()
 for i in range(device_count):
     major, minor = torch.cuda.get_device_capability(i)
@@ -95,6 +96,8 @@ if nvcc_cuda_version < Version("12.8") and any(cc.startswith("12.0") for cc in c
     raise RuntimeError(
         "CUDA 12.8 or higher is required for compute capability 12.0.")
 
+NVCC_FLAGS_NO_CODE = NVCC_FLAGS.copy()
+NVCC_FLAGS_CODE = dict()
 # Add target compute capabilities to NVCC flags.
 for capability in compute_capabilities:
     if capability.startswith("8.0"):
@@ -113,8 +116,10 @@ for capability in compute_capabilities:
         HAS_SM120 = True
         num = "120" # need to use sm120a to use mxfp8/mxfp4/nvfp4 instructions.
     NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
+    NVCC_FLAGS_CODE[num] = NVCC_FLAGS[-2:]
     if capability.endswith("+PTX"):
         NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=compute_{num}"]
+        NVCC_FLAGS_CODE[num] += NVCC_FLAGS[-2:]
 
 ext_modules = []
 
@@ -148,7 +153,7 @@ if HAS_SM89 or HAS_SM120:
         ],
         extra_compile_args={
             "cxx": CXX_FLAGS,
-            "nvcc": NVCC_FLAGS,
+            "nvcc": NVCC_FLAGS_NO_CODE + NVCC_FLAGS_CODE.get("89", []) + NVCC_FLAGS_CODE.get("120", []),
         },
     )
     ext_modules.append(qattn_extension)
@@ -162,9 +167,9 @@ if HAS_SM90:
         ],
         extra_compile_args={
             "cxx": CXX_FLAGS,
-            "nvcc": NVCC_FLAGS,
+            "nvcc": NVCC_FLAGS_NO_CODE + NVCC_FLAGS_CODE.get("90a", []),
         },
-        extra_link_args=['-lcuda'],
+        # extra_link_args=['-lcuda'], need not to explicit link against cuda
     )
     ext_modules.append(qattn_extension)
 

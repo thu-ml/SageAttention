@@ -40,7 +40,7 @@ except:
 
 try:
     from . import _qattn_sm90
-    SM90_ENABLED = True
+    SM90_ENABLED = _qattn_sm90.is_available()
 except:
     SM90_ENABLED = False
 
