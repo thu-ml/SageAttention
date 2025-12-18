@@ -15,208 +15,342 @@ limitations under the License.
 """
 
 import os
+import sys
 import subprocess
 import threading
-from packaging.version import parse, Version
 import warnings
+from packaging.version import parse, Version
 
 from setuptools import setup, find_packages
 import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
+# Skip CUDA build in CI or when explicitly requested
+SKIP_CUDA_BUILD = (
+    os.getenv("SAGEATTN_SKIP_CUDA_BUILD", "0").upper() in {"1", "TRUE", "YES"}
+    or ("sdist" in sys.argv)
+)
 
-HAS_SM80 = False
-HAS_SM86 = False
-HAS_SM89 = False
-HAS_SM90 = False
-HAS_SM120 = False
+try:
+    import torch
+    IS_ROCM = getattr(torch.version, "hip", None) is not None
+except ImportError:
+    IS_ROCM = False
+    torch = None
 
-# Supported NVIDIA GPU architectures.
-SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "12.0"}
+def get_rocm_arch():
+    try:
+        # 运行`rocminfo`并提取包含gfx的行
+        result = subprocess.run(['rocminfo'], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError("rocminfo command failed")
 
-# Compiler flags.
-CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
-NVCC_FLAGS = [
-    "-O3",
-    "-std=c++17",
-    "-U__CUDA_NO_HALF_OPERATORS__",
-    "-U__CUDA_NO_HALF_CONVERSIONS__",
-    "--use_fast_math",
-    "--threads=8",
-    "-Xptxas=-v",
-    "-diag-suppress=174", # suppress the specific warning
-]
+        # 查找并返回架构名
+        for line in result.stdout.splitlines():
+            if "gfx" in line:
+                return line.split()[1]  # 获取第二个元素，例如：gfx942
+    except Exception as e:
+        print(f"Error detecting current architecture: {e}")
 
-ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
-CXX_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
-NVCC_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
+    return None
 
-if CUDA_HOME is None:
-    raise RuntimeError(
-        "Cannot find CUDA_HOME. CUDA must be available to build the package.")
-
-def get_nvcc_cuda_version(cuda_dir: str) -> Version:
-    """Get the CUDA version from nvcc.
-
-    Adapted from https://github.com/NVIDIA/apex/blob/8b7a1ff183741dd8f9b87e7bafd04cfde99cea28/setup.py
-    """
-    nvcc_output = subprocess.check_output([cuda_dir + "/bin/nvcc", "-V"],
-                                          universal_newlines=True)
-    output = nvcc_output.split()
-    release_idx = output.index("release") + 1
-    nvcc_cuda_version = parse(output[release_idx].split(",")[0])
-    return nvcc_cuda_version
-
-# Iterate over all GPUs on the current machine. Also you can modify this part to specify the architecture if you want to build for specific GPU architectures.
-compute_capabilities = set()
-device_count = torch.cuda.device_count()
-for i in range(device_count):
-    major, minor = torch.cuda.get_device_capability(i)
-    if major < 8:
-        warnings.warn(f"skipping GPU {i} with compute capability {major}.{minor}")
-        continue
-    compute_capabilities.add(f"{major}.{minor}")
-
-nvcc_cuda_version = get_nvcc_cuda_version(CUDA_HOME)
-if not compute_capabilities:
-    raise RuntimeError("No GPUs found. Please specify the target GPU architectures or build on a machine with GPUs.")
-else:
-    print(f"Detect GPUs with compute capabilities: {compute_capabilities}")
-
-# Validate the NVCC CUDA version.
-if nvcc_cuda_version < Version("12.0"):
-    raise RuntimeError("CUDA 12.0 or higher is required to build the package.")
-if nvcc_cuda_version < Version("12.4") and any(cc.startswith("8.9") for cc in compute_capabilities):
-    raise RuntimeError(
-        "CUDA 12.4 or higher is required for compute capability 8.9.")
-if nvcc_cuda_version < Version("12.3") and any(cc.startswith("9.0") for cc in compute_capabilities):
-    raise RuntimeError(
-        "CUDA 12.3 or higher is required for compute capability 9.0.")
-if nvcc_cuda_version < Version("12.8") and any(cc.startswith("12.0") for cc in compute_capabilities):
-    raise RuntimeError(
-        "CUDA 12.8 or higher is required for compute capability 12.0.")
-
-# Add target compute capabilities to NVCC flags.
-for capability in compute_capabilities:
-    if capability.startswith("8.0"):
-        HAS_SM80 = True
-        num = "80"
-    elif capability.startswith("8.6"):
-        HAS_SM86 = True
-        num = "86"
-    elif capability.startswith("8.9"):
-        HAS_SM89 = True
-        num = "89"
-    elif capability.startswith("9.0"):
-        HAS_SM90 = True
-        num = "90a" # need to use sm90a instead of sm90 to use wgmma ptx instruction.
-    elif capability.startswith("12.0"):
-        HAS_SM120 = True
-        num = "120" # need to use sm120a to use mxfp8/mxfp4/nvfp4 instructions.
-    NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
-    if capability.endswith("+PTX"):
-        NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=compute_{num}"]
 
 ext_modules = []
+cmdclass = {}
 
-if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM120:
-    qattn_extension = CUDAExtension(
-        name="sageattention._qattn_sm80",
-        sources=[
-            "csrc/qattn/pybind_sm80.cpp",
-            "csrc/qattn/qk_int_sv_f16_cuda_sm80.cu",
-        ],
-        extra_compile_args={
-            "cxx": CXX_FLAGS,
-            "nvcc": NVCC_FLAGS,
-        },
-    )
-    ext_modules.append(qattn_extension)
+if IS_ROCM:
+    import torch
+    from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+    
+    ROCM_HOME = os.environ.get("ROCM_HOME", "/opt/rocm")
+    # 基础配置
+    CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
+    ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
+    CXX_FLAGS.append(f"-D_GLIBCXX_USE_CXX11_ABI={ABI}")
+    
+    # 清理环境变量
+    for var in ("HCC_AMDGPU_TARGET", "AMDGPU_TARGETS", "HIPCC_COMPILE_FLAGS_APPEND", "HIP_TARGETS", "ROCM_TARGET_LST"):
+        if var in os.environ: 
+            del os.environ[var]
+    
+    # ROCm 编译标志
+    rocm_arch = get_rocm_arch()
+    if rocm_arch:
+        # 更新环境变量
+        os.environ['ROCM_ARCH'] = rocm_arch
+        # 添加构建标志
+        debug = os.environ.get("SA_DEBUG", "0") == "1"
+        base_flags = ["-std=c++17", f"-D_GLIBCXX_USE_CXX11_ABI={ABI}", "-DUSE_ROCM=1"]
+        debug_flags = ["-O0", "-g3", "-ggdb", "-fno-inline", "-fno-omit-frame-pointer"] if debug else ["-O3"]
+        rocm_hipcc = base_flags + debug_flags + [f"--offload-arch={rocm_arch}"] + [f"-D__ROCM_ARCH_{rocm_arch.upper()}"]
+        rocm_cxx = base_flags + debug_flags
+       # rocm_hipcc = base_flags + debug_flags + ["--offload-arch=gfx942"] + ["-D__ROCM_ARCH_GFX942"]
 
-if HAS_SM89 or HAS_SM120:
-    qattn_extension = CUDAExtension(
-        name="sageattention._qattn_sm89",
-        sources=[
-            "csrc/qattn/pybind_sm89.cpp",
-            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_attn_inst_buf.cu",
-            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f16_attn_inst_buf.cu",
-            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_attn.cu",
-            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn.cu",
-            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_fuse_v_scale_attn.cu",
-            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf.cu",
-            "csrc/qattn/sm89_qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf.cu"
-            #"csrc/qattn/qk_int_sv_f8_cuda_sm89.cu",
-        ],
-        extra_compile_args={
-            "cxx": CXX_FLAGS,
-            "nvcc": NVCC_FLAGS,
-        },
-    )
-    ext_modules.append(qattn_extension)
+        # ROCm 库路径
+        torch_lib = os.path.join(torch.__path__[0], "lib")
+        rocm_libs = [os.path.join(ROCM_HOME, d) for d in ["lib", "lib64"]]
+        
+        # ROCm 扩展模块
+        ext_modules.extend([
+            CUDAExtension(
+                "sageattention._qattn_rocm",
+                sources=[
+                    "csrc/qattn/rocm/pybind_rocm.cpp",
+                    "csrc/qattn/rocm/launch_sgattn.cu",
+                    "csrc/qattn/rocm/sgattn.cu"
+                ],
+                include_dirs=[os.path.join(ROCM_HOME, "include"), os.path.join(ROCM_HOME, "include", "hip")],
+                extra_compile_args={"cxx": rocm_cxx, "nvcc": rocm_hipcc},
+                libraries=["amdhip64", "hiprtc", "rocblas", "hipblas", "c10", "torch", "torch_python"],
+                library_dirs=rocm_libs + [torch_lib],
+                runtime_library_dirs=rocm_libs + [torch_lib]
+            ),
+            CUDAExtension(
+                "sageattention._fused",
+                sources=["csrc/fused/rocm/pybind_rocm.cpp", "csrc/fused/rocm/fused.cu"],
+                include_dirs=[os.path.join(ROCM_HOME, "include"), os.path.join(ROCM_HOME, "include", "hip")],
+                extra_compile_args={"cxx": rocm_cxx, "nvcc": rocm_hipcc},
+                libraries=["amdhip64", "hiprtc", "rocblas", "hipblas", "c10", "torch", "torch_python"],
+                library_dirs=rocm_libs + [torch_lib],
+                runtime_library_dirs=rocm_libs + [torch_lib]
+            )
+        ])
+        
+        cmdclass = {"build_ext": BuildExtension} if ext_modules else {}
+        print("Current ROCm architecture detected:", rocm_arch)
+    else:
+        print("Unable to detect current ROCm architecture.")
+       
+elif not SKIP_CUDA_BUILD:
+    import torch
+    from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
 
-if HAS_SM90:
-    qattn_extension = CUDAExtension(
-        name="sageattention._qattn_sm90",
-        sources=[
-            "csrc/qattn/pybind_sm90.cpp",
-            "csrc/qattn/qk_int_sv_f8_cuda_sm90.cu",
-        ],
-        extra_compile_args={
-            "cxx": CXX_FLAGS,
-            "nvcc": NVCC_FLAGS,
-        },
-        extra_link_args=['-lcuda'],
-    )
-    ext_modules.append(qattn_extension)
+    HAS_SM80 = False
+    HAS_SM86 = False
+    HAS_SM89 = False
+    HAS_SM90 = False
+    HAS_SM120 = False
+
+    # Supported NVIDIA GPU architectures.
+    SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "12.0"}
+
+    # Compiler flags.
+    CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
+    NVCC_FLAGS = [
+        "-O3",
+        "-std=c++17",
+        "-U__CUDA_NO_HALF_OPERATORS__",
+        "-U__CUDA_NO_HALF_CONVERSIONS__",
+        "--use_fast_math",
+        "--threads=8",
+        "-Xptxas=-v",
+        "-diag-suppress=174",
+    ]
+
+    # Append flags from env if provided
+    cxx_append = os.getenv("CXX_APPEND_FLAGS", "").strip()
+    if cxx_append:
+        CXX_FLAGS += cxx_append.split()
+    nvcc_append = os.getenv("NVCC_APPEND_FLAGS", "").strip()
+    if nvcc_append:
+        NVCC_FLAGS += nvcc_append.split()
+
+    ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
+    CXX_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
+    NVCC_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
+
+    if CUDA_HOME is None:
+        raise RuntimeError(
+            "Cannot find CUDA_HOME. CUDA must be available to build the package.")
+
+    def get_nvcc_cuda_version(cuda_dir: str) -> Version:
+        """Get the CUDA version from nvcc.
+
+        Adapted from https://github.com/NVIDIA/apex/blob/8b7a1ff183741dd8f9b87e7bafd04cfde99cea28/setup.py
+        """
+        nvcc_output = subprocess.check_output([cuda_dir + "/bin/nvcc", "-V"],
+                                              universal_newlines=True)
+        output = nvcc_output.split()
+        release_idx = output.index("release") + 1
+        nvcc_cuda_version = parse(output[release_idx].split(",")[0])
+        return nvcc_cuda_version
+
+    # Determine target compute capabilities
+    compute_capabilities = set()
+
+    # Prefer TORCH_CUDA_ARCH_LIST if explicitly specified (works without GPUs)
+    arch_list_env = os.getenv("TORCH_CUDA_ARCH_LIST", "").strip()
+    if arch_list_env:
+        for item in arch_list_env.replace(",", ";").split(";"):
+            it = item.strip()
+            if not it:
+                continue
+            it = it.lower().replace("sm_", "").replace("compute_", "")
+            it = it.replace("a", "")
+            if it.endswith("+ptx"):
+                it = it[:-4]
+                compute_capabilities.add(f"{it}+PTX")
+            else:
+                if len(it) == 2 and it.isdigit():
+                    it = f"{it[0]}.{it[1]}"
+                compute_capabilities.add(it)
+
+    # If not provided, try to detect from local GPUs
+    if not compute_capabilities:
+        device_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        for i in range(device_count):
+            major, minor = torch.cuda.get_device_capability(i)
+            if major < 8:
+                warnings.warn(f"skipping GPU {i} with compute capability {major}.{minor}")
+                continue
+            compute_capabilities.add(f"{major}.{minor}")
+
+    nvcc_cuda_version = get_nvcc_cuda_version(CUDA_HOME)
+
+    if not compute_capabilities:
+        raise RuntimeError(
+            "No target compute capabilities. Set TORCH_CUDA_ARCH_LIST or build on a machine with GPUs.")
+    else:
+        print(f"Target compute capabilities: {compute_capabilities}")
+
+    # Validate the NVCC CUDA version.
+    if nvcc_cuda_version < Version("12.0"):
+        raise RuntimeError("CUDA 12.0 or higher is required to build the package.")
+    if nvcc_cuda_version < Version("12.4") and any(cc.startswith("8.9") for cc in compute_capabilities):
+        raise RuntimeError(
+            "CUDA 12.4 or higher is required for compute capability 8.9.")
+    if nvcc_cuda_version < Version("12.3") and any(cc.startswith("9.0") for cc in compute_capabilities):
+        raise RuntimeError(
+            "CUDA 12.3 or higher is required for compute capability 9.0.")
+    if nvcc_cuda_version < Version("12.8") and any(cc.startswith("12.0") for cc in compute_capabilities):
+        raise RuntimeError(
+            "CUDA 12.8 or higher is required for compute capability 12.0.")
+
+    # Add target compute capabilities to NVCC flags.
+    for capability in compute_capabilities:
+        if capability.startswith("8.0"):
+            HAS_SM80 = True
+            num = "80"
+        elif capability.startswith("8.6"):
+            HAS_SM86 = True
+            num = "86"
+        elif capability.startswith("8.9"):
+            HAS_SM89 = True
+            num = "89"
+        elif capability.startswith("9.0"):
+            HAS_SM90 = True
+            num = "90a"
+        elif capability.startswith("12.0"):
+            HAS_SM120 = True
+            num = "120"
+        NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
+        if capability.endswith("+PTX"):
+            NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=compute_{num}"]
+
+    # Fused kernels and QAttn variants
+    from torch.utils.cpp_extension import CUDAExtension
+
+    if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM120:
+        ext_modules.append(
+            CUDAExtension(
+                name="sageattention._qattn_sm80",
+                sources=[
+                    "csrc/qattn/pybind_sm80.cpp",
+                    "csrc/qattn/qk_int_sv_f16_cuda_sm80.cu",
+                ],
+                extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
+            )
+        )
+
+    if HAS_SM89 or HAS_SM120:
+        ext_modules.append(
+            CUDAExtension(
+                name="sageattention._qattn_sm89",
+                sources=[
+                    "csrc/qattn/pybind_sm89.cpp",
+                    "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_attn_inst_buf.cu",
+                    "csrc/qattn/sm89_qk_int8_sv_f8_accum_f16_attn_inst_buf.cu",
+                    "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_attn.cu",
+                    "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn.cu",
+                    "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_fuse_v_scale_attn.cu",
+                    "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf.cu",
+                    "csrc/qattn/sm89_qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf.cu",
+                ],
+                extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
+            )
+        )
+
+    if HAS_SM90:
+        ext_modules.append(
+            CUDAExtension(
+                name="sageattention._qattn_sm90",
+                sources=[
+                    "csrc/qattn/pybind_sm90.cpp",
+                    "csrc/qattn/qk_int_sv_f8_cuda_sm90.cu",
+                ],
+                extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
+                extra_link_args=['-lcuda'],
+            )
+        )
 
 # Fused kernels.
-fused_extension = CUDAExtension(
-    name="sageattention._fused",
-    sources=["csrc/fused/pybind.cpp", "csrc/fused/fused.cu"],
-    extra_compile_args={
-        "cxx": CXX_FLAGS,
-        "nvcc": NVCC_FLAGS,
-    },
-)
-ext_modules.append(fused_extension)
+    ext_modules.append(
+        CUDAExtension(
+            name="sageattention._fused",
+            sources=["csrc/fused/pybind.cpp", "csrc/fused/fused.cu"],
+            extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
+        )
+    )
 
+    # Resolve parallelism from env
+    parallel = None
+    if 'EXT_PARALLEL' in os.environ:
+        try:
+            parallel = int(os.getenv('EXT_PARALLEL'))
+        finally:
+            pass
+    if parallel is None and 'MAX_JOBS' in os.environ:
+        try:
+            parallel = int(os.getenv('MAX_JOBS'))
+        finally:
+            pass
+    # Defaults if not provided
+    if parallel is None:
+        parallel = 4
+    # Ensure MAX_JOBS for underlying tooling if not explicitly set
+    os.environ.setdefault('MAX_JOBS', '32')
 
-parallel = None
-if 'EXT_PARALLEL' in os.environ:
-    try:
-        parallel = int(os.getenv('EXT_PARALLEL'))
-    finally:
-        pass
+    class BuildExtensionSeparateDir(BuildExtension):
+        build_extension_patch_lock = threading.Lock()
+        thread_ext_name_map = {}
 
+        def finalize_options(self):
+            if parallel is not None:
+                self.parallel = parallel
+            super().finalize_options()
 
-# Prevent file conflicts when multiple extensions are compiled simultaneously
-class BuildExtensionSeparateDir(BuildExtension):
-    build_extension_patch_lock = threading.Lock()
-    thread_ext_name_map = {}
+        def build_extension(self, ext):
+            with self.build_extension_patch_lock:
+                if not getattr(self.compiler, "_compile_separate_output_dir", False):
+                    compile_orig = self.compiler.compile
 
-    def finalize_options(self):
-        if parallel is not None:
-            self.parallel = parallel
-        super().finalize_options()
+                    def compile_new(*args, **kwargs):
+                        return compile_orig(*args, **{
+                            **kwargs,
+                            "output_dir": os.path.join(
+                                kwargs["output_dir"],
+                                self.thread_ext_name_map[threading.current_thread().ident]),
+                        })
+                    self.compiler.compile = compile_new
+                    self.compiler._compile_separate_output_dir = True
+            self.thread_ext_name_map[threading.current_thread().ident] = ext.name
+            objects = super().build_extension(ext)
+            return objects
 
-    def build_extension(self, ext):
-        with self.build_extension_patch_lock:
-            if not getattr(self.compiler, "_compile_separate_output_dir", False):
-                compile_orig = self.compiler.compile
+    cmdclass = {"build_ext": BuildExtensionSeparateDir} if ext_modules else {}
 
-                def compile_new(*args, **kwargs):
-                    return compile_orig(*args, **{
-                        **kwargs,
-                        "output_dir": os.path.join(
-                            kwargs["output_dir"],
-                            self.thread_ext_name_map[threading.current_thread().ident]),
-                    })
-                self.compiler.compile = compile_new
-                self.compiler._compile_separate_output_dir = True
-        self.thread_ext_name_map[threading.current_thread().ident] = ext.name
-        objects = super().build_extension(ext)
-        return objects
-
-
+else:
+    print("Skipping CUDA/ROCm extension build...")
+    
 setup(
     name='sageattention', 
     version='2.2.0',  
@@ -229,5 +363,5 @@ setup(
     packages=find_packages(),
     python_requires='>=3.9',
     ext_modules=ext_modules,
-    cmdclass={"build_ext": BuildExtensionSeparateDir} if ext_modules else {},
+    cmdclass=cmdclass,
 )
