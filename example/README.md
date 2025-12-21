@@ -1,8 +1,18 @@
 
 ## Plug-and-play Example
 
+This folder contains **plug-and-play inference scripts** for five Diffusers video models replacing full attention with **sageattn**.
+
+Supported models:
+
+* **CogVideoX:** [CogVideoX-2B](https://huggingface.co/zai-org/CogVideoX-2b) and [CogVideoX1.5-5B](https://huggingface.co/zai-org/CogVideoX1.5-5B)
+* **WAN:** [Wan2.1-T2V-1.3B](https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B-Diffusers), [Wan2.1-T2V-14B](https://huggingface.co/Wan-AI/Wan2.1-T2V-14B-Diffusers) and [Wan2.2-T2V-A14B](https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B-Diffusers)
+* [**HunyuanVideo**](https://huggingface.co/hunyuanvideo-community/HunyuanVideo)
+* [**Mochi**](https://huggingface.co/genmo/mochi-1-preview)
+* **LTX-Video:** [0.9.7-dev](https://huggingface.co/Lightricks/LTX-Video-0.9.7-dev) and [spatial upscaler](https://huggingface.co/Lightricks/ltxv-spatial-upscaler-0.9.7)
+
 **We can replace `scaled_dot_product_attention` easily.**  
-We will take [CogvideoX](https://huggingface.co/THUDM/CogVideoX-2b) as an example:
+We will take [CogvideoX](ttps://huggingface.co/zai-org/CogVideoX-2b) as an example:
 
 **Just add the following codes and run!**
 ```python
@@ -16,15 +26,17 @@ Specifically,
 
 ```bash
 cd example
-python cogvideox-2b.py --compile --attention_type sage
+python cogvideox_infer.py --model cogvideox-2b --compile --attention_type sage
 ```
 
-**You can get a lossless video in** `./example` **faster than by using** `python cogvideox-2b.py --compile`.
+**You can get a lossless video in** `./example/videos/<model>/<attention_type>/` **faster than by using** `--attention_type sdpa.`.
 
 > **Note:** If you set `--compile`, the first run will be slower than the following runs. Please run it twice to get the accurate speed.
 
+> **Note:** `torch.compile` is generally incompatible with `enable_sequential_cpu_offload()`. Don't use them together.
+
 ## Modify Attention From Source Code
-To have finer control over where to use SageAttention, you can modify a small subset of the source code. For example, in the `mochi.py` file, you can replace the `MochiAttnProcessor2_0` from diffusers with your own attention class.
+To have finer control over where to use SageAttention, you can modify a small subset of the source code. For example, in [`modify_mochi.py`](./modify_model/modify_mochi.py), you can replace the `MochiAttnProcessor2_0` from diffusers with your own attention class.
 
 ![Local Image](../assets/mochi_example.png)
 
