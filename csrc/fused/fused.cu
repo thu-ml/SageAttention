@@ -652,7 +652,7 @@ void quant_per_block_int8_fuse_sub_mean_cuda(
 
   DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(input_dtype, c_type, {
     DISPATCH_BLOCK_SIZE(block_size, BLOCK_SIZE, {
-      DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
+      DISPATCH_HEAD_DIM_QK(head_dim, HEAD_DIM, {
 
         CHECK_SHAPE(mean, batch_size, num_heads, head_dim);
         CHECK_SHAPE(output, input.size(0), input.size(1), input.size(2), input.size(3));
@@ -738,7 +738,7 @@ void quant_per_warp_int8_cuda(
   DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(input_dtype, c_type, {
     DISPATCH_BLOCK_SIZE(block_size, BLOCK_SIZE, {
       DISPATCH_WARP_BLOCK_SIZE(warp_block_size, WARP_BLOCK_SIZE, {
-        DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
+        DISPATCH_HEAD_DIM_QK(head_dim, HEAD_DIM, {
 
           CHECK_SHAPE(output, input.size(0), input.size(1), input.size(2), input.size(3));
           CHECK_SHAPE(scale, batch_size, num_heads, (num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE * (BLOCK_SIZE / WARP_BLOCK_SIZE));
