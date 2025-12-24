@@ -357,23 +357,23 @@ elif not SKIP_CUDA_BUILD:
 
     cmdclass = {"build_ext": BuildExtensionSeparateDir} if ext_modules else {}
 
-        def build_extension(self, ext):
-            with self.build_extension_patch_lock:
-                if not getattr(self.compiler, "_compile_separate_output_dir", False):
-                    compile_orig = self.compiler.compile
+    def build_extension(self, ext):
+        with self.build_extension_patch_lock:
+            if not getattr(self.compiler, "_compile_separate_output_dir", False):
+                compile_orig = self.compiler.compile
 
-                    def compile_new(*args, **kwargs):
-                        return compile_orig(*args, **{
-                            **kwargs,
-                            "output_dir": os.path.join(
-                                kwargs["output_dir"],
-                                self.thread_ext_name_map[threading.current_thread().ident]),
-                        })
-                    self.compiler.compile = compile_new
-                    self.compiler._compile_separate_output_dir = True
-            self.thread_ext_name_map[threading.current_thread().ident] = ext.name
-            objects = super().build_extension(ext)
-            return objects
+                def compile_new(*args, **kwargs):
+                    return compile_orig(*args, **{
+                        **kwargs,
+                        "output_dir": os.path.join(
+                            kwargs["output_dir"],
+                            self.thread_ext_name_map[threading.current_thread().ident]),
+                    })
+                self.compiler.compile = compile_new
+                self.compiler._compile_separate_output_dir = True
+        self.thread_ext_name_map[threading.current_thread().ident] = ext.name
+        objects = super().build_extension(ext)
+        return objects
 
     cmdclass = {"build_ext": BuildExtensionSeparateDir} if ext_modules else {}
 
