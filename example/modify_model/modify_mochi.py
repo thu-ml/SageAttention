@@ -1,23 +1,20 @@
 import torch
 import torch.nn.functional as F
-from sageattention import sageattn
-import argparse
 from typing import Optional
-from diffusers import MochiPipeline
 from diffusers.models import MochiTransformer3DModel
-from diffusers.utils import export_to_video
+from diffusers.models.attention_processor import MochiAttention
 
-# copy the attention processor from the diffusers library
 class MochiAttnProcessor2_0:
     """Attention processor used in Mochi."""
 
-    def __init__(self):
+    def __init__(self, attn_func):
+        self.attn_func = attn_func
         if not hasattr(F, "scaled_dot_product_attention"):
             raise ImportError("MochiAttnProcessor2_0 requires PyTorch 2.0. To use it, please upgrade PyTorch to 2.0.")
 
     def __call__(
         self,
-        attn,
+        attn: "MochiAttention",
         hidden_states: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
@@ -88,21 +85,9 @@ class MochiAttnProcessor2_0:
             valid_key = torch.cat([key[idx : idx + 1], valid_encoder_key], dim=2)
             valid_value = torch.cat([value[idx : idx + 1], valid_encoder_value], dim=2)
 
-            ### replace with custom attention ###
-            if attn.attention_type == "sage":
-                attn_output = sageattn(valid_query, valid_key, valid_value, is_causal=False)
-            elif attn.attention_type == "fa3":
-                from sageattention.fa3_wrapper import fa3
-                attn_output = fa3(valid_query, valid_key, valid_value, is_causal=False)
-            elif attn.attention_type == "fa3_fp8":
-                from sageattention.fa3_wrapper import fa3_fp8
-                attn_output = fa3_fp8(valid_query, valid_key, valid_value, is_causal=False)
-            else:
-                attn_output = F.scaled_dot_product_attention(
-                    valid_query, valid_key, valid_value, dropout_p=0.0, is_causal=False
-                )
-            ####################################
-
+            attn_output = self.attn_func(
+                valid_query, valid_key, valid_value, dropout_p=0.0, is_causal=False
+            )
             valid_sequence_length = attn_output.size(2)
             attn_output = F.pad(attn_output, (0, 0, 0, total_length - valid_sequence_length))
             attn_outputs.append(attn_output)
@@ -124,45 +109,11 @@ class MochiAttnProcessor2_0:
 
         return hidden_states, encoder_hidden_states
 
-def set_attention_mochi(
-        model: MochiTransformer3DModel,
-        attention_type: str,
+def set_sage_attn_mochi(
+    model: MochiTransformer3DModel,
+    attn_func,
 ):
     # skip the last layer
     for block in model.transformer_blocks[:-1]:
-        block.attn1.attention_type = attention_type
-
-        processor = MochiAttnProcessor2_0()
+        processor = MochiAttnProcessor2_0(attn_func=attn_func)
         block.attn1.processor = processor
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--model_path', type=str, default="genmo/mochi-1-preview", help='Model path')
-parser.add_argument('--compile', action='store_true', help='Compile the model')
-parser.add_argument('--attention_type', type=str, default='sdpa', choices=['sdpa', 'sage', 'fa3', 'fa3_fp8'], help='Attention type')
-args = parser.parse_args()
-
-pipe = MochiPipeline.from_pretrained(args.model_path, variant="bf16", torch_dtype=torch.bfloat16).to("cuda")
-
-set_attention_mochi(pipe.transformer, args.attention_type)
-
-if args.compile:
-    pipe.transformer = torch.compile(pipe.transformer, mode="max-autotune-no-cudagraphs")
-
-# Enable memory savings
-pipe.enable_model_cpu_offload()
-pipe.enable_vae_tiling()
-
-prompt = "A serene night scene in a forested area. The first frame shows a tranquil lake reflecting the star-filled sky above. The second frame reveals a beautiful sunset, casting a warm glow over the landscape. The third frame showcases the night sky, filled with stars and a vibrant Milky Way galaxy. The video is a time-lapse, capturing the transition from day to night, with the lake and forest serving as a constant backdrop. The style of the video is naturalistic, emphasizing the beauty of the night sky and the peacefulness of the forest."
-
-with torch.no_grad():
-    frames = pipe(
-        prompt, 
-        height=480,
-        width=848,
-        num_frames=163, # can be changed to 84 for shorter video
-        guidance_scale=6.0,
-        num_inference_steps=64,
-        generator=torch.Generator(device="cuda").manual_seed(42),
-    ).frames[0]
-
-export_to_video(frames, f"mochi_{args.attention_type}.mp4", fps=30)

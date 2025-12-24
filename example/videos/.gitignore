@@ -1,0 +1,7 @@
+*
+!.gitignore
+!ltx_first_frames/
+!ltx_first_frames/**
+!testing_prompt.txt
+!testing_prompts.txt
+.DS_Store

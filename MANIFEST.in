@@ -1,0 +1,7 @@
+include README.md
+include LICENSE
+recursive-include sageattention *.py
+recursive-include csrc *.h *.hpp *.cuh *.cu *.cpp
+recursive-include sageattention/triton *.py
+global-exclude __pycache__
+global-exclude *.py[cod]

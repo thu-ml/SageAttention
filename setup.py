@@ -128,10 +128,12 @@ elif not SKIP_CUDA_BUILD:
     HAS_SM86 = False
     HAS_SM89 = False
     HAS_SM90 = False
+    HAS_SM100 = False
     HAS_SM120 = False
+    HAS_SM121 = False
 
     # Supported NVIDIA GPU architectures.
-    SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "12.0"}
+    SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "10.0", "12.0", "12.1"}
 
     # Compiler flags.
     CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
@@ -239,9 +241,17 @@ elif not SKIP_CUDA_BUILD:
         elif capability.startswith("9.0"):
             HAS_SM90 = True
             num = "90a"
+        elif capability.startswith("10.0"):
+            HAS_SM100 = True
+            num = "100a"
         elif capability.startswith("12.0"):
             HAS_SM120 = True
-            num = "120"
+            num = "120a"
+        elif capability.startswith("12.1"):
+            HAS_SM121 = True
+            num = "121a"
+        else:
+            continue
         NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
         if capability.endswith("+PTX"):
             NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=compute_{num}"]
@@ -249,7 +259,7 @@ elif not SKIP_CUDA_BUILD:
     # Fused kernels and QAttn variants
     from torch.utils.cpp_extension import CUDAExtension
 
-    if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM120:
+    if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM100 or HAS_SM120 or HAS_SM121:
         ext_modules.append(
             CUDAExtension(
                 name="sageattention._qattn_sm80",
@@ -261,7 +271,7 @@ elif not SKIP_CUDA_BUILD:
             )
         )
 
-    if HAS_SM89 or HAS_SM120:
+    if HAS_SM89 or HAS_SM90 or HAS_SM100 or HAS_SM120 or HAS_SM121:
         ext_modules.append(
             CUDAExtension(
                 name="sageattention._qattn_sm89",
@@ -292,7 +302,6 @@ elif not SKIP_CUDA_BUILD:
             )
         )
 
-# Fused kernels.
     ext_modules.append(
         CUDAExtension(
             name="sageattention._fused",
@@ -348,18 +357,38 @@ elif not SKIP_CUDA_BUILD:
 
     cmdclass = {"build_ext": BuildExtensionSeparateDir} if ext_modules else {}
 
+        def build_extension(self, ext):
+            with self.build_extension_patch_lock:
+                if not getattr(self.compiler, "_compile_separate_output_dir", False):
+                    compile_orig = self.compiler.compile
+
+                    def compile_new(*args, **kwargs):
+                        return compile_orig(*args, **{
+                            **kwargs,
+                            "output_dir": os.path.join(
+                                kwargs["output_dir"],
+                                self.thread_ext_name_map[threading.current_thread().ident]),
+                        })
+                    self.compiler.compile = compile_new
+                    self.compiler._compile_separate_output_dir = True
+            self.thread_ext_name_map[threading.current_thread().ident] = ext.name
+            objects = super().build_extension(ext)
+            return objects
+
+    cmdclass = {"build_ext": BuildExtensionSeparateDir} if ext_modules else {}
+
 else:
     print("Skipping CUDA/ROCm extension build...")
     
 setup(
-    name='sageattention', 
-    version='2.2.0',  
+    name='sageattention',
+    version='2.2.0',
     author='SageAttention team',
-    license='Apache 2.0 License',  
-    description='Accurate and efficient plug-and-play low-bit attention.',  
-    long_description=open('README.md', encoding='utf-8').read(),  
-    long_description_content_type='text/markdown', 
-    url='https://github.com/thu-ml/SageAttention', 
+    license='Apache 2.0 License',
+    description='Accurate and efficient plug-and-play low-bit attention.',
+    long_description=open('README.md', encoding='utf-8').read(),
+    long_description_content_type='text/markdown',
+    url='https://github.com/thu-ml/SageAttention',
     packages=find_packages(),
     python_requires='>=3.9',
     ext_modules=ext_modules,
