@@ -20,33 +20,39 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
           
-      - name: Install CUDA 13.0 Toolkit
+      - name: Configure CUDA 13.0 (RTX 40 compatible)
         shell: powershell
         run: |
-          choco install cuda --version=13.0 -y
-          $env:Path += ";C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.0\\bin"
-          $env:Path += ";C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.0\\libnvvp"
+          # GitHub Actions 实际预装 CUDA 12.4 (支持 RTX 40 系列)
+          $cudaPath = "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.0"
+          $env:Path = "$cudaPath\\bin;$cudaPath\\libnvvp;" + $env:Path
+          echo "CUDA_PATH=$cudaPath" >> $env:GITHUB_ENV
+          echo "CUDA_HOME=$cudaPath" >> $env:GITHUB_ENV
           
-      - name: Install dependencies
+      - name: Install correct PyTorch version
         run: |
-          pip install torch==2.9.1+cu130 torchvision==0.14.1+cu130 torchaudio==2.9.1 --extra-index-url https://download.pytorch.org/whl/cu130
+          pip install torch==2.9.1+cu130 torchvision==0.24.1+cu130 torchaudio==2.9.1+cu130 --extra-index-url https://download.pytorch.org/whl/cu130
           pip install wheel==0.43.0 build==1.2.1 setuptools==69.5.1 ninja==1.11.1
           
-      - name: Set CUDA architecture
+      - name: Set RTX 40 architecture
         shell: powershell
         run: |
           $env:TORCH_CUDA_ARCH_LIST = "8.9"
+          
+      - name: Verify environment
+        run: |
+          nvcc --version
+          python -c "import torch; print(f'PyTorch {torch.__version__} + CUDA {torch.version.cuda}'); print(f'GPU available: {torch.cuda.is_available()}')"
           
       - name: Build wheel
         run: |
           python -m build --wheel --no-isolation .
         env:
           BUILD_CUDA_EXT: "1"
-          CUDA_HOME: 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0'
           
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sageattention-cu130-windows
+          name: sageattention-cu121-windows
           path: dist/*.whl
           retention-days: 7
