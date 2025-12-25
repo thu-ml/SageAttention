@@ -1,0 +1,31 @@
+name: Build Windows Wheel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          
+      - name: Install dependencies
+        run: |
+          pip install torch==2.9.1+cu130 torchvision==0.14.1+cu130 torchaudio==2.9.1 --extra-index-url https://download.pytorch.org/whl/cu130
+          pip install wheel build
+          
+      - name: Build wheel
+        run: |
+          $env:TORCH_CUDA_ARCH_LIST = "8.9"
+          python -m build --wheel .
+          
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sageattention-windows-wheel
+          path: dist/*.whl
