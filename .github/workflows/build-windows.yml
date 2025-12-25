@@ -24,38 +24,62 @@ jobs:
       - name: Install CUDA 13.0 Toolkit
         shell: powershell
         run: |
-          # 使用离线安装包更可靠
-          $CudaInstallerUrl = "https://developer.download.nvidia.com/compute/cuda/13.0.2/local_installers/cuda_13.0.2_windows.exe"
-          $CudaInstaller = "cuda_13.0.2_win1dows.exe"
+          # 替换下载链接为网络安装包
+          $CudaInstallerUrl = "https://developer.download.nvidia.com/compute/cuda/13.0.2/network_installers/cuda_13.0.2_windows_network.exe"
+          $CudaInstaller = "cuda_13.0.2_windows_network.exe"
+          # https://developer.download.nvidia.com/compute/cuda/13.0.2/network_installers/cuda_13.0.2_windows_network.exe"
+          # $CudaInstaller = "cuda_13.0.2_windows.exe"
+          
+          Write-Host "Downloading CUDA 13.0 Installer..."
+          try {
+              # 增加超时设置和重试逻辑
+              Invoke-WebRequest -Uri $CudaInstallerUrl -OutFile $CudaInstaller -TimeoutSec 600 -MaximumRetryCount 3
+              Write-Host "CUDA installer downloaded successfully."
+              
+              # 验证文件是否已下载
+              if (-not (Test-Path $CudaInstaller)) {
+                  throw "Downloaded file not found."
+              }
+              $fileSize = (Get-Item $CudaInstaller).Length
+              Write-Host "Downloaded file size: $fileSize bytes"
+              
+          } catch {
+              Write-Error "Failed to download CUDA installer: $_"
+              Write-Host "Please check the CUDA Toolkit archive page for the correct URL: https://developer.nvidia.com/cuda-toolkit-archive"
+              exit 1
+          }
 
-          Write-Host "Downloading CUDA 13.0 Offline Installer..."
-          Invoke-WebRequest -Uri $CudaInstallerUrl -OutFile $CudaInstaller
-
-          Write-Host "Installing CUDA Toolkit Silently (this may take 10-15 minutes)..."
-          # 静默安装，仅安装工具包，不安装驱动
+          Write-Host "Installing CUDA Toolkit Silently..."
+          # 静默安装参数
           $installArgs = @(
-              "-s"
-              "toolkit"
+              "-s",
+              "toolkit",
+              "driver=0",
+              "nsight_nvtx=0", 
+              "nsight_compute=0",
+              "nsight_systems=0",
+              "visualization=0",
+              "--override"
           )
+          
           $process = Start-Process -FilePath $CudaInstaller -ArgumentList $installArgs -Wait -PassThru
 
           Write-Host "Installer exit code: $($process.ExitCode)"
 
-          # 验证CUDA是否真的安装到了指定路径
+          # 验证安装结果
           $CudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0"
           if (Test-Path $CudaRoot) {
               Write-Host "CUDA installation verified at: $CudaRoot"
+              # 设置环境变量
+              $env:Path = "$CudaRoot\bin;" + $env:Path
+              echo "CUDA_PATH=$CudaRoot" >> $env:GITHUB_ENV
+              echo "CUDA_HOME=$CudaRoot" >> $env:GITHUB_ENV
+              echo "PATH=$CudaRoot\bin;$env:PATH" >> $env:GITHUB_ENV
+              Write-Host "CUDA environment variables configured."
           } else {
               Write-Error "CUDA installation directory not found. Installation failed."
               exit 1
           }
-
-          # 配置环境变量 - 这是关键步骤！
-          $env:Path = "$CudaRoot\bin;" + $env:Path
-          echo "CUDA_PATH=$CudaRoot" >> $env:GITHUB_ENV
-          echo "CUDA_HOME=$CudaRoot" >> $env:GITHUB_ENV
-          echo "PATH=$CudaRoot\bin;$env:PATH" >> $env:GITHUB_ENV
-          Write-Host "CUDA environment variables configured."
 
       - name: Install PyTorch 2.9.1 + CUDA 13.0
         run: |
