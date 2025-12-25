@@ -8,51 +8,94 @@ on:
 jobs:
   build-windows:
     runs-on: windows-2022
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: recursive
-        
+
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
-          
-      - name: Configure CUDA 13.0 (RTX 40 compatible)
+
+      - name: Install CUDA 13.0 Toolkit
         shell: powershell
         run: |
-          # GitHub Actions 实际预装 CUDA 12.4 (支持 RTX 40 系列)
-          $cudaPath = "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.0"
-          $env:Path = "$cudaPath\\bin;$cudaPath\\libnvvp;" + $env:Path
-          echo "CUDA_PATH=$cudaPath" >> $env:GITHUB_ENV
-          echo "CUDA_HOME=$cudaPath" >> $env:GITHUB_ENV
-          
-      - name: Install correct PyTorch version
+          # 使用离线安装包更可靠
+          $CudaInstallerUrl = "https://developer.download.nvidia.com/compute/cuda/13.0.0/local_installers/cuda_13.0.0_win10.exe"
+          $CudaInstaller = "cuda_13.0.0_win10.exe"
+
+          Write-Host "Downloading CUDA 13.0 Offline Installer..."
+          Invoke-WebRequest -Uri $CudaInstallerUrl -OutFile $CudaInstaller
+
+          Write-Host "Installing CUDA Toolkit Silently (this may take 10-15 minutes)..."
+          # 静默安装，仅安装工具包，不安装驱动
+          $installArgs = @(
+              "-s"
+              "toolkit"
+          )
+          $process = Start-Process -FilePath $CudaInstaller -ArgumentList $installArgs -Wait -PassThru
+
+          Write-Host "Installer exit code: $($process.ExitCode)"
+
+          # 验证CUDA是否真的安装到了指定路径
+          $CudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0"
+          if (Test-Path $CudaRoot) {
+              Write-Host "CUDA installation verified at: $CudaRoot"
+          } else {
+              Write-Error "CUDA installation directory not found. Installation failed."
+              exit 1
+          }
+
+          # 配置环境变量 - 这是关键步骤！
+          $env:Path = "$CudaRoot\bin;" + $env:Path
+          echo "CUDA_PATH=$CudaRoot" >> $env:GITHUB_ENV
+          echo "CUDA_HOME=$CudaRoot" >> $env:GITHUB_ENV
+          echo "PATH=$CudaRoot\bin;$env:PATH" >> $env:GITHUB_ENV
+          Write-Host "CUDA environment variables configured."
+
+      - name: Install PyTorch 2.9.1 + CUDA 13.0
         run: |
           pip install torch==2.9.1+cu130 torchvision==0.24.1+cu130 torchaudio==2.9.1+cu130 --extra-index-url https://download.pytorch.org/whl/cu130
-          pip install wheel==0.43.0 build==1.2.1 setuptools==69.5.1 ninja==1.11.1
-          
+          pip install wheel==0.43.0 build==1.2.1 ninja==1.11.1
+
       - name: Set RTX 40 architecture
         shell: powershell
         run: |
           $env:TORCH_CUDA_ARCH_LIST = "8.9"
-          
-      - name: Verify environment
+          echo "TORCH_CUDA_ARCH_LIST=8.9" >> $env:GITHUB_ENV
+
+      - name: Verify environment thoroughly
+        shell: powershell
         run: |
+          Write-Host "=== Step 1: Check nvcc ==="
           nvcc --version
-          python -c "import torch; print(f'PyTorch {torch.__version__} + CUDA {torch.version.cuda}'); print(f'GPU available: {torch.cuda.is_available()}')"
           
+          Write-Host "`n=== Step 2: Check CUDA directory ==="
+          $CudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0"
+          if (Test-Path $CudaRoot) {
+              Write-Host "CUDA directory exists: $CudaRoot"
+              Write-Host "Contents of bin directory:"
+              Get-ChildItem "$CudaRoot\bin\nvcc*"
+          } else {
+              Write-Error "CUDA directory not found!"
+          }
+          
+          Write-Host "`n=== Step 3: Check PyTorch CUDA ==="
+          python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}') if torch.cuda.is_available() else print('CUDA not available')"
+
       - name: Build wheel
         run: |
           python -m build --wheel --no-isolation .
         env:
           BUILD_CUDA_EXT: "1"
-          
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sageattention-cu121-windows
+          name: sageattention-cu130-windows
           path: dist/*.whl
           retention-days: 7
