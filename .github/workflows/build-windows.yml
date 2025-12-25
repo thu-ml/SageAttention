@@ -25,8 +25,8 @@ jobs:
         shell: powershell
         run: |
           # 使用离线安装包更可靠
-          $CudaInstallerUrl = "https://developer.download.nvidia.com/compute/cuda/13.0.0/local_installers/cuda_13.0.0_win10.exe"
-          $CudaInstaller = "cuda_13.0.0_win10.exe"
+          $CudaInstallerUrl = "https://developer.download.nvidia.com/compute/cuda/13.0.2/local_installers/cuda_13.0.2_windows.exe"
+          $CudaInstaller = "cuda_13.0.2_win1dows.exe"
 
           Write-Host "Downloading CUDA 13.0 Offline Installer..."
           Invoke-WebRequest -Uri $CudaInstallerUrl -OutFile $CudaInstaller
