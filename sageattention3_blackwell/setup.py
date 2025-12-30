@@ -86,6 +86,9 @@ if not SKIP_CUDA_BUILD:
             elif capability.startswith("12.0"):
                 cc_flag.append("-gencode")
                 cc_flag.append("arch=compute_120a,code=sm_120a")
+            elif capability.startswith("12.1"):
+                cc_flag.append("-gencode")
+                cc_flag.append("arch=compute_121a,code=sm_121a")
             else:
                 raise RuntimeError(f"Unsupported GPU capability specified: {capability}")
 
@@ -98,6 +101,9 @@ if not SKIP_CUDA_BUILD:
         elif (cc_major, cc_minor) == (12, 0):  # sm_120
             cc_flag.append("-gencode")
             cc_flag.append("arch=compute_120a,code=sm_120a")
+        elif (cc_major, cc_minor) == (12, 1):  # sm_121
+            cc_flag.append("-gencode")
+            cc_flag.append("arch=compute_121a,code=sm_121a")
 
     # HACK: The compiler flag -D_GLIBCXX_USE_CXX11_ABI is set to be the same as
     # torch._C._GLIBCXX_USE_CXX11_ABI
@@ -126,7 +132,7 @@ if not SKIP_CUDA_BUILD:
         "--expt-extended-lambda",
         "--use_fast_math",
         # "--ptxas-options=-v",  # printing out number of registers
-        # "--ptxas-options=--verbose,--warn-on-local-memory-usage",  # printing out number of registers
+        "--ptxas-options=--verbose,--warn-on-local-memory-usage",  # printing out number of registers
         "-diag-suppress=177",
         "-lineinfo",
         "-DCUTLASS_DEBUG_TRACE_LEVEL=0",  # Can toggle for debugging
