@@ -7,15 +7,15 @@ from diffusers.utils import export_to_video
 from sageattention import sageattn
 import torch.nn.functional as F
 
-prompt_path = "videos/testing_prompts.txt"
+prompt_path = "/home/PR/SageAttention/example/videos/testing_prompts.txt"
 
 def parse_args():
     parser = argparse.ArgumentParser(description="CogVideoX Inference")
     parser.add_argument("--model",choices=["cogvideox-2b", "cogvideox1.5-5b"], default="cogvideox-2b", help="CogVideoX model")
     parser.add_argument('--compile', action='store_true', help='Compile the model')
-    parser.add_argument('--attention_type', type=str, default='sdpa', choices=['sdpa', 'sage', 'fa3', 'fa3_fp8'], help='Attention type')
+    parser.add_argument('--attention_type', type=str, default='sage', choices=['sdpa', 'sage', 'fa3', 'fa3_fp8'], help='Attention type')
     parser.add_argument("--start", type=int, default=0, help="Starting prompt id of this run.")
-    parser.add_argument("--end", type=int, default=12, help="Ending prompt id of this run.")
+    parser.add_argument("--end", type=int, default=1, help="Ending prompt id of this run.")
     args = parser.parse_args()
     return args
 
@@ -46,7 +46,9 @@ if __name__ == "__main__":
     with open(prompt_path, "r", encoding="utf-8") as file:
         prompts = file.readlines()
     selected_prompts = [p.strip() for p in prompts[args.start:args.end]]
-
+    print("cwd =", os.getcwd())
+    print("video_dir =", os.path.abspath(video_dir))
+    print("num_prompts =", len(prompts), "selected =", len(selected_prompts), "start/end =", args.start, args.end)
     pipe = CogVideoXPipeline.from_pretrained(model_path, torch_dtype=torch_dtype)
 
     if args.compile:

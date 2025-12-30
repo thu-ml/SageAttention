@@ -47,7 +47,7 @@ def get_rocm_arch():
         # 查找并返回架构名
         for line in result.stdout.splitlines():
             if "gfx" in line:
-                return line.split()[1]  # 获取第二个元素，例如：gfx942
+                return line.split()[1]
     except Exception as e:
         print(f"Error detecting current architecture: {e}")
 

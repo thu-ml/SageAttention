@@ -20,9 +20,9 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/extension.h>
 
-#include "dispatch_utils.h"
+#include "../../dispatch_utils.h"
 #include "../../utils.cuh"
-#include "../../reduction_utils.h"
+#include "../../reduction_utils.cuh"
 
 #include <hip/hip_runtime.h>
 #include <hip/hip_fp16.h>
@@ -58,14 +58,14 @@ __device__ __forceinline__ float convert_to_float<__half>(__half v) {
   return __half2float(v);
 }
 
-// __hip_bfloat16 → float（位级拼接，高 16 位）
+// __hip_bfloat16 → float
 template <>
 __device__ __forceinline__ float convert_to_float<__hip_bfloat16>(__hip_bfloat16 v) {
   uint16_t hi = bf16_bits(v);
   return u32_as_f32(uint32_t(hi) << 16);
 }
 
-// hip_bfloat16 → float（通过重解释为 __hip_bfloat16）
+// hip_bfloat16 → float
 template <>
 __device__ __forceinline__ float convert_to_float<hip_bfloat16>(hip_bfloat16 v) {
   return convert_to_float(*reinterpret_cast<const __hip_bfloat16*>(&v));

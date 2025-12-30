@@ -36,7 +36,7 @@
 #include <rocwmma/rocwmma_transforms.hpp>
 
 #include <cstdio>
-#include "attn_utils.h"
+#include "../attn_utils.cuh"
 #include "args.hpp"
 
 using namespace rocwmma;
@@ -319,30 +319,6 @@ ROCWMMA_DEVICE static inline void
     }
 }
 
-// Global C reads for warp tile gemm, non-cooperative
-ROCWMMA_DEVICE static inline void
-    globalReadC(MfmaFragC (&fragC)[BLOCKS_X][BLOCKS_Y], OutputT const* gAddrC, uint32_t ldc)
-{
-    using FragShape = GetIOShape_t<MfmaFragC>;
-    using Mapper1d  = GetDataLayout_t<MfmaFragC>;
-
-    // Iterative offsets for each C block in the wave tile
-    auto blockStepX = Mapper1d::fromMatrixCoord(make_coord2d(FragShape::BlockHeight, 0u), ldc);
-    auto blockStepY = Mapper1d::fromMatrixCoord(make_coord2d(0u, FragShape::BlockWidth), ldc);
-
-#pragma unroll
-    for(int i = 0; i < BLOCKS_X; i++)
-    {
-        auto offsetY = 0u;
-#pragma unroll
-        for(int j = 0; j < BLOCKS_Y; j++)
-        {
-            load_matrix_sync(fragC[i][j], gAddrC + offsetY, ldc);
-            offsetY += blockStepY;
-        }
-        gAddrC += blockStepX;
-    }
-}
 
 // Global D reads for warp tile gemm, non-cooperative
 ROCWMMA_DEVICE static inline void
@@ -502,8 +478,8 @@ ROCWMMA_DEVICE static inline void svgemm(MfmaFragAccf32 (&fragsAccOut)[BLOCKS_X]
     }
 }
 
-// Performs warp tile mfma
-ROCWMMA_DEVICE static inline void mfma(MfmaFragAcc (&fragsAccOut)[BLOCKS_X][BLOCKS_Y],
+
+ROCWMMA_DEVICE static inline void qkgemm(MfmaFragAcc (&fragsAccOut)[BLOCKS_X][BLOCKS_Y],
                                        MfmaFragA const (&fragsA)[BLOCKS_X],
                                        MfmaFragB const (&fragsB)[BLOCKS_Y],
                                        MfmaFragAcc const (&fragsAccIn)[BLOCKS_X][BLOCKS_Y])
@@ -656,7 +632,7 @@ ROCWMMA_KERNEL void __launch_bounds__(256) qk_int_sv_f8_attn_kernel(uint32_t    
                     globalReadOffsetA += kStepOffsetA;
                     globalReadOffsetB += kStepOffsetB;
 
-                    mfma(fragsAcc, fragsA, fragsB, fragsAcc);
+                    qkgemm(fragsAcc, fragsA, fragsB, fragsAcc);
 
                     localWriteCoopA<warpCount>(ldsPtrHi + ldsWriteOffsetA, grBuffA, ldsld, warpIndex);
                     localWriteCoopB<warpCount>(ldsPtrHi + ldsWriteOffsetB, grBuffB, ldsld, warpIndex);
@@ -673,7 +649,7 @@ ROCWMMA_KERNEL void __launch_bounds__(256) qk_int_sv_f8_attn_kernel(uint32_t    
 
                 localReadA(fragsA, ldsPtrLo + ldsReadOffsetA, ldsld);
                 localReadB(fragsB, ldsPtrLo + ldsReadOffsetB, ldsld);
-                mfma(fragsAcc, fragsA, fragsB, fragsAcc);
+                qkgemm(fragsAcc, fragsA, fragsB, fragsAcc);
             }
             
             MfmaFragAccf32 fragsTmp[BLOCKS_X][BLOCKS_Y];
