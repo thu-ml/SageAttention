@@ -39,12 +39,11 @@ except ImportError:
 
 def get_rocm_arch():
     try:
-        # 运行`rocminfo`并提取包含gfx的行
+        # get gfx arch
         result = subprocess.run(['rocminfo'], capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError("rocminfo command failed")
 
-        # 查找并返回架构名
         for line in result.stdout.splitlines():
             if "gfx" in line:
                 return line.split()[1]
@@ -62,22 +61,19 @@ if IS_ROCM:
     from torch.utils.cpp_extension import BuildExtension, CUDAExtension
     
     ROCM_HOME = os.environ.get("ROCM_HOME", "/opt/rocm")
-    # 基础配置
+
     CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
     ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
     CXX_FLAGS.append(f"-D_GLIBCXX_USE_CXX11_ABI={ABI}")
     
-    # 清理环境变量
     for var in ("HCC_AMDGPU_TARGET", "AMDGPU_TARGETS", "HIPCC_COMPILE_FLAGS_APPEND", "HIP_TARGETS", "ROCM_TARGET_LST"):
         if var in os.environ: 
             del os.environ[var]
     
-    # ROCm 编译标志
+    # ROCm compile flag
     rocm_arch = get_rocm_arch()
     if rocm_arch:
-        # 更新环境变量
         os.environ['ROCM_ARCH'] = rocm_arch
-        # 添加构建标志
         debug = os.environ.get("SA_DEBUG", "0") == "1"
         base_flags = ["-std=c++17", f"-D_GLIBCXX_USE_CXX11_ABI={ABI}", "-DUSE_ROCM=1"]
         debug_flags = ["-O0", "-g3", "-ggdb", "-fno-inline", "-fno-omit-frame-pointer"] if debug else ["-O3"]
@@ -85,11 +81,11 @@ if IS_ROCM:
         rocm_cxx = base_flags + debug_flags
        # rocm_hipcc = base_flags + debug_flags + ["--offload-arch=gfx942"] + ["-D__ROCM_ARCH_GFX942"]
 
-        # ROCm 库路径
+        # ROCm lib path
         torch_lib = os.path.join(torch.__path__[0], "lib")
         rocm_libs = [os.path.join(ROCM_HOME, d) for d in ["lib", "lib64"]]
         
-        # ROCm 扩展模块
+        # ROCm extension modules
         ext_modules.extend([
             CUDAExtension(
                 "sageattention._qattn_rocm",
@@ -106,7 +102,8 @@ if IS_ROCM:
             ),
             CUDAExtension(
                 "sageattention._fused",
-                sources=["csrc/fused/rocm/pybind_rocm.cpp", "csrc/fused/rocm/fused.cu"],
+                # sources=["csrc/fused/rocm/pybind_rocm.cpp", "csrc/fused/rocm/fused.cu"],
+                sources=["csrc/fused/pybind.cpp", "csrc/fused/fused.cu"],
                 include_dirs=[os.path.join(ROCM_HOME, "include"), os.path.join(ROCM_HOME, "include", "hip")],
                 extra_compile_args={"cxx": rocm_cxx, "nvcc": rocm_hipcc},
                 libraries=["amdhip64", "hiprtc", "rocblas", "hipblas", "c10", "torch", "torch_python"],

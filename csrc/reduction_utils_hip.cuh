@@ -69,7 +69,7 @@ __inline__ __device__ T blockReduceSum(T val) {
   int lane = threadIdx.x & (warpSize - 1);
   int wid = threadIdx.x / warpSize;
 
-  val = warpReduceSum(val);
+  val = warpReduceSum<T>(val);
 
   if (lane == 0)
     shared[wid] = val;
@@ -79,7 +79,7 @@ __inline__ __device__ T blockReduceSum(T val) {
 
   const int numWarps = (blockDim.x + warpSize - 1) / warpSize;
   val = (lane < numWarps) ? shared[lane] : (T)(0.0f);
-  val = warpReduceSum(val);
+  val = warpReduceSum<T>(val);
   return val;
 }
 
@@ -91,7 +91,7 @@ __inline__ __device__ T blockAllReduceSum(T val) {
   int lane = threadIdx.x & (warpSize - 1);
   int wid = threadIdx.x / warpSize;
 
-  val = warpReduceSum(val);
+  val = warpReduceSum<T>(val);
 
   if (lane == 0)
     shared[wid] = val;
@@ -100,7 +100,7 @@ __inline__ __device__ T blockAllReduceSum(T val) {
 
   const int numWarps = (blockDim.x + warpSize - 1) / warpSize;
   val = (lane < numWarps) ? shared[lane] : (T)(0.0f);
-  val = warpReduceSum(val);
+  val = warpReduceSum<T>(val);
   return val;
 }
 
@@ -144,6 +144,7 @@ __inline__ __device__ T warpReduceMax(T val)
       T other = shfl_xor(val, mask);
       val = val > other ? val : other;
   }
+  return val;
 }
 /* Calculate the maximum of all elements in a block */
 template<typename T>

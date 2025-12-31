@@ -143,6 +143,7 @@ __inline__ __device__ T warpReduceMax(T val)
       T other = shfl_xor(val, mask);
       val = val > other ? val : other;
   }
+  return val;
 }
 /* Calculate the maximum of all elements in a block */
 template<typename T>

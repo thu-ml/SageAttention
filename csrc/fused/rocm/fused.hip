@@ -41,49 +41,79 @@ enum class QuantType
   kInt4,
 };
 
-__device__ __forceinline__ float u32_as_f32(uint32_t u) {
-  union { uint32_t u; float f; } v{u}; return v.f;
-}
+// __device__ __forceinline__ float u32_as_f32(uint32_t u) {
+//   union { uint32_t u; float f; } v{u}; return v.f;
+// }
 
-__device__ __forceinline__ uint16_t bf16_bits(__hip_bfloat16 x) {
-  return *reinterpret_cast<const uint16_t*>(&x);
-}
+// __device__ __forceinline__ uint16_t bf16_bits(__hip_bfloat16 x) {
+//   return *reinterpret_cast<const uint16_t*>(&x);
+// }
 
-// ========== to-float ==========
+// // ========== to-float ==========
+// template <typename T>
+// __device__ __forceinline__ float convert_to_float(T val);
+
+// // __half → float
+// template <>
+// __device__ __forceinline__ float convert_to_float<__half>(__half v) {
+//   return __half2float(v);
+// }
+
+// // __hip_bfloat16 → float
+// template <>
+// __device__ __forceinline__ float convert_to_float<__hip_bfloat16>(__hip_bfloat16 v) {
+//   uint16_t hi = bf16_bits(v);
+//   return u32_as_f32(uint32_t(hi) << 16);
+// }
+
+// // hip_bfloat16 → float
+// template <>
+// __device__ __forceinline__ float convert_to_float<hip_bfloat16>(hip_bfloat16 v) {
+//   return convert_to_float(*reinterpret_cast<const __hip_bfloat16*>(&v));
+// }
+
+// template <typename T>
+// __device__ __forceinline__ T convert_from_float(float val) {
+//   static_assert(std::is_same<T, __half>::value ||
+//                 std::is_same<T, __hip_bfloat16>::value,
+//                 "Only __half and __hip_bfloat16 are supported .");
+
+//   if constexpr (std::is_same<T, __half>::value) {
+//     // f32 -> fp16 (round-to-nearest)
+//     return __float2half_rn(val);
+//   } else {
+//     // f32 -> bf16 (round-to-nearest)
+//     return __float2bfloat16(val);
+//   }
+// }
+
 template <typename T>
-__device__ __forceinline__ float convert_to_float(T val);
+__device__ __forceinline__ float convert_to_float(T val)
+{
+  static_assert(std::is_same<T, half>::value || std::is_same<T, hip_bfloat16>::value, "Only half and bfloat16 are supported");
 
-// __half → float
-template <>
-__device__ __forceinline__ float convert_to_float<__half>(__half v) {
-  return __half2float(v);
-}
-
-// __hip_bfloat16 → float
-template <>
-__device__ __forceinline__ float convert_to_float<__hip_bfloat16>(__hip_bfloat16 v) {
-  uint16_t hi = bf16_bits(v);
-  return u32_as_f32(uint32_t(hi) << 16);
-}
-
-// hip_bfloat16 → float
-template <>
-__device__ __forceinline__ float convert_to_float<hip_bfloat16>(hip_bfloat16 v) {
-  return convert_to_float(*reinterpret_cast<const __hip_bfloat16*>(&v));
+  if constexpr (std::is_same<T, half>::value)
+  {
+    return __half2float(val);
+  }
+  else if constexpr (std::is_same<T, hip_bfloat16>::value)
+  {
+    return __bfloat162float(val);
+  }
 }
 
 template <typename T>
-__device__ __forceinline__ T convert_from_float(float val) {
-  static_assert(std::is_same<T, __half>::value ||
-                std::is_same<T, __hip_bfloat16>::value,
-                "Only __half and __hip_bfloat16 are supported (ROCm).");
+__device__ __forceinline__ T convert_from_float(float val)
+{
+  static_assert(std::is_same<T, half>::value || std::is_same<T, hip_bfloat16>::value, "Only half and bfloat16 are supported");
 
-  if constexpr (std::is_same<T, __half>::value) {
-    // f32 -> fp16 (round-to-nearest)
+  if constexpr (std::is_same<T, half>::value)
+  {
     return __float2half_rn(val);
-  } else {
-    // f32 -> bf16 (round-to-nearest)
-    return __float2bfloat16(val);
+  }
+  else if constexpr (std::is_same<T, hip_bfloat16>::value)
+  {
+    return __float2bfloat16_rn(val);
   }
 }
 
