@@ -22,17 +22,102 @@ import warnings
 from packaging.version import parse, Version
 
 from setuptools import setup, find_packages
-
+import torch
+from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
 # Skip CUDA build in CI or when explicitly requested
 SKIP_CUDA_BUILD = (
     os.getenv("SAGEATTN_SKIP_CUDA_BUILD", "0").upper() in {"1", "TRUE", "YES"}
     or ("sdist" in sys.argv)
 )
 
+try:
+    import torch
+    IS_ROCM = getattr(torch.version, "hip", None) is not None
+except ImportError:
+    IS_ROCM = False
+    torch = None
+
+def get_rocm_arch():
+    try:
+        # get gfx arch
+        result = subprocess.run(['rocminfo'], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError("rocminfo command failed")
+
+        for line in result.stdout.splitlines():
+            if "gfx" in line:
+                return line.split()[1]
+    except Exception as e:
+        print(f"Error detecting current architecture: {e}")
+
+    return None
+
+
 ext_modules = []
 cmdclass = {}
 
-if not SKIP_CUDA_BUILD:
+if IS_ROCM:
+    import torch
+    from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+    
+    ROCM_HOME = os.environ.get("ROCM_HOME", "/opt/rocm")
+
+    CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
+    ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
+    CXX_FLAGS.append(f"-D_GLIBCXX_USE_CXX11_ABI={ABI}")
+    
+    for var in ("HCC_AMDGPU_TARGET", "AMDGPU_TARGETS", "HIPCC_COMPILE_FLAGS_APPEND", "HIP_TARGETS", "ROCM_TARGET_LST"):
+        if var in os.environ: 
+            del os.environ[var]
+    
+    # ROCm compile flag
+    rocm_arch = get_rocm_arch()
+    if rocm_arch:
+        os.environ['ROCM_ARCH'] = rocm_arch
+        debug = os.environ.get("SA_DEBUG", "0") == "1"
+        base_flags = ["-std=c++17", f"-D_GLIBCXX_USE_CXX11_ABI={ABI}", "-DUSE_ROCM=1"]
+        debug_flags = ["-O0", "-g3", "-ggdb", "-fno-inline", "-fno-omit-frame-pointer"] if debug else ["-O3"]
+        rocm_hipcc = base_flags + debug_flags + [f"--offload-arch={rocm_arch}"] + [f"-D__ROCM_ARCH_{rocm_arch.upper()}"]
+        rocm_cxx = base_flags + debug_flags
+       # rocm_hipcc = base_flags + debug_flags + ["--offload-arch=gfx942"] + ["-D__ROCM_ARCH_GFX942"]
+
+        # ROCm lib path
+        torch_lib = os.path.join(torch.__path__[0], "lib")
+        rocm_libs = [os.path.join(ROCM_HOME, d) for d in ["lib", "lib64"]]
+        
+        # ROCm extension modules
+        ext_modules.extend([
+            CUDAExtension(
+                "sageattention._qattn_rocm",
+                sources=[
+                    "csrc/qattn/rocm/pybind_rocm.cpp",
+                    "csrc/qattn/rocm/launch_sgattn.cu",
+                    "csrc/qattn/rocm/sgattn.cu"
+                ],
+                include_dirs=[os.path.join(ROCM_HOME, "include"), os.path.join(ROCM_HOME, "include", "hip")],
+                extra_compile_args={"cxx": rocm_cxx, "nvcc": rocm_hipcc},
+                libraries=["amdhip64", "hiprtc", "rocblas", "hipblas", "c10", "torch", "torch_python"],
+                library_dirs=rocm_libs + [torch_lib],
+                runtime_library_dirs=rocm_libs + [torch_lib]
+            ),
+            CUDAExtension(
+                "sageattention._fused",
+                # sources=["csrc/fused/rocm/pybind_rocm.cpp", "csrc/fused/rocm/fused.cu"],
+                sources=["csrc/fused/pybind.cpp", "csrc/fused/fused.cu"],
+                include_dirs=[os.path.join(ROCM_HOME, "include"), os.path.join(ROCM_HOME, "include", "hip")],
+                extra_compile_args={"cxx": rocm_cxx, "nvcc": rocm_hipcc},
+                libraries=["amdhip64", "hiprtc", "rocblas", "hipblas", "c10", "torch", "torch_python"],
+                library_dirs=rocm_libs + [torch_lib],
+                runtime_library_dirs=rocm_libs + [torch_lib]
+            )
+        ])
+        
+        cmdclass = {"build_ext": BuildExtension} if ext_modules else {}
+        print("Current ROCm architecture detected:", rocm_arch)
+    else:
+        print("Unable to detect current ROCm architecture.")
+       
+elif not SKIP_CUDA_BUILD:
     import torch
     from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
 
@@ -269,6 +354,29 @@ if not SKIP_CUDA_BUILD:
 
     cmdclass = {"build_ext": BuildExtensionSeparateDir} if ext_modules else {}
 
+    def build_extension(self, ext):
+        with self.build_extension_patch_lock:
+            if not getattr(self.compiler, "_compile_separate_output_dir", False):
+                compile_orig = self.compiler.compile
+
+                def compile_new(*args, **kwargs):
+                    return compile_orig(*args, **{
+                        **kwargs,
+                        "output_dir": os.path.join(
+                            kwargs["output_dir"],
+                            self.thread_ext_name_map[threading.current_thread().ident]),
+                    })
+                self.compiler.compile = compile_new
+                self.compiler._compile_separate_output_dir = True
+        self.thread_ext_name_map[threading.current_thread().ident] = ext.name
+        objects = super().build_extension(ext)
+        return objects
+
+    cmdclass = {"build_ext": BuildExtensionSeparateDir} if ext_modules else {}
+
+else:
+    print("Skipping CUDA/ROCm extension build...")
+    
 setup(
     name='sageattention',
     version='2.2.0',

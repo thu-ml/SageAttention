@@ -16,6 +16,7 @@
 
 #include <torch/extension.h>
 
+#if !defined(USE_ROCM)
 void quant_per_block_int8_cuda(
                 torch::Tensor input,
                 torch::Tensor output,
@@ -53,6 +54,8 @@ void sub_mean_cuda(
                 torch::Tensor output,
                 int tensor_layout);
 
+#endif
+
 void transpose_pad_permute_cuda(
                 torch::Tensor input,
                 torch::Tensor output,
@@ -66,6 +69,7 @@ void scale_fuse_quant_cuda(
                 float scale_max,
                 int tensor_layout);
 
+#if !defined(USE_ROCM)
 void mean_scale_fuse_quant_cuda(
                 torch::Tensor input,
                 torch::Tensor output,
@@ -74,3 +78,4 @@ void mean_scale_fuse_quant_cuda(
                 int num_tokens,
                 float scale_max,
                 int tensor_layout);
+#endif

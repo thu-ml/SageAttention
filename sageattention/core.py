@@ -55,6 +55,7 @@ import warnings
 import subprocess
 import re
 
+from . import is_hip, on_gfx942
 
 def get_cuda_version():
     try:
@@ -141,7 +142,9 @@ def sageattn(
     """
         
     arch = get_cuda_arch_versions()[q.device.index]
-    if arch == "sm80":
+    if is_hip():
+        return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32")
+    elif arch == "sm80":
         return sageattn_qk_int8_pv_fp16_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32")
     elif arch == "sm86":
         return sageattn_qk_int8_pv_fp16_triton(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse)
@@ -722,7 +725,9 @@ def sageattn_qk_int8_pv_fp8_cuda(
     """
 
     dtype = q.dtype
-    assert SM89_ENABLED, "SM89 kernel is not available. Make sure you GPUs with compute capability 8.9."
+    if not is_hip():
+        assert SM89_ENABLED, "SM89 kernel is not available. Make sure you GPUs with compute capability 8.9."
+        
     assert q.is_cuda, "Input tensors must be on cuda."
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
     assert qk_quant_gran in ["per_warp", "per_thread"], "qk_quant_gran must be either 'per_warp' or 'per_thread'."
@@ -802,15 +807,32 @@ def sageattn_qk_int8_pv_fp8_cuda(
         warnings.warn("pv_accum_dtype is 'fp32+fp16', smooth_v will be ignored.")
         smooth_v = False
 
-    quant_v_scale_max = 448.0
+    
+    if is_hip() and on_gfx942():
+        quant_v_scale_max = 224.0
+    else:
+        quant_v_scale_max = 448.0
+        
     if pv_accum_dtype == 'fp32+fp16':
         quant_v_scale_max = 2.25
-
+        
+    if is_hip():
+        kv_len = k.size(seq_dim)
+        v_pad_len = 128 - (kv_len % 128) if kv_len % 128 != 0 else 0
+        if v_pad_len > 0:
+            if tensor_layout == "HND":
+                v = torch.cat([v, torch.zeros(v.size(0), v.size(1), v_pad_len, v.size(3), dtype=v.dtype, device=v.device)], dim=2)
+            else:
+                v = torch.cat([v, torch.zeros(v.size(0), v_pad_len, v.size(2), v.size(3), dtype=v.dtype, device=v.device)], dim=1)
+                
     v_fp8, v_scale, vm = per_channel_fp8(v, tensor_layout=tensor_layout, scale_max=quant_v_scale_max, smooth_v=smooth_v)
 
     if pv_accum_dtype == "fp32":
-        if smooth_v:
-            lse = sm89_compile.qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, vm, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+        if is_hip():
+            from . import _qattn_rocm
+            lse = _qattn_rocm.qk_int8_sv_f8_accum_f32_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
+        elif smooth_v:
+            lse = _qattn_sm89.qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, vm, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
         else:
             lse = sm89_compile.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp32+fp32":
