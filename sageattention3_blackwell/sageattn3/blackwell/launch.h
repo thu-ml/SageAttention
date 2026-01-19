@@ -90,7 +90,50 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
     dim3 block_dims(ctaSize);
     dim3 cluster_dims(size<0>(ClusterShape{}), size<1>(ClusterShape{}), size<2>(ClusterShape{}));
     cutlass::ClusterLaunchParams launch_params{grid_dims, block_dims, cluster_dims, smem_size, stream};
+
+#if defined(_MSC_VER)
+    // MSVC: Use parameter packing to pass parameters to avoid over-aligned parameters reporting a C2719 error.
+
+    struct DeviceParamsPack {
+        Flash_fwd_params params;
+        typename CollectiveMainloop::Params mainloop;
+        typename CollectiveEpilogue::Params epilogue;
+        typename Scheduler::Params scheduler;
+    };
+
+    DeviceParamsPack h_pack{params, mainloop_params, epilogue_params, scheduler_params};
+
+    DeviceParamsPack *d_pack = nullptr;
+    C10_CUDA_CHECK(cudaMallocAsync(&d_pack, sizeof(DeviceParamsPack), stream));
+    C10_CUDA_CHECK(cudaMemcpyAsync(
+        d_pack, &h_pack, sizeof(DeviceParamsPack),
+        cudaMemcpyHostToDevice, stream));
+    
+    char *base_h = reinterpret_cast<char*>(&h_pack);
+    auto off_params   = reinterpret_cast<char*>(&h_pack.params)    - base_h;
+    auto off_mainloop = reinterpret_cast<char*>(&h_pack.mainloop)  - base_h;
+    auto off_epilogue = reinterpret_cast<char*>(&h_pack.epilogue)  - base_h;
+    auto off_sched    = reinterpret_cast<char*>(&h_pack.scheduler) - base_h;
+
+    char *base_d = reinterpret_cast<char*>(d_pack);
+
+    auto d_params = reinterpret_cast<Flash_fwd_params*>(base_d + off_params);
+    auto d_mainloop_params =
+        reinterpret_cast<typename CollectiveMainloop::Params *>(base_d + off_mainloop);
+    auto d_epilogue_params =
+        reinterpret_cast<typename CollectiveEpilogue::Params *>(base_d + off_epilogue);
+    auto d_scheduler_params =
+        reinterpret_cast<typename Scheduler::Params *>(base_d + off_sched);
+    
+    cutlass::launch_kernel_on_cluster(
+        launch_params, kernel,
+        d_params, d_mainloop_params, d_epilogue_params, d_scheduler_params);
+    
+    C10_CUDA_CHECK(cudaFreeAsync(d_pack, stream));
+
+#else
     cutlass::launch_kernel_on_cluster(launch_params, kernel, params, mainloop_params, epilogue_params, scheduler_params);
+#endif
     
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }

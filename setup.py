@@ -48,27 +48,36 @@ if not SKIP_CUDA_BUILD:
     SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "10.0", "12.0", "12.1"}
 
     # Compiler flags.
-    CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
-    NVCC_FLAGS = [
-        "-O3",
-        "-std=c++17",
-        "-U__CUDA_NO_HALF_OPERATORS__",
-        "-U__CUDA_NO_HALF_CONVERSIONS__",
-        "--use_fast_math",
-        "--threads=8",
-        "-Xptxas=-v",
-        "-diag-suppress=174",
-    ]
+    if os.name == "nt":
+        CXX_FLAGS = ["/Zi", "/openmp", "/std:c++17", "/Zc:__cplusplus", "/DENABLE_BF16", "/MD", "/permissive-"]
+        NVCC_FLAGS = [
+            "-O3",
+            "-std=c++17",
+            "-U__CUDA_NO_HALF_OPERATORS__",
+            "-U__CUDA_NO_HALF_CONVERSIONS__",
+            "--use_fast_math",
+            "--threads=8",
+            "-Xptxas=-v",
+            "-diag-suppress=174",            
+            "-D_WIN32=1",
+            "-DUSE_CUDA=1",
+        ]
+        NVCC_FLAGS += [f"-Xcompiler={flag}" for flag in CXX_FLAGS]
+        CXX_FLAGS += ["/O2"]
+    else:
+        CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
+        NVCC_FLAGS = [
+            "-O3",
+            "-std=c++17",
+            "-U__CUDA_NO_HALF_OPERATORS__",
+            "-U__CUDA_NO_HALF_CONVERSIONS__",
+            "--use_fast_math",
+            "--threads=8",
+            "-Xptxas=-v",
+            "-diag-suppress=174",
+        ]
 
-    # Append flags from env if provided
-    cxx_append = os.getenv("CXX_APPEND_FLAGS", "").strip()
-    if cxx_append:
-        CXX_FLAGS += cxx_append.split()
-    nvcc_append = os.getenv("NVCC_APPEND_FLAGS", "").strip()
-    if nvcc_append:
-        NVCC_FLAGS += nvcc_append.split()
-
-    ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
+    ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI and os.name != "nt" else 0
     CXX_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
     NVCC_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
 
@@ -140,6 +149,7 @@ if not SKIP_CUDA_BUILD:
             "CUDA 12.8 or higher is required for compute capability 12.0.")
 
     # Add target compute capabilities to NVCC flags.
+    NVCC_FLAGS_SM90 = list(NVCC_FLAGS)
     for capability in compute_capabilities:
         if capability.startswith("8.0"):
             HAS_SM80 = True
@@ -153,15 +163,18 @@ if not SKIP_CUDA_BUILD:
         elif capability.startswith("9.0"):
             HAS_SM90 = True
             num = "90a"
+            NVCC_FLAGS_SM90 += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
+            if capability.endswith("+PTX"):
+                NVCC_FLAGS_SM90 += ["-gencode", f"arch=compute_{num},code=compute_{num}"]
         elif capability.startswith("10.0"):
             HAS_SM100 = True
-            num = "100a"
+            num = "100a"            
         elif capability.startswith("12.0"):
             HAS_SM120 = True
-            num = "120a"
+            num = "120a"            
         elif capability.startswith("12.1"):
             HAS_SM121 = True
-            num = "121a"
+            num = "121a"            
         else:
             continue
         NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
@@ -201,6 +214,12 @@ if not SKIP_CUDA_BUILD:
             )
         )
 
+    cuda_lib = []
+    if os.name == "nt":
+        cuda_lib = ["cuda.lib"]
+    else:
+        cuda_lib = ["-lcuda"]
+
     if HAS_SM90:
         ext_modules.append(
             CUDAExtension(
@@ -209,8 +228,8 @@ if not SKIP_CUDA_BUILD:
                     "csrc/qattn/pybind_sm90.cpp",
                     "csrc/qattn/qk_int_sv_f8_cuda_sm90.cu",
                 ],
-                extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
-                extra_link_args=['-lcuda'],
+                extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS_SM90},
+                extra_link_args=cuda_lib,
             )
         )
 

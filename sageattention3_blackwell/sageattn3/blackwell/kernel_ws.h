@@ -38,12 +38,11 @@ namespace flash {
 using namespace cute;
 
 template <typename Ktraits, bool Is_causal, typename TileScheduler>
-__global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp, 1)
-    compute_attn_ws(CUTE_GRID_CONSTANT Flash_fwd_params const params,
-                    CUTE_GRID_CONSTANT typename CollectiveMainloopFwd<Ktraits, Is_causal>::Params const mainloop_params,
-                    CUTE_GRID_CONSTANT typename CollectiveEpilogueFwd<Ktraits>::Params const epilogue_params,
-                    CUTE_GRID_CONSTANT typename TileScheduler::Params const scheduler_params
-                    ) {
+__device__ inline void
+compute_attn_ws_impl(Flash_fwd_params const &params,
+                     typename CollectiveMainloopFwd<Ktraits, Is_causal>::Params const &mainloop_params,
+                     typename CollectiveEpilogueFwd<Ktraits>::Params const &epilogue_params,
+                     typename TileScheduler::Params const &scheduler_params) {
 
     using Element = typename Ktraits::Element;
     using ElementAccum = typename Ktraits::ElementAccum;
@@ -198,5 +197,38 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
         }
     }
 }
+
+#if defined(_MSC_VER)
+// MSVC requires special handling for kernel parameters to avoid alignment issues.
+
+template <typename Ktraits, bool Is_causal, typename TileScheduler>
+__global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp, 1)
+compute_attn_ws(Flash_fwd_params const *params,
+                typename CollectiveMainloopFwd<Ktraits, Is_causal>::Params const *mainloop_params,
+                typename CollectiveEpilogueFwd<Ktraits>::Params const *epilogue_params,
+                typename TileScheduler::Params const *scheduler_params) {
+    compute_attn_ws_impl<Ktraits, Is_causal, TileScheduler>(
+        *params, *mainloop_params, *epilogue_params, *scheduler_params);
+}
+
+#else
+
+template <typename Ktraits, bool Is_causal, typename TileScheduler>
+__global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp, 1)
+    compute_attn_ws(CUTE_GRID_CONSTANT Flash_fwd_params const params,
+                    CUTE_GRID_CONSTANT
+                        typename CollectiveMainloopFwd<Ktraits, Is_causal>::Params const
+                            mainloop_params,
+                    CUTE_GRID_CONSTANT
+                        typename CollectiveEpilogueFwd<Ktraits>::Params const
+                            epilogue_params,
+                    CUTE_GRID_CONSTANT
+                        typename TileScheduler::Params const scheduler_params) {
+
+    compute_attn_ws_impl<Ktraits, Is_causal, TileScheduler>(
+        params, mainloop_params, epilogue_params, scheduler_params);
+}
+
+#endif  // _MSC_VER
 
 } // namespace flash
