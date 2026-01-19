@@ -1,0 +1,125 @@
+name: Build Windows Wheel CUDA 13.0
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ windows-build ]
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install CUDA 13.0 Toolkit
+        shell: powershell
+        run: |
+          # 替换下载链接为网络安装包
+          $CudaInstallerUrl = "https://developer.download.nvidia.com/compute/cuda/13.0.2/network_installers/cuda_13.0.2_windows_network.exe"
+          $CudaInstaller = "cuda_13.0.2_windows_network.exe"
+          # https://developer.download.nvidia.com/compute/cuda/13.0.2/network_installers/cuda_13.0.2_windows_network.exe"
+          # $CudaInstaller = "cuda_13.0.2_windows.exe"
+          
+          Write-Host "Downloading CUDA 13.0 Installer..."
+          try {
+              # 增加超时设置和重试逻辑
+              Invoke-WebRequest -Uri $CudaInstallerUrl -OutFile $CudaInstaller -TimeoutSec 600 -MaximumRetryCount 3
+              Write-Host "CUDA installer downloaded successfully."
+              
+              # 验证文件是否已下载
+              if (-not (Test-Path $CudaInstaller)) {
+                  throw "Downloaded file not found."
+              }
+              $fileSize = (Get-Item $CudaInstaller).Length
+              Write-Host "Downloaded file size: $fileSize bytes"
+              
+          } catch {
+              Write-Error "Failed to download CUDA installer: $_"
+              Write-Host "Please check the CUDA Toolkit archive page for the correct URL: https://developer.nvidia.com/cuda-toolkit-archive"
+              exit 1
+          }
+
+          Write-Host "Installing CUDA Toolkit Silently..."
+          # 静默安装参数
+          $installArgs = @(
+              "-s",
+              "toolkit",
+              "driver=0",
+              "nsight_nvtx=0", 
+              "nsight_compute=0",
+              "nsight_systems=0",
+              "visualization=0",
+              "--override"
+          )
+          
+          $process = Start-Process -FilePath $CudaInstaller -ArgumentList $installArgs -Wait -PassThru
+
+          Write-Host "Installer exit code: $($process.ExitCode)"
+
+          # 验证安装结果
+          $CudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0"
+          if (Test-Path $CudaRoot) {
+              Write-Host "CUDA installation verified at: $CudaRoot"
+              # 设置环境变量
+              $env:Path = "$CudaRoot\bin;" + $env:Path
+              echo "CUDA_PATH=$CudaRoot" >> $env:GITHUB_ENV
+              echo "CUDA_HOME=$CudaRoot" >> $env:GITHUB_ENV
+              echo "PATH=$CudaRoot\bin;$env:PATH" >> $env:GITHUB_ENV
+              Write-Host "CUDA environment variables configured."
+          } else {
+              Write-Error "CUDA installation directory not found. Installation failed."
+              exit 1
+          }
+
+      - name: Install PyTorch 2.9.1 + CUDA 13.0
+        run: |
+          pip install torch==2.9.1+cu130 torchvision==0.24.1+cu130 torchaudio==2.9.1+cu130 --extra-index-url https://download.pytorch.org/whl/cu130
+          pip install wheel==0.43.0 build==1.2.1 ninja==1.11.1
+
+      - name: Set RTX 40 architecture
+        shell: powershell
+        run: |
+          $env:TORCH_CUDA_ARCH_LIST = "8.9"
+          echo "TORCH_CUDA_ARCH_LIST=8.9" >> $env:GITHUB_ENV
+
+      - name: Verify environment thoroughly
+        shell: powershell
+        run: |
+          Write-Host "=== Step 1: Check nvcc ==="
+          nvcc --version
+          
+          Write-Host "`n=== Step 2: Check CUDA directory ==="
+          $CudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0"
+          if (Test-Path $CudaRoot) {
+              Write-Host "CUDA directory exists: $CudaRoot"
+              Write-Host "Contents of bin directory:"
+              Get-ChildItem "$CudaRoot\bin\nvcc*"
+          } else {
+              Write-Error "CUDA directory not found!"
+          }
+          
+          Write-Host "`n=== Step 3: Check PyTorch CUDA ==="
+          python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}') if torch.cuda.is_available() else print('CUDA not available')"
+
+      - name: Build wheel
+        run: |
+          python -m build --wheel --no-isolation .
+        env:
+          BUILD_CUDA_EXT: "1"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sageattention-cu130-windows
+          path: dist/*.whl
+          retention-days: 7
