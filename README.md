@@ -81,15 +81,15 @@ The following is the original Readme
 This repository provides the official implementation of SageAttention, SageAttention2, and SageAttention2++, which achieve surprising speedup on most GPUs without lossing accuracy across all models in a plug-and-play way.
 
 **SageAttention: Accurate 8-Bit Attention for Plug-and-play Inference Acceleration**  
-Jintao Zhang, Jia Wei, Haofeng Huang, Pengle Zhang, Jun Zhu, Jianfei Chen
+Jintao Zhang, Jia Wei, Haofeng Huang, Pengle Zhang, Jun Zhu, Jianfei Chen  
 Paper: https://arxiv.org/abs/2410.02367
 
 **SageAttention2: Efficient Attention with Thorough Outlier Smoothing and Per-thread INT4 Quantization**  
-Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen
+Jintao Zhang, Haofeng Huang, Pengle Zhang, Jia Wei, Jun Zhu, Jianfei Chen  
 Paper: https://arxiv.org/abs/2411.10958
 
 **SageAttention3: Microscaling FP4 Attention for Inference and An Exploration of 8-Bit Training**  
-Jintao Zhang, Jia Wei, Haoxu Wang, Pengle Zhang, Xiaoming Xu, Haofeng Huang, Kai Jiang, Jun Zhu, Jianfei Chen
+Jintao Zhang, Jia Wei, Haoxu Wang, Pengle Zhang, Xiaoming Xu, Haofeng Huang, Kai Jiang, Jianfei Chen, Jun Zhu  
 Paper: https://arxiv.org/abs/2505.11594
 
 
