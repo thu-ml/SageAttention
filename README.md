@@ -39,6 +39,7 @@ Paper: https://arxiv.org/abs/2505.11594
 
 ![Local Image](./assets/4090_sageattn2++.png)
 
+- [2025-12-20]: Sage Attention is supported via the 🤗 `kernels` library. Check it out [here](https://huggingface.co/kernels-community/sage_attention). It's also supported in the Diffusers library ([docs](https://huggingface.co/docs/diffusers/main/en/optimization/attention_backends)).
 - [2025-06-19]: [Sparse SageAttention1 API](https://github.com/jt-zhang/Sparse_SageAttention_API) and [Sparse SageAttention2 API](https://github.com/thu-ml/SpargeAttn) can compute attention with any block sparse pattern very fast.
 - [2025-05-02]: 🎉SageAttention2 and [SpargeAttn](https://github.com/thu-ml/SpargeAttn) are accepted by ICML 2025! 
 - [2025-02-25]: 🔥 We release [SpargeAttn](https://github.com/thu-ml/SpargeAttn), a sparse attention based on SageAttention2, which could acclerate any model without training.
