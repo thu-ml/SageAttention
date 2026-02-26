@@ -60,6 +60,11 @@ if not SKIP_CUDA_BUILD:
         "-diag-suppress=174",
     ]
 
+    # No behaviour is changed on Linux or when building with another compiler.
+    if sys.platform == "win32" and os.getenv('DISTUTILS_USE_SDK') == '1':
+        CXX_FLAGS.append("-DUSE_CUDA")
+        NVCC_FLAGS.append("-DUSE_CUDA")
+
     # Append flags from env if provided
     cxx_append = os.getenv("CXX_APPEND_FLAGS", "").strip()
     if cxx_append:

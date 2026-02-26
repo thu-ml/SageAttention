@@ -1,5 +1,6 @@
 import warnings
 import os
+import sys
 from pathlib import Path
 from packaging.version import parse, Version
 from setuptools import setup, find_packages
@@ -108,18 +109,35 @@ if not SKIP_CUDA_BUILD:
         "-DCTA256",
         "-DDQINRMEM",
     ]
+
+    # Windows/MSVC needs -DUSE_CUDA for the same reason as in the main
+    # SageAttention package: nvcc-generated host code includes
+    # compiled_autograd.h, which will hit an ambiguous `std` error unless
+    # the header sees USE_CUDA defined.  Only add the flag when using the
+    # MSVC toolchain (DISTUTILS_USE_SDK==1).
+    if sys.platform == "win32" and os.getenv("DISTUTILS_USE_SDK") == "1":
+        nvcc_flags.append("-DUSE_CUDA")
+        # undefine small macro from Windows headers; otherwise it renames
+        # function parameters in PyTorch headers and breaks compilation.
+        nvcc_flags.append("-Usmall")
     include_dirs = [
         repo_dir / "sageattn3",
         cutlass_dir / "include",
         cutlass_dir / "tools" / "util" / "include",
     ]
 
+    # base C++ flags for extensions; may need USE_CUDA on Windows/MSVC
+    default_cxx = ["-O3", "-std=c++17"]
+    if sys.platform == "win32" and os.getenv("DISTUTILS_USE_SDK") == "1":
+        default_cxx.append("-DUSE_CUDA")
+        default_cxx.append("-Usmall")
+
     ext_modules.append(
         CUDAExtension(
             name="fp4attn_cuda",
             sources=["sageattn3/blackwell/api.cu"],
             extra_compile_args={
-                "cxx": ["-O3", "-std=c++17"],
+                "cxx": default_cxx,
                 "nvcc": append_nvcc_threads(
                     nvcc_flags + ["-DEXECMODE=0"] + cc_flag
                 ),
@@ -134,7 +152,7 @@ if not SKIP_CUDA_BUILD:
             name="fp4quant_cuda",
             sources=["sageattn3/quantization/fp4_quantization_4d.cu"],
             extra_compile_args={
-                "cxx": ["-O3", "-std=c++17"],
+                "cxx": default_cxx,
                 "nvcc": append_nvcc_threads(
                     nvcc_flags + ["-DEXECMODE=0"] + cc_flag
                 ),
