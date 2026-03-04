@@ -48,6 +48,8 @@ void set_params_fprop(Flash_fwd_params &params,
                       const at::Tensor k,
                       const at::Tensor v,
                       const at::Tensor delta_s,
+                      const at::Tensor lut,
+                      const at::Tensor valid_block_num,
                       at::Tensor out,
                       const at::Tensor sfq,
                       const at::Tensor sfk,
@@ -61,6 +63,7 @@ void set_params_fprop(Flash_fwd_params &params,
                       float softmax_scale,
                       int window_size_left,
                       int window_size_right,
+                      bool is_sparse,
                       bool per_block_mean,
                       bool is_bf16,
                       bool seqlenq_ngroups_swapped=false) {
@@ -86,6 +89,14 @@ void set_params_fprop(Flash_fwd_params &params,
 
     params.ds_row_stride = delta_s.stride(-2);
     params.ds_head_stride = delta_s.stride(-3);
+
+    if (is_sparse) {
+        params.lut_ptr = lut.data_ptr();
+        params.lut_row_stride = lut.stride(-2);
+        params.lut_head_stride = lut.stride(-3);
+        params.vbn_ptr = valid_block_num.data_ptr();
+        params.vbn_head_stride = valid_block_num.stride(-2);
+    }
     
     params.sfq_row_stride = sfq.stride(-2);
     params.sfk_row_stride = sfk.stride(-2);
@@ -102,6 +113,10 @@ void set_params_fprop(Flash_fwd_params &params,
         params.k_batch_stride = k.stride(0) * 2;
         params.v_batch_stride = v.stride(0) * 2;
         params.ds_batch_stride = delta_s.stride(0);
+	if (is_sparse) {
+            params.lut_batch_stride = lut.stride(0);
+            params.vbn_batch_stride = valid_block_num.stride(0);
+	}
         params.sfq_batch_stride = sfq.stride(0);
         params.sfk_batch_stride = sfk.stride(0);
         params.sfv_batch_stride = sfv.stride(0);
@@ -161,6 +176,7 @@ void set_params_fprop(Flash_fwd_params &params,
     // Causal is the special case where window_size_right == 0 and window_size_left < 0.
     // Local is the more general case where window_size_right >= 0 or window_size_left >= 0.
     params.is_causal = window_size_left < 0 && window_size_right == 0;
+    params.is_sparse = is_sparse;
     params.per_block_mean = per_block_mean;
     if (per_block_mean) {
         params.seqlen_s = seqlen_q;
@@ -208,10 +224,13 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
         const at::Tensor &sfk,
         const at::Tensor &sfv,
         const at::Tensor &delta_s,
+        const c10::optional<at::Tensor> &lut_tensor,
+        const c10::optional<at::Tensor> &valid_block_num_tensor,
         int unpadded_k,
         c10::optional<at::Tensor> &out_,             // batch_size x seqlen_q x num_heads x head_size
         const float softmax_scale,
         bool is_causal, 
+        bool is_sparse,
         bool per_block_mean,
         bool is_bf16
     ) {
@@ -220,6 +239,17 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
     bool is_sm120 = dprops->major == 12 && dprops->minor == 0;
     bool is_sm121 = dprops->major == 12 && dprops->minor == 1;
     TORCH_CHECK(is_sm120 || is_sm121, "only supports Blackwell GPUs or newer.");
+
+    at::Tensor lut;
+    at::Tensor valid_block_num;
+    if (is_sparse) {
+        TORCH_CHECK(lut_tensor.has_value(), "lut shouldn't be None when is_sparse = True");
+        lut = lut_tensor.value();
+        TORCH_CHECK(lut.stride(-1) == 1, "Input tensor must have contiguous last dimension");
+        TORCH_CHECK(valid_block_num_tensor.has_value(), "valid_block_num shouldn't be None when is_sparse = True");
+        valid_block_num = valid_block_num_tensor.value();
+        TORCH_CHECK(valid_block_num.stride(-1) == 1, "Input tensor must have contiguous last dimension");
+    }
 
     auto q_dtype = q.dtype();
     auto sfq_dtype = sfq.dtype();
@@ -267,7 +297,12 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
     // CHECK_SHAPE(sfk, batch_size, seqlen_k, num_heads_k, unpacked_head_size);
     // CHECK_SHAPE(sfv, batch_size, unpacked_head_size, num_heads_k, seqlen_k);
     TORCH_CHECK(unpacked_head_size % 8 == 0, "head_size must be a multiple of 8");
-    
+
+    if (is_sparse) {
+        CHECK_SHAPE(lut, batch_size, num_heads, seqlen_q / 128, seqlen_k / 128);
+        CHECK_SHAPE(valid_block_num, batch_size, num_heads, seqlen_q / 128);
+    }
+
     auto dtype = is_bf16 ? at::ScalarType::BFloat16 : at::ScalarType::Half;
     at::Tensor out = torch::empty({batch_size, num_heads, seqlen_q, unpacked_head_size}, opts.dtype(dtype));
 
@@ -281,8 +316,6 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
     // Cast to char to avoid compiler warning about narrowing
     at::cuda::CUDAGuard device_guard{(char)q.get_device()};
 
-    
-
     auto softmax_lse = torch::empty({batch_size, num_heads, seqlen_q}, opts.dtype(at::kFloat));
     at::Tensor p;
 
@@ -293,7 +326,7 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
                      seqlen_q_rounded, seqlen_k_rounded,
                      num_heads, num_heads_k,
                      unpacked_head_size, unpacked_head_size,
-                     q, k, v, delta_s, out, 
+                     q, k, v, delta_s, lut, valid_block_num, out,
                      sfq, sfk, sfv,
                      /*cu_seqlens_q_d=*/nullptr,
                      /*cu_seqlens_k_d=*/nullptr,
@@ -304,6 +337,7 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
                      softmax_scale,
                      /*window_size_left=*/-1,
                      /*window_size_right=*/is_causal ? 0 : -1,
+                     is_sparse,
                      per_block_mean,
                      is_bf16
                     );

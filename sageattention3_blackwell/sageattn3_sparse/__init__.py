@@ -13,4 +13,4 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 """
-from .api import sageattn3_blackwell
+from .api import sageattn3_sparse_blackwell, quant_fp4, dequant_fp4

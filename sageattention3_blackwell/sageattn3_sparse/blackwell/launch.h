@@ -29,14 +29,15 @@
 #include "kernel_traits.h"
 
 
-template<typename Kernel_traits, bool Is_causal>
+template<typename Kernel_traits, bool Is_causal, bool Is_sparse>
 void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
     using Element = typename Kernel_traits::Element;
     using ElementSF = typename Kernel_traits::ElementSF;
+    using ElementDS = typename Kernel_traits::ElementDS;
     using ElementOut = typename Kernel_traits::ElementOut;
     using TileShape_MNK = typename Kernel_traits::TileShape_MNK;
     using ClusterShape = typename Kernel_traits::ClusterShape_MNK;
-    using CollectiveMainloop = flash::CollectiveMainloopFwd<Kernel_traits, Is_causal>;
+    using CollectiveMainloop = flash::CollectiveMainloopFwd<Kernel_traits, Is_causal, Is_sparse>;
     using CollectiveEpilogue = flash::CollectiveEpilogueFwd<Kernel_traits>;
     // using Scheduler = flash::SingleTileScheduler;
     using Scheduler = flash::StaticPersistentTileScheduler;
@@ -58,9 +59,13 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
             {params.seqlen_k, params.d, params.h_k, params.b},  // shape_SFK
             static_cast<ElementSF const*>(params.sfv_ptr),
             {params.d, params.seqlen_k, params.h_k, params.b},  // shape_SFVt
-            static_cast<float const*>(params.delta_s_ptr),
+            static_cast<ElementDS const*>(params.delta_s_ptr),
             {params.seqlen_s, params.seqlen_k, params.h_k, params.b},
             {params.ds_row_stride, _1{}, params.ds_head_stride, params.ds_batch_stride},
+            static_cast<int32_t const*>(params.lut_ptr),
+            {params.lut_row_stride, _1{}, params.lut_head_stride, params.lut_batch_stride},
+            static_cast<int32_t const*>(params.vbn_ptr),
+            {_1{}, params.vbn_head_stride, params.vbn_batch_stride},
             params.scale_softmax_log2
         });
     typename CollectiveEpilogue::Params epilogue_params =
@@ -78,7 +83,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
     typename Scheduler::Params scheduler_params = Scheduler::to_underlying_arguments(scheduler_args);
     // Get the ptr to kernel function.
     void *kernel;
-    kernel = (void *)flash::compute_attn_ws<Kernel_traits, Is_causal, Scheduler>;
+    kernel = (void *)flash::compute_attn_ws<Kernel_traits, Is_causal, Is_sparse, Scheduler>;
     int smem_size = sizeof(typename Kernel_traits::SharedStorage);
     if (smem_size >= 48 * 1024) {
        C10_CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
@@ -99,15 +104,17 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
 template<typename T, int Headdim, typename O = cutlass::bfloat16_t>
 void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream) {
     BOOL_SWITCH(params.is_causal, Is_causal, [&] {
-        BOOL_SWITCH(params.per_block_mean, per_block, [&] {
-            if constexpr (Headdim == 64 || Headdim == 128) {
-                run_flash_fwd<
-                    Flash_fwd_kernel_traits<Headdim, 128, 128, 3, 1, per_block, T, O>,
-                    Is_causal
-                >(params, stream);
-            } else {
-                static_assert(Headdim == 64 || Headdim == 128, "Unsupported Headdim");
-            }
+        BOOL_SWITCH(params.is_sparse, Is_sparse, [&] {
+            BOOL_SWITCH(params.per_block_mean, per_block, [&] {
+                if constexpr (Headdim == 64 || Headdim == 128) {
+                    run_flash_fwd<
+                        Flash_fwd_kernel_traits<Headdim, 128, 128, 3, 1, per_block, T, O>,
+                        Is_causal, Is_sparse
+                    >(params, stream);
+                } else {
+                    static_assert(Headdim == 64 || Headdim == 128, "Unsupported Headdim");
+                }
+            });
         });
     });
 }

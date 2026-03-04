@@ -37,10 +37,10 @@ namespace flash {
 
 using namespace cute;
 
-template <typename Ktraits, bool Is_causal, typename TileScheduler>
+template <typename Ktraits, bool Is_causal, bool Is_sparse, typename TileScheduler>
 __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp, 1)
     compute_attn_ws(CUTE_GRID_CONSTANT Flash_fwd_params const params,
-                    CUTE_GRID_CONSTANT typename CollectiveMainloopFwd<Ktraits, Is_causal>::Params const mainloop_params,
+                    CUTE_GRID_CONSTANT typename CollectiveMainloopFwd<Ktraits, Is_causal, Is_sparse>::Params const mainloop_params,
                     CUTE_GRID_CONSTANT typename CollectiveEpilogueFwd<Ktraits>::Params const epilogue_params,
                     CUTE_GRID_CONSTANT typename TileScheduler::Params const scheduler_params
                     ) {
@@ -55,7 +55,7 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
     static constexpr int NumCopyThreads = cutlass::NumThreadsPerWarpGroup;
     static constexpr int kBlockM = Ktraits::kBlockM;
 
-    using CollectiveMainloop = CollectiveMainloopFwd<Ktraits, Is_causal>;
+    using CollectiveMainloop = CollectiveMainloopFwd<Ktraits, Is_causal, Is_sparse>;
     using CollectiveEpilogue = CollectiveEpilogueFwd<Ktraits>;
 
     using MainloopPipeline = typename Ktraits::MainloopPipeline;
@@ -145,19 +145,68 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
             PipelineStateQ smem_pipe_write_q = cutlass::make_producer_start_state<MainloopPipelineQ>();
             PipelineState smem_pipe_write_k = cutlass::make_producer_start_state<MainloopPipeline>();
             PipelineState smem_pipe_write_v = cutlass::make_producer_start_state<MainloopPipeline>();
-            
-        int work_idx = 0;
             for (auto work_tile_info = scheduler.get_initial_work(); work_tile_info.is_valid(scheduler_params); work_tile_info = scheduler.get_next_work(scheduler_params, work_tile_info)) {
-                int tile_count_semaphore = 0;
-                collective_mainloop.load(mainloop_params, scheduler_params, 
-                                         pipeline_q, pipeline_k, pipeline_v, 
-                                         smem_pipe_write_q, smem_pipe_write_k, smem_pipe_write_v,
-                                         shared_storage, work_tile_info, work_idx, tile_count_semaphore);
+		if constexpr (Is_sparse) {
+		    int total_valid = 0;
+		    {
+                        auto block_coord = work_tile_info.get_block_coord(scheduler_params);
+                        auto [m_block, bidh, bidb] = block_coord;
+	                auto vbn_head_stride  = cute::get<1>(mainloop_params.stride_VBN);
+                        auto vbn_batch_stride = cute::get<2>(mainloop_params.stride_VBN);
+                        int vbn_offset = m_block + bidh * vbn_head_stride + bidb * vbn_batch_stride;
+                        total_valid = mainloop_params.vbn_ptr[vbn_offset];
+		    }
+                    if (total_valid <= 0) {  // We exit early.
+                        continue;
+                    }
+                    collective_mainloop.load_sparse(mainloop_params, scheduler_params,
+                                             pipeline_q, pipeline_k, pipeline_v,
+                                             smem_pipe_write_q, smem_pipe_write_k, smem_pipe_write_v,
+                                             shared_storage, work_tile_info, total_valid);
+                } else {
+		    int n_block_max = 0;
+		    {
+                        auto block_coord = work_tile_info.get_block_coord(scheduler_params);
+                        auto [m_block, bidh, bidb] = block_coord;
+                        n_block_max = collective_mainloop.get_n_block_max(mainloop_params, m_block);
+		    }
+                    if (n_block_max <= 0) {  // We exit early.
+                        continue;
+                    }
+                    collective_mainloop.load(mainloop_params, scheduler_params,
+                                             pipeline_q, pipeline_k, pipeline_v,
+                                             smem_pipe_write_q, smem_pipe_write_k, smem_pipe_write_v,
+                                             shared_storage, work_tile_info);
+                }
             }
             collective_mainloop.load_tail(pipeline_q, pipeline_k, pipeline_v, 
                                           smem_pipe_write_q, smem_pipe_write_k, smem_pipe_write_v);
         } else if (producer_warp_role == ProducerWarpRole::Epilogue) {
             for (auto work_tile_info = scheduler.get_initial_work(); work_tile_info.is_valid(scheduler_params); work_tile_info = scheduler.get_next_work(scheduler_params, work_tile_info)) {
+	        if constexpr (Is_sparse) {
+	            int total_valid = 0;
+	            {
+                        auto block_coord = work_tile_info.get_block_coord(scheduler_params);
+                        auto [m_block, bidh, bidb] = block_coord;
+	                auto vbn_head_stride  = cute::get<1>(mainloop_params.stride_VBN);
+                        auto vbn_batch_stride = cute::get<2>(mainloop_params.stride_VBN);
+                        int vbn_offset = m_block + bidh * vbn_head_stride + bidb * vbn_batch_stride;
+                        total_valid = mainloop_params.vbn_ptr[vbn_offset];
+	            }
+                    if (total_valid <= 0) {  // We exit early.
+                        continue;
+		    }
+	        } else {
+	            int n_block_max = 0;
+	            {
+                        auto block_coord = work_tile_info.get_block_coord(scheduler_params);
+                        auto [m_block, bidh, bidb] = block_coord;
+                        n_block_max = collective_mainloop.get_n_block_max(mainloop_params, m_block);
+	            }
+                    if (n_block_max <= 0) {  // We exit early.
+                        continue;
+		    }
+		}
                 barrier_o.wait();
                 collective_epilogue.tma_store(shared_storage, epilogue_params, work_tile_info, scheduler_params, threadIdx.x);
                 collective_epilogue.store_tail();
@@ -172,29 +221,47 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
         PipelineState smem_pipe_read_k, smem_pipe_read_v;
         PipelineStateQ smem_pipe_read_q;
 
-        int work_idx = 0;
-
         CUTLASS_PRAGMA_NO_UNROLL
         for (auto work_tile_info = scheduler.get_initial_work(); work_tile_info.is_valid(scheduler_params); work_tile_info = scheduler.get_next_work(scheduler_params, work_tile_info)) {
             // Attention output (GEMM-II) accumulator.
             Tensor tOrO = partition_fragment_C(tiled_mma_pv, select<0, 2>(TileShape_MNK{}));
             // flash::Softmax<2 * (2 * kBlockM / NumMmaThreads)> softmax;
             flash::SoftmaxFused<2 * (2 * kBlockM / NumMmaThreads)> softmax_fused;
-            auto block_coord = work_tile_info.get_block_coord(scheduler_params);
-            auto [m_block, bidh, bidb] = block_coord;
+	    if constexpr (Is_sparse) {
+		int total_valid = 0;
+		int n_block_max = 0;
+                auto block_coord = work_tile_info.get_block_coord(scheduler_params);
+		{
+                    auto [m_block, bidh, bidb] = block_coord;
+                    n_block_max = collective_mainloop.get_n_block_max(mainloop_params, m_block);
+	            auto vbn_head_stride  = cute::get<1>(mainloop_params.stride_VBN);
+                    auto vbn_batch_stride = cute::get<2>(mainloop_params.stride_VBN);
+                    int vbn_offset = m_block + bidh * vbn_head_stride + bidb * vbn_batch_stride;
+                    total_valid = mainloop_params.vbn_ptr[vbn_offset];
+		}
+                if (total_valid <= 0) {  // We exit early and write 0 to gO and -inf to gLSE.
+                    collective_epilogue.store_zero(epilogue_params, threadIdx.x - NumCopyThreads, block_coord);
+                    continue;
+                }
+                collective_mainloop.mma_sparse(mainloop_params, scheduler_params, work_tile_info, pipeline_q, pipeline_k, pipeline_v,
+				        smem_pipe_read_q, smem_pipe_read_k, smem_pipe_read_v,
+                                        tOrO, softmax_fused, n_block_max, threadIdx.x - NumCopyThreads,
+					total_valid, shared_storage);
+	    } else {
+                auto block_coord = work_tile_info.get_block_coord(scheduler_params);
+                auto [m_block, bidh, bidb] = block_coord;
+                int n_block_max = collective_mainloop.get_n_block_max(mainloop_params, m_block);
+                if (n_block_max <= 0) {  // We exit early and write 0 to gO and -inf to gLSE.
+                    collective_epilogue.store_zero(epilogue_params, threadIdx.x - NumCopyThreads, block_coord);
+                    continue;
+                }
+                collective_mainloop.mma(mainloop_params, pipeline_q, pipeline_k, pipeline_v, smem_pipe_read_q, smem_pipe_read_k, smem_pipe_read_v,
+                                        tOrO, softmax_fused, n_block_max, threadIdx.x - NumCopyThreads, m_block, shared_storage);
 
-            int n_block_max = collective_mainloop.get_n_block_max(mainloop_params, m_block);
-            if (Is_causal && n_block_max <= 0) {  // We exit early and write 0 to gO and -inf to gLSE.
-                collective_epilogue.store_zero(epilogue_params, threadIdx.x - NumCopyThreads, block_coord);
-                continue;
-            }
-
-            collective_mainloop.mma(mainloop_params, pipeline_q, pipeline_k, pipeline_v, smem_pipe_read_q, smem_pipe_read_k, smem_pipe_read_v,
-                                    tOrO, softmax_fused, n_block_max, threadIdx.x - NumCopyThreads, work_idx, m_block, shared_storage);
-            barrier_o.wait();
-            collective_epilogue.mma_store(shared_storage, tiled_mma_pv, tOrO, threadIdx.x - NumCopyThreads); 
+	    }
+	    barrier_o.wait();
+            collective_epilogue.mma_store(shared_storage, tiled_mma_pv, tOrO, threadIdx.x - NumCopyThreads);
             barrier_o.arrive();
-            ++work_idx;
         }
     }
 }

@@ -35,6 +35,7 @@ template <
     int EpiStages,
     typename Element,
     typename ElementSF,
+    typename ElementDS,
     typename OutputType,
     typename SmemLayoutQ,
     typename SmemLayoutK,
@@ -52,7 +53,7 @@ struct SharedStorageQKVOwithSF : cute::aligned_struct<128, _0>{
     cute::ArrayEngine<ElementSF, cute::cosize_v<SmemLayoutSFQ>> smem_SFQ;
     cute::ArrayEngine<ElementSF, cute::cosize_v<SmemLayoutSFK>> smem_SFK;
     cute::ArrayEngine<ElementSF, cute::cosize_v<SmemLayoutSFV>> smem_SFV;
-    alignas(1024) cute::ArrayEngine<float, cute::cosize_v<SmemLayoutDS>> smem_ds;
+    alignas(1024) cute::ArrayEngine<ElementDS, cute::cosize_v<SmemLayoutDS>> smem_ds;
     alignas(1024) cute::ArrayEngine<Element, cute::cosize_v<SmemLayoutV>> smem_v;
     alignas(1024) cute::ArrayEngine<OutputType, cute::cosize_v<SmemLayoutO>> smem_o;
     
@@ -91,6 +92,7 @@ struct Flash_fwd_kernel_traits {
     static constexpr int NumSFQK = kHeadDim / 16;
     static constexpr int NumSFPV = kBlockN / 16;
     using ElementSF = cutlass::float_ue4m3_t;
+    using ElementDS = cutlass::bfloat16_t;
     using Element = cutlass::float_e2m1_t;
     using ElementAccum = float;
     using ElementOut = ElementOut_;
@@ -148,7 +150,7 @@ struct Flash_fwd_kernel_traits {
     using SmemCopyAtomQ = Copy_Atom<SM75_U32x4_LDSM_N, Element>;
     using SmemCopyAtomKV = Copy_Atom<SM75_U32x4_LDSM_N, Element>;
     using SmemCopyAtomSF = Copy_Atom<UniversalCopy<ElementSF>, ElementSF>;
-    using SmemCopyAtomDS = Copy_Atom<UniversalCopy<float>, float>;
+    using SmemCopyAtomDS = Copy_Atom<UniversalCopy<ElementDS>, ElementDS>;
 
     using BlkScaledConfig = flash::BlockScaledConfig<SFVectorSize>;
     using LayoutSF = typename BlkScaledConfig::LayoutSF;
@@ -189,7 +191,7 @@ struct Flash_fwd_kernel_traits {
     using SmemLayoutAtomO = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, ElementOut,
         decltype(cute::get<0>(TileShape_MNK{})), decltype(cute::get<2>(TileShape_MNK{}))>());
     using SmemLayoutO = decltype(tile_to_shape(SmemLayoutAtomO{}, select<0, 2>(TileShape_MNK{}), Step<_1, _2>{}));
-    using SharedStorage = SharedStorageQKVOwithSF<kStages, EpiStages, Element, ElementSF, ElementOut,
+    using SharedStorage = SharedStorageQKVOwithSF<kStages, EpiStages, Element, ElementSF, ElementDS, ElementOut,
         SmemLayoutQ, SmemLayoutK, SmemLayoutV, SmemLayoutDS, 
         SmemLayoutO, SmemLayoutSFQ, SmemLayoutSFK, SmemLayoutSFVt>;
     using MainloopPipeline = typename cutlass::PipelineTmaAsync<kStages>;

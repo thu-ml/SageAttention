@@ -38,6 +38,8 @@ struct Qkv_params {
     void *__restrict__ k_ptr;
     void *__restrict__ v_ptr;
     void *__restrict__ delta_s_ptr;
+    void *__restrict__ lut_ptr;
+    void *__restrict__ vbn_ptr;
     // The QKV scale factor matrices.
     void *__restrict__ sfq_ptr;
     void *__restrict__ sfk_ptr;
@@ -55,6 +57,11 @@ struct Qkv_params {
     index_t ds_batch_stride;
     index_t ds_row_stride;
     index_t ds_head_stride;
+    index_t lut_batch_stride;
+    index_t lut_row_stride;
+    index_t lut_head_stride;
+    index_t vbn_batch_stride;
+    index_t vbn_head_stride;
     // The stride of the Q, K and V scale factor matrices.
     index_t sfq_batch_stride;
     index_t sfk_batch_stride;
@@ -160,6 +167,7 @@ struct Flash_fwd_params : public Qkv_params {
     bool is_bf16;
     bool is_e4m3;
     bool is_causal;
+    bool is_sparse;
     bool per_block_mean;
     // If is_seqlens_k_cumulative, then seqlen_k is cu_seqlens_k[bidb + 1] - cu_seqlens_k[bidb].
     // Otherwise it's cu_seqlens_k[bidb], i.e., we use cu_seqlens_k to store the sequence lengths of K.
