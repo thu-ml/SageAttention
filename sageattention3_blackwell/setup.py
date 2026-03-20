@@ -108,6 +108,27 @@ if not SKIP_CUDA_BUILD:
         "-DCTA256",
         "-DDQINRMEM",
     ]
+    
+    cxx_flags = ["-O3", "-std=c++17"]
+    
+    import sys
+    if sys.platform == "win32":
+        win_flags = [
+            "/Zc:preprocessor", 
+            "/DCCCL_IGNORE_MSVC_TRADITIONAL_PREPROCESSOR_WARNING",
+            "-DUSE_CUDA", 
+            "-Usmall"
+        ]
+        cxx_flags.extend(win_flags)
+        
+        nvcc_win_flags = [
+            "-Xcompiler", "/Zc:preprocessor",
+            "-Xcompiler", "/DCCCL_IGNORE_MSVC_TRADITIONAL_PREPROCESSOR_WARNING",
+            "-DUSE_CUDA", 
+            "-Usmall"
+        ]
+        nvcc_flags.extend(nvcc_win_flags)
+
     include_dirs = [
         repo_dir / "sageattn3",
         cutlass_dir / "include",
@@ -119,7 +140,7 @@ if not SKIP_CUDA_BUILD:
             name="fp4attn_cuda",
             sources=["sageattn3/blackwell/api.cu"],
             extra_compile_args={
-                "cxx": ["-O3", "-std=c++17"],
+                "cxx": cxx_flags[:],
                 "nvcc": append_nvcc_threads(
                     nvcc_flags + ["-DEXECMODE=0"] + cc_flag
                 ),
@@ -134,7 +155,7 @@ if not SKIP_CUDA_BUILD:
             name="fp4quant_cuda",
             sources=["sageattn3/quantization/fp4_quantization_4d.cu"],
             extra_compile_args={
-                "cxx": ["-O3", "-std=c++17"],
+                "cxx": cxx_flags[:],
                 "nvcc": append_nvcc_threads(
                     nvcc_flags + ["-DEXECMODE=0"] + cc_flag
                 ),
