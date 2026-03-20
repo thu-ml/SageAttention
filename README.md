@@ -1,4 +1,15 @@
-# SageAttention
+# SageAttention (Windows Blackwell Fork)
+
+> **Windows Build Fixes**: This fork includes critical fixes for compiling SageAttention on Windows with MSVC. Specifically, it resolves the `C2872: 'std': ambiguous symbol` error by appending `/Zc:preprocessor`, `/DCCCL_IGNORE_MSVC_TRADITIONAL_PREPROCESSOR_WARNING`, `-DUSE_CUDA`, and `-Usmall` to the compilation flags in `setup.py` and `sageattention3_blackwell/setup.py`. It also addresses thread-safety issues during concurrent builds by creating shallow copies of compiler flag lists (`CXX_FLAGS[:]`), preventing `TORCH_EXTENSION_NAME` from being inadvertently overwritten.
+> 
+> ### Pre-built Wheel Requirements
+> The `.whl` files provided in this repository are compiled specifically for the following environment:
+> - **Python Version:** 3.12
+> - **PyTorch Version:** 2.10.0
+> - **CUDA Version:** 13.1 (compatible with cu130/cu131)
+> - **OS:** Windows 10 / Windows 11
+> - **Supported Architectures:** RTX 3000 / 4000 / 5000 Series GPUs (Compute Capability: `sm_80`, `sm_89`, `sm_120a`)
+
 <!-- We are continuously updating more features. You could **Star** and **Watch** our repository to stay updated.
 
 --- -->

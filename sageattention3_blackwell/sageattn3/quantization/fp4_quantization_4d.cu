@@ -17,6 +17,11 @@
 #include <torch/python.h>
 #include <torch/nn/functional.h>
 #include <ATen/cuda/CUDAContext.h>
+
+#ifdef _WIN32
+#undef small
+#endif
+
 #include <c10/cuda/CUDAGuard.h>
 #include <cuda_runtime_api.h>
 #include <cuda_runtime.h>
