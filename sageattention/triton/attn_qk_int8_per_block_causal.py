@@ -170,6 +170,6 @@ def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.f
         STAGE=stage,  
         RETURN_LSE=return_lse,
         num_warps=4 if head_dim == 64 else 8,
-        num_stages=4)
+        num_stages=(1 if torch.version.hip else 4))
 
     return o, lse
