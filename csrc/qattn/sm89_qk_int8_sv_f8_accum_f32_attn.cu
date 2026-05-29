@@ -152,7 +152,7 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn(torch::Tensor query,
             dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
             dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
 
-            kernel_func<<<grid, block, smem_max>>>(
+            kernel_func<<<grid, block, smem_max, at::cuda::getCurrentCUDAStream()>>>(
               query.data_ptr<int8_t>(), 
               key.data_ptr<int8_t>(),
               reinterpret_cast<int8_t*>(value.data_ptr()),

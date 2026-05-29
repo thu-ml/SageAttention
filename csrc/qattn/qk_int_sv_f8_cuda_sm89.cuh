@@ -18,6 +18,7 @@
 #include <cuda_fp16.h>
 #include <cuda_pipeline_primitives.h>
 #include <torch/extension.h>
+#include <ATen/cuda/CUDAContext.h>
 
 #include "../cp_async.cuh"
 #include "../mma.cuh"
