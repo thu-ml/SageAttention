@@ -85,7 +85,7 @@ struct CollectiveEpilogueFwd{
         StrideO const stride_O;
         float* ptr_LSE;
         StrideLSE const stride_LSE;
-        TMA_O tma_store_O;
+        alignas(64) TMA_O tma_store_O;
     };
 
     static Params

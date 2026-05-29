@@ -1,6 +1,7 @@
 /test
-/build
+**/build
 /sageattention.egg-info
+**/sageattn3.egg-info
 *.mp4
 /dist
 /test
@@ -12,3 +13,4 @@ evaluate/
 bench_qk_int8_pv_fp8_cuda_head96.py
 *test.py
 *unmask.py
+**/*.pyd

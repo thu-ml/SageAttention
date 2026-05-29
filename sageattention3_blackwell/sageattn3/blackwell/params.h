@@ -19,6 +19,12 @@
 #include <cuda.h>
 #include <vector>
 
+#ifdef _WIN32
+#ifdef small
+#undef small
+#endif
+#endif
+
 #ifdef OLD_GENERATOR_PATH
 #include <ATen/CUDAGeneratorImpl.h>
 #else
