@@ -13,9 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <torch/all.h>
 #include <torch/python.h>
 #include <torch/nn/functional.h>
+
+#ifdef _WIN32
+#ifdef small
+#undef small
+#endif
+#endif
+
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <cuda_runtime_api.h>

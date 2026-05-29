@@ -16,6 +16,12 @@
 
 #pragma once
 
+#ifdef _WIN32
+#ifdef small
+#undef small
+#endif
+#endif
+
 #include <ATen/cuda/CUDAContext.h>
 
 #include "cute/tensor.hpp"
@@ -86,7 +92,8 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
     static constexpr int ctaSize = Kernel_traits::kNWarps * 32;
     params.m_block_divmod = cutlass::FastDivmod(num_blocks_m);
     params.total_blocks = num_blocks_m * params.h * params.b;
-    dim3 grid_dims = Scheduler::get_grid_dim(scheduler_args, 170);
+    auto dprops = at::cuda::getCurrentDeviceProperties();
+    dim3 grid_dims = Scheduler::get_grid_dim(scheduler_args, dprops->multiProcessorCount);
     dim3 block_dims(ctaSize);
     dim3 cluster_dims(size<0>(ClusterShape{}), size<1>(ClusterShape{}), size<2>(ClusterShape{}));
     cutlass::ClusterLaunchParams launch_params{grid_dims, block_dims, cluster_dims, smem_size, stream};

@@ -108,6 +108,8 @@ if not SKIP_CUDA_BUILD:
         "-DCTA256",
         "-DDQINRMEM",
     ]
+    if os.name == "nt":
+        nvcc_flags.append("-Xcompiler=/Zc:preprocessor")
     include_dirs = [
         repo_dir / "sageattn3",
         cutlass_dir / "include",

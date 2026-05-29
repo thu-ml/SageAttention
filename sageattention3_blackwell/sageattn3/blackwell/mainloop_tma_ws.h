@@ -186,13 +186,13 @@ struct CollectiveMainloopFwd {
         ShapeQKV const shape_Vt;
         LayoutSF const layout_SFVt;
         LayoutDS const layout_DS;
-        TMA_Q tma_load_Q;
-        TMA_SFQ tma_load_SFQ;
-        TMA_KV tma_load_K;
-        TMA_SFKV tma_load_SFK;
-        TMA_Vt tma_load_Vt;
-        TMA_SFVt tma_load_SFVt;
-        TMA_DS tma_load_DS;
+        alignas(64) TMA_Q tma_load_Q;
+        alignas(64) TMA_SFQ tma_load_SFQ;
+        alignas(64) TMA_KV tma_load_K;
+        alignas(64) TMA_SFKV tma_load_SFK;
+        alignas(64) TMA_Vt tma_load_Vt;
+        alignas(64) TMA_SFVt tma_load_SFVt;
+        alignas(64) TMA_DS tma_load_DS;
         float const softmax_scale_log2;
     };
 
