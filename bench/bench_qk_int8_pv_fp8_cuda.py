@@ -35,7 +35,7 @@ fused_v = args.fused_v
 print(f"CUDA QK Int8 PV FP8 Benchmark")
 print(f"batch: {batch}, head: {head}, headdim: {headdim}, pv_accum_dtype: {args.pv_accum_dtype}, fused_v: {fused_v}")
 
-WARP_Q = 32
+WARP_Q = 16 if headdim == 256 else 32
 WARP_K = 64
 
 #fused_v = False

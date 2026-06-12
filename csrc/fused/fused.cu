@@ -861,7 +861,7 @@ void transpose_pad_permute_cuda(
   CHECK_DIMS(input, 4);
   CHECK_DIMS(output, 4);
 
-  constexpr int CTA_SIZE = 64;
+  const int CTA_SIZE_HOST = 64;
 
   const int batch_size = input.size(0);
   const int head_dim = input.size(3);
@@ -881,7 +881,7 @@ void transpose_pad_permute_cuda(
     stride_d_output = output.stride(1);
     stride_h_output = output.stride(2);
 
-    padded_num_tokens = (num_tokens + CTA_SIZE - 1) / CTA_SIZE * CTA_SIZE;
+    padded_num_tokens = (num_tokens + CTA_SIZE_HOST - 1) / CTA_SIZE_HOST * CTA_SIZE_HOST;
 
     CHECK_SHAPE(output, batch_size, head_dim, num_heads, padded_num_tokens);
   }
@@ -894,7 +894,7 @@ void transpose_pad_permute_cuda(
     stride_d_output = output.stride(2);
     stride_h_output = output.stride(1);
 
-    padded_num_tokens = (num_tokens + CTA_SIZE - 1) / CTA_SIZE * CTA_SIZE;
+    padded_num_tokens = (num_tokens + CTA_SIZE_HOST - 1) / CTA_SIZE_HOST * CTA_SIZE_HOST;
     CHECK_SHAPE(output, batch_size, num_heads, head_dim, padded_num_tokens);
   }
 
@@ -905,6 +905,8 @@ void transpose_pad_permute_cuda(
 
   DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(input_dtype, c_type, {
     DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
+      constexpr int CTA_SIZE = (HEAD_DIM == 256) ? 32 : 64;
+
       dim3 grid(padded_num_tokens / CTA_SIZE, num_heads, batch_size);
 
       static_assert(CTA_SIZE * HEAD_DIM <= 8192);

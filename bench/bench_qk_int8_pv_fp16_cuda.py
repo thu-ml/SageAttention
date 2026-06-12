@@ -20,8 +20,18 @@ headdim = args.head_dim
 print(f"CUDA QK Int8 PV FP16 Benchmark")
 print(f"batch: {batch}, head: {head}, headdim: {headdim}, pv_accum_dtype: {args.pv_accum_dtype}")
 
-WARP_Q = 16 if (headdim == 128 and args.pv_accum_dtype == "fp16+fp32") else 32
-WARP_K = 64
+def div_ceil(a, b):
+    return (a + b - 1) // b
+
+def tile_config(is_causal):
+    if args.pv_accum_dtype in ["fp16", "fp32"] and headdim == 256:
+        return 128, 64, 16, 64
+    if args.pv_accum_dtype == "fp16+fp32":
+        if headdim == 128 and not is_causal:
+            return 128, 32, 32, 32
+        if headdim > 64:
+            return 128, 64, 16, 64
+    return 128, 64, 32, 64
 
 if args.pv_accum_dtype == 'fp32':
     kernel = qattn.qk_int8_sv_f16_accum_f32_attn # the kernel with fully fp32 accumulator
@@ -35,6 +45,7 @@ _qk_quant_gran = 3 if args.quant_gran == 'per_thread' else 2
 is_causal = False
 _is_causal = 1 if is_causal else 0
 print(f"is_causal: {is_causal}")
+BLK_Q, BLK_K, WARP_Q, WARP_K = tile_config(is_causal)
 for seq_len in {1024, 2048, 4096, 8192, 16384, 32768}:
     flops = 4 * head * batch * headdim * seq_len * seq_len / (2 if is_causal else 1)
     
@@ -44,11 +55,11 @@ for seq_len in {1024, 2048, 4096, 8192, 16384, 32768}:
     vm = torch.randn(batch, head, headdim, dtype=torch.float16, device="cuda")
 
     if args.quant_gran == 'per_warp':
-        q_scale = torch.randn(batch, head, seq_len // WARP_Q, dtype=torch.float, device="cuda")
-        k_scale = torch.randn(batch, head, seq_len // WARP_K, dtype=torch.float, device="cuda")
+        q_scale = torch.randn(batch, head, div_ceil(seq_len, BLK_Q) * (BLK_Q // WARP_Q), dtype=torch.float, device="cuda")
+        k_scale = torch.randn(batch, head, div_ceil(seq_len, BLK_K) * (BLK_K // WARP_K), dtype=torch.float, device="cuda")
     elif args.quant_gran == 'per_thread':
-        q_scale = torch.randn(batch, head, seq_len // WARP_Q * 8, dtype=torch.float, device="cuda")
-        k_scale = torch.randn(batch, head, seq_len // WARP_K * 4, dtype=torch.float, device="cuda")
+        q_scale = torch.randn(batch, head, div_ceil(seq_len, BLK_Q) * (BLK_Q // WARP_Q) * 8, dtype=torch.float, device="cuda")
+        k_scale = torch.randn(batch, head, div_ceil(seq_len, BLK_K) * (BLK_K // WARP_K) * 4, dtype=torch.float, device="cuda")
    
     v = torch.randn(batch, seq_len, head, headdim, dtype=torch.float16, device="cuda")
     o = torch.empty(batch, seq_len, head, headdim, dtype=torch.float16, device="cuda")
@@ -61,6 +72,7 @@ for seq_len in {1024, 2048, 4096, 8192, 16384, 32768}:
 is_causal = True
 _is_causal = 1 if is_causal else 0
 print(f"is_causal: {is_causal}")
+BLK_Q, BLK_K, WARP_Q, WARP_K = tile_config(is_causal)
 for seq_len in {1024, 2048, 4096, 8192, 16384, 32768}:
     flops = 4 * head * batch * headdim * seq_len * seq_len / (2 if is_causal else 1)
     
@@ -70,11 +82,11 @@ for seq_len in {1024, 2048, 4096, 8192, 16384, 32768}:
     vm = torch.randn(batch, head, headdim, dtype=torch.float16, device="cuda")
 
     if args.quant_gran == 'per_warp':
-        q_scale = torch.randn(batch, head, seq_len // WARP_Q, dtype=torch.float, device="cuda")
-        k_scale = torch.randn(batch, head, seq_len // WARP_K, dtype=torch.float, device="cuda")
+        q_scale = torch.randn(batch, head, div_ceil(seq_len, BLK_Q) * (BLK_Q // WARP_Q), dtype=torch.float, device="cuda")
+        k_scale = torch.randn(batch, head, div_ceil(seq_len, BLK_K) * (BLK_K // WARP_K), dtype=torch.float, device="cuda")
     elif args.quant_gran == 'per_thread':
-        q_scale = torch.randn(batch, head, seq_len // WARP_Q * 8, dtype=torch.float, device="cuda")
-        k_scale = torch.randn(batch, head, seq_len // WARP_K * 4, dtype=torch.float, device="cuda")
+        q_scale = torch.randn(batch, head, div_ceil(seq_len, BLK_Q) * (BLK_Q // WARP_Q) * 8, dtype=torch.float, device="cuda")
+        k_scale = torch.randn(batch, head, div_ceil(seq_len, BLK_K) * (BLK_K // WARP_K) * 4, dtype=torch.float, device="cuda")
    
     v = torch.randn(batch, seq_len, head, headdim, dtype=torch.float16, device="cuda")
     o = torch.empty(batch, seq_len, head, headdim, dtype=torch.float16, device="cuda")
