@@ -58,6 +58,26 @@ enum class ComputeUnit {
   kCudaCore,
 };
 
+__device__ __forceinline__ int32_t get_causal_kv_offset(const uint32_t &qo_len, const uint32_t &kv_len)
+{
+  return static_cast<int32_t>(kv_len) - static_cast<int32_t>(qo_len);
+}
+
+__device__ __forceinline__ uint32_t get_causal_kv_limit(
+  const uint32_t &q_end_idx, const uint32_t &qo_len, const uint32_t &kv_len)
+{
+  const int32_t kv_limit = static_cast<int32_t>(q_end_idx) + get_causal_kv_offset(qo_len, kv_len);
+  if (kv_limit <= 0)
+  {
+    return 0;
+  }
+  if (kv_limit >= static_cast<int32_t>(kv_len))
+  {
+    return kv_len;
+  }
+  return static_cast<uint32_t>(kv_limit);
+}
+
 __device__ __forceinline__ uint32_t get_warp_id()
 {
   return threadIdx.y;
@@ -294,7 +314,11 @@ __device__ __forceinline__ void compute_int_qk(const smem_t<swizzle_mode, stride
 }
 
 template <uint32_t num_tiles_q, uint32_t num_tiles_k, typename DTypeQKAccum>
-__device__ __forceinline__ void apply_causal_mask(const uint32_t &Q_idx_lane_base, const uint32_t &K_idx_lane_base, DTypeQKAccum RS[][num_tiles_k][8])
+__device__ __forceinline__ void apply_causal_mask(
+  const uint32_t &Q_idx_lane_base,
+  const uint32_t &K_idx_lane_base,
+  const int32_t &causal_kv_offset,
+  DTypeQKAccum RS[][num_tiles_k][8])
 {
 #pragma unroll
   for (uint32_t fq = 0; fq < num_tiles_q; fq++)
@@ -307,7 +331,7 @@ __device__ __forceinline__ void apply_causal_mask(const uint32_t &Q_idx_lane_bas
       {
         const uint32_t q_idx = Q_idx_lane_base + fq * 16 + 8 * ((k % 4) / 2);
         const uint32_t kv_idx = K_idx_lane_base + fk * 16 + 8 * (k / 4) + k % 2;
-        const bool out_of_boundary = (kv_idx > q_idx);
+        const bool out_of_boundary = (static_cast<int32_t>(kv_idx) > static_cast<int32_t>(q_idx) + causal_kv_offset);
 
         if constexpr (std::is_same<DTypeQKAccum, float>::value)
         {
@@ -741,14 +765,16 @@ __device__ __forceinline__ void normalize_d(DTypeSVAccum RO[][num_tiles_v][8], D
 
   // divide O by d
   float d_rcp[num_tiles_q][2];
+  bool d_is_valid[num_tiles_q][2];
 #pragma unroll
   for (uint32_t fq = 0; fq < num_tiles_q; fq++)
   {
 #pragma unroll
     for (uint32_t k = 0; k < 2; k++)
     {
-      // TODO: check m to prevent nan
-      d_rcp[fq][k] = math::ptx_rcp(d[fq][k]);
+      const float denom = d[fq][k];
+      d_is_valid[fq][k] = denom > 0.0f && denom == denom && denom < 3.4028234663852886e+38F;
+      d_rcp[fq][k] = d_is_valid[fq][k] ? math::ptx_rcp(denom) : 0.0f;
     }
   }
 
@@ -761,13 +787,16 @@ __device__ __forceinline__ void normalize_d(DTypeSVAccum RO[][num_tiles_v][8], D
 #pragma unroll
       for (uint32_t k = 0; k < 8; k++)
       {
+        const uint32_t d_idx = (k % 4) / 2;
         if constexpr (std::is_same<DTypeSVAccum, float>::value)
         {
-          RO[fq][fv][k] *= d_rcp[fq][(k % 4) / 2];
+          RO[fq][fv][k] = d_is_valid[fq][d_idx] ? RO[fq][fv][k] * d_rcp[fq][d_idx] : 0.0f;
         }
         else if constexpr (std::is_same<DTypeSVAccum, half>::value)
         {
-          RO[fq][fv][k] = __float2half_rn(__half2float(RO[fq][fv][k]) * d_rcp[fq][(k % 4) / 2]);
+          RO[fq][fv][k] = d_is_valid[fq][d_idx]
+                              ? __float2half_rn(__half2float(RO[fq][fv][k]) * d_rcp[fq][d_idx])
+                              : __float2half_rn(0.0f);
         }
       }
     }
