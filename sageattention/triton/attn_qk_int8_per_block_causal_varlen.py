@@ -19,18 +19,24 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
+def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, qo_len, kv_len,
                     K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn, 
                     start_m,
                     H: tl.constexpr,
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  
                     ):
+    kv_offset = kv_len - qo_len
+    causal_start_n = start_m * BLOCK_M + kv_offset
+    full_blocks_end = (causal_start_n // BLOCK_N) * BLOCK_N
+    full_blocks_end = tl.minimum(tl.maximum(full_blocks_end, 0), kv_len)
+    causal_end = tl.minimum(tl.maximum((start_m + 1) * BLOCK_M + kv_offset, 0), kv_len)
+
     if STAGE == 1:
-        lo, hi = 0, start_m * BLOCK_M
+        lo, hi = 0, full_blocks_end
     elif STAGE == 2:
-        lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
-        lo = tl.multiple_of(lo, BLOCK_M)
+        lo, hi = full_blocks_end, causal_end
+        lo = tl.multiple_of(lo, BLOCK_N)
         K_scale_ptr += (lo // BLOCK_N) * H
         K_ptrs += stride_kn * lo
         V_ptrs += stride_vn * lo
@@ -40,18 +46,21 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
         k = tl.load(K_ptrs, mask = k_mask)
         k_scale = tl.load(K_scale_ptr)
         qk = tl.dot(q, k).to(tl.float32) * (q_scale * k_scale)
+        qk = tl.minimum(tl.maximum(qk, -3.4028234663852886e38), 3.4028234663852886e38)
+        qk = tl.where(qk == qk, qk, 0.0)
 
         mask = k_mask
         if STAGE == 2:
-            mask &= offs_m[:, None] >= (start_n + offs_n[None, :])
+            mask &= (offs_m[:, None] + kv_offset) >= (start_n + offs_n[None, :])
         qk += tl.where(mask, 0, float('-inf'))
         m_ij = tl.maximum(m_i, tl.max(qk, 1))
-        qk -= m_ij[:, None]
+        m_ij_safe = tl.where(m_ij == -float("inf"), 0.0, m_ij)
+        qk -= m_ij_safe[:, None]
         
         p = tl.math.exp2(qk)
         l_ij = tl.sum(p, 1)
         
-        alpha = tl.math.exp2(m_i - m_ij)
+        alpha = tl.math.exp2(m_i - m_ij_safe)
         l_i = l_i * alpha + l_ij
         
         acc = acc * alpha[:, None]
@@ -121,18 +130,18 @@ def _attn_fwd(Q, K, V,
     
     q = tl.load(Q_ptrs, mask = offs_m[:, None] < qo_len)
     q_scale = tl.load(Q_scale_ptr)
-    acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
+    acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, qo_len, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
                                     start_m, H // num_kv_groups,
                                     BLOCK_M, HEAD_DIM, BLOCK_N,  
                                     4 - STAGE, offs_m, offs_n 
                                     )
 
-    acc, l_i, _ = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
+    acc, l_i, _ = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, qo_len, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
                                     start_m, H // num_kv_groups,
                                     BLOCK_M, HEAD_DIM, BLOCK_N,  
                                     2, offs_m, offs_n 
                                     )
-    acc = acc / l_i[:, None]
+    acc = tl.where(l_i[:, None] > 0.0, acc / l_i[:, None], 0.0)
     tl.store(O_block_ptr, acc.to(Out.type.element_ty), mask = (offs_m[:, None] < qo_len))
 
 def forward(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale, output_dtype=torch.float16):

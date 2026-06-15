@@ -51,6 +51,7 @@ def quant_per_block_int8_kernel(Input, Output, Scale,
     x = x.to(tl.float32)
     x *= sm_scale
     scale = tl.max(tl.abs(x)) / 127.
+    scale = tl.where((scale > 0.0) & (scale == scale), scale, 1.0)
     x_int8 = x / scale
     x_int8 += 0.5 * tl.where(x_int8 >= 0, 1, -1)
     x_int8 = x_int8.to(tl.int8)

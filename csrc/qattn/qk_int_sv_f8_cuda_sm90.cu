@@ -196,6 +196,7 @@ __global__ void qk_int8_sv_f8_attn_kernel(const __grid_constant__ CUtensorMap te
   constexpr uint32_t k_scale_advance_offset = (K_GRAN == QuantGranularity::kPerBlock || K_GRAN == QuantGranularity::kPerWarp) ? 1 : 4;
 
   uint32_t Q_idx_lane_base = bx * CTA_Q + warp_idx * 16 + lane_id / 4;
+  const int32_t causal_kv_offset = get_causal_kv_offset(qo_len, kv_len);
 
 #pragma unroll
   for (uint32_t fq = 0; fq < num_tiles_q; fq++)
@@ -251,7 +252,7 @@ __global__ void qk_int8_sv_f8_attn_kernel(const __grid_constant__ CUtensorMap te
 
   const uint32_t num_iterations = div_ceil(
       mask_mode == MaskMode::kCausal
-          ? min(kv_len, (bx + 1) * CTA_Q)
+          ? get_causal_kv_limit((bx + 1) * CTA_Q, qo_len, kv_len)
           : kv_len,
       CTA_K);
 
@@ -300,12 +301,38 @@ __global__ void qk_int8_sv_f8_attn_kernel(const __grid_constant__ CUtensorMap te
 #pragma unroll
         for (uint32_t k = 0; k < 8; k++)
         {
-          RS_f32[fq][fk][k] = __int2float_rz(RS[fq][fk][k]);
+          RS_f32[fq][fk][k] = __int2float_rz(RS[fq][fk][k]) * dequant_scale;
         }
       }
     }
 
-    update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, false, true, false>(RS_f32, RO, m, d, sm_scale);
+    if constexpr (mask_mode == MaskMode::kCausal)
+    {
+      const uint32_t fully_visible_kv_len = get_causal_kv_limit(bx * CTA_Q + 1, qo_len, kv_len);
+      if ((iter - 1) * CTA_K + CTA_K > fully_visible_kv_len)
+      {
+#pragma unroll
+        for (uint32_t fq = 0; fq < num_tiles_q; fq++)
+        {
+#pragma unroll
+          for (uint32_t fk = 0; fk < num_tiles_k; fk++)
+          {
+#pragma unroll
+            for (uint32_t k = 0; k < 8; k++)
+            {
+              const uint32_t q_idx = Q_idx_lane_base + fq * 64 + 8 * ((k % 4) / 2);
+              const uint32_t k_idx = (iter - 1) * CTA_K + fk * 16 + 2 * (lane_id % 4) + 8 * (k / 4) + k % 2;
+              if (static_cast<int32_t>(k_idx) > static_cast<int32_t>(q_idx) + causal_kv_offset)
+              {
+                RS_f32[fq][fk][k] = -5000000.0f;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, false, true, false>(RS_f32, RO, m, d, original_sm_scale);
 
     // accumulate d on thread basis
 #pragma unroll
@@ -421,7 +448,8 @@ __global__ void qk_int8_sv_f8_attn_kernel(const __grid_constant__ CUtensorMap te
 
           if constexpr (mask_mode == MaskMode::kCausal)
           {
-            is_out_of_bounds = (k_idx > q_idx) || (k_idx >= kv_len);
+            is_out_of_bounds = (static_cast<int32_t>(k_idx) > static_cast<int32_t>(q_idx) + causal_kv_offset) ||
+                               (k_idx >= kv_len);
           }
           else
           {
