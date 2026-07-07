@@ -92,6 +92,24 @@ export EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 # Optional
 python setup.py install
 ```
 
+### Intel GPU (XPU) Installation
+
+```bash
+# 1. Install PyTorch for XPU
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu
+
+# 2. Install auto-round-lib (ARK kernels)
+pip install auto-round-lib
+
+# 3. Install SageAttention (CUDA compilation skipped automatically on XPU)
+git clone https://github.com/thu-ml/SageAttention.git
+cd SageAttention
+python setup.py install
+```
+
+On XPU systems, `sageattn()` automatically uses the ARK kernel (sageV1) via `auto-round-lib`.
+Supported head dimensions: 64, 128. Supported dtypes: FP16, BF16.
+
 To benchmark the speed against FlashAttention3, please compile FlashAttention3 from source:
 ```
 git clone https://github.com/Dao-AILab/flash-attention.git --recursive
@@ -115,6 +133,8 @@ attn_output = sageattn(q, k, v, tensor_layout="HND", is_causal=False)
 + `sageattn_qk_int8_pv_fp8_cuda`: INT8 quantization for $QK^\top$ and FP8 for $PV$ using CUDA backend. (Note that setting `pv_accum_dtype=fp32+fp16` corresponds to SageAttention2++.)
 + `sageattn_qk_int8_pv_fp8_cuda_sm90`: INT8 quantization for $QK^\top$ and FP8 for $PV$ using CUDA backend, specifically optimized for Hopper GPUs.
 + `sageattn_varlen`: INT8 quantization for $QK^\top$ and FP16 for $PV$ using Triton backend. Support for varying sequence lengths within the same batch.
++ `sageattn` (XPU): Automatically dispatches to ARK sageV1 kernel via `auto-round-lib` when running on Intel GPU.
+  Supported head dimensions: 64, 128. Dtypes: FP16, BF16.
 
 For optimal speed and accuracy performance on custom devices and models, we strongly recommend referring to the [this file](./sageattention/core.py) for detailed guidance.
 

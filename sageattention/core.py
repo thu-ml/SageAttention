@@ -44,10 +44,13 @@ try:
 except:
     SM90_ENABLED = False
 
-from .quant import per_block_int8 as per_block_int8_cuda
-from .quant import per_warp_int8 as per_warp_int8_cuda
-from .quant import sub_mean
-from .quant import per_channel_fp8
+try:
+    from .quant import per_block_int8 as per_block_int8_cuda
+    from .quant import per_warp_int8 as per_warp_int8_cuda
+    from .quant import sub_mean
+    from .quant import per_channel_fp8
+except ImportError:
+    pass
 
 from typing import Any, List, Literal, Optional, Tuple, Union
 import warnings
@@ -140,6 +143,32 @@ def sageattn(
     - All tensors must be on the same cuda device.
     """
         
+    # XPU dispatch via auto-round-lib
+    if q.device.type == "xpu":
+        try:
+            import auto_round_kernel as _ark
+        except ImportError:
+            raise ImportError("XPU detected but auto_round_kernel is not installed. Run: pip install auto-round-lib")
+        if "attn_mask" in kwargs and kwargs["attn_mask"] is not None:
+            mask = kwargs["attn_mask"]
+            if mask.dtype == torch.bool:
+                kwargs["attn_mask"] = torch.where(mask, 0.0, float("-inf")).to(torch.float32)
+        head_dim_og = q.size(-1)
+        if head_dim_og < 64:
+            q = torch.nn.functional.pad(q, (0, 64 - head_dim_og))
+            k = torch.nn.functional.pad(k, (0, 64 - head_dim_og))
+            v = torch.nn.functional.pad(v, (0, 64 - head_dim_og))
+        elif head_dim_og > 64 and head_dim_og < 128:
+            q = torch.nn.functional.pad(q, (0, 128 - head_dim_og))
+            k = torch.nn.functional.pad(k, (0, 128 - head_dim_og))
+            v = torch.nn.functional.pad(v, (0, 128 - head_dim_og))
+        elif head_dim_og > 128:
+            raise ValueError(f"Unsupported head_dim: {head_dim_og}")
+        out = _ark.sageattn(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, kernel="v1_pvhalf", **kwargs)
+        if return_lse:
+            return out[0][..., :head_dim_og], out[1]
+        return out[..., :head_dim_og]
+
     arch = get_cuda_arch_versions()[q.device.index]
     if arch == "sm80":
         return sageattn_qk_int8_pv_fp16_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32")
@@ -395,7 +424,26 @@ def sageattn_varlen(
     - All tensors must be on the same cuda device.
     - `smooth_k` will introduce slight overhead but will improve the accuracy under most circumstances.
     """
-    
+
+    # XPU dispatch via auto-round-lib
+    if q.device.type == "xpu":
+        try:
+            import auto_round_kernel as _ark
+        except ImportError:
+            raise ImportError("XPU detected but auto_round_kernel is not installed. Run: pip install auto-round-lib")
+        head_dim_og = q.size(-1)
+        if head_dim_og < 64:
+            q = torch.nn.functional.pad(q, (0, 64 - head_dim_og))
+            k = torch.nn.functional.pad(k, (0, 64 - head_dim_og))
+            v = torch.nn.functional.pad(v, (0, 64 - head_dim_og))
+        elif head_dim_og > 64 and head_dim_og < 128:
+            q = torch.nn.functional.pad(q, (0, 128 - head_dim_og))
+            k = torch.nn.functional.pad(k, (0, 128 - head_dim_og))
+            v = torch.nn.functional.pad(v, (0, 128 - head_dim_og))
+        elif head_dim_og > 128:
+            raise ValueError(f"Unsupported head_dim: {head_dim_og}")
+        return _ark.sageattn_varlen(q, k, v, cu_seqlens_q=cu_seqlens_q, cu_seqlens_k=cu_seqlens_k, max_seqlen_q=max_seqlen_q, max_seqlen_k=max_seqlen_k, is_causal=is_causal, sm_scale=sm_scale, kernel="v1_pvhalf", smooth_k=smooth_k)[..., :head_dim_og]
+
     dtype = q.dtype
     assert q.is_cuda, "Input tensors must be on cuda."
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"

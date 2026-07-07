@@ -23,9 +23,21 @@ from packaging.version import parse, Version
 
 from setuptools import setup, find_packages
 
-# Skip CUDA build in CI or when explicitly requested
+# Skip CUDA build on XPU or when explicitly requested
+_SKIP_XPU = False
+try:
+    import torch
+
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        print("[SageAttention] XPU detected - skipping CUDA compilation.")
+        print("[SageAttention] Install auto-round-lib: pip install auto-round-lib")
+        _SKIP_XPU = True
+except (ImportError, AttributeError):
+    pass
+
 SKIP_CUDA_BUILD = (
-    os.getenv("SAGEATTN_SKIP_CUDA_BUILD", "0").upper() in {"1", "TRUE", "YES"}
+    _SKIP_XPU
+    or os.getenv("SAGEATTN_SKIP_CUDA_BUILD", "0").upper() in {"1", "TRUE", "YES"}
     or ("sdist" in sys.argv)
 )
 
