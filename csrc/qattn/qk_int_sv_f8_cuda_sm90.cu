@@ -586,6 +586,9 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(
   CHECK_CUDA(query_scale);
   CHECK_CUDA(key_scale);
 
+  const at::cuda::OptionalCUDAGuard device_guard(at::device_of(query));
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
   CHECK_LASTDIM_CONTIGUOUS(query);
   CHECK_LASTDIM_CONTIGUOUS(key);
   CHECK_LASTDIM_CONTIGUOUS(value);
@@ -717,7 +720,7 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(
                 cudaFuncAttributeMaxDynamicSharedMemorySize, sMemSize);
             
             dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
-            kernel<<<grid, NUM_THREADS, sMemSize>>>(
+            kernel<<<grid, NUM_THREADS, sMemSize, stream>>>(
               tma_map_Q,
               tma_map_K,
               tma_map_V,
@@ -758,6 +761,9 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
   CHECK_CUDA(query_scale);
   CHECK_CUDA(key_scale);
   CHECK_CUDA(value_scale);
+
+  const at::cuda::OptionalCUDAGuard device_guard(at::device_of(query));
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
   CHECK_LASTDIM_CONTIGUOUS(query);
   CHECK_LASTDIM_CONTIGUOUS(key);
@@ -895,7 +901,7 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
                 cudaFuncAttributeMaxDynamicSharedMemorySize, sMemSize);
             
             dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
-            kernel<<<grid, NUM_THREADS, sMemSize>>>(
+            kernel<<<grid, NUM_THREADS, sMemSize, stream>>>(
               tma_map_Q,
               tma_map_K,
               tma_map_V,

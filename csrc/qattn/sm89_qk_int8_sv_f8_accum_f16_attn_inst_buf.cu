@@ -20,6 +20,9 @@ torch::Tensor qk_int8_sv_f8_accum_f16_attn_inst_buf(torch::Tensor query,
   CHECK_CUDA(query_scale);
   CHECK_CUDA(key_scale);
 
+  const at::cuda::OptionalCUDAGuard device_guard(at::device_of(query));
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
   CHECK_LASTDIM_CONTIGUOUS(query);
   CHECK_LASTDIM_CONTIGUOUS(key);
   CHECK_CONTIGUOUS(value); // ensure value is contiguous to prevent troubles in the kernel
@@ -152,7 +155,7 @@ torch::Tensor qk_int8_sv_f8_accum_f16_attn_inst_buf(torch::Tensor query,
             dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
             dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
 
-            kernel_func<<<grid, block, smem_max>>>(
+            kernel_func<<<grid, block, smem_max, stream>>>(
               query.data_ptr<int8_t>(), 
               key.data_ptr<int8_t>(),
               reinterpret_cast<int8_t*>(value.data_ptr()),
