@@ -16,6 +16,8 @@
 
 #pragma once
 #include <torch/extension.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
 
 #define CHECK_CUDA(x) \
   TORCH_CHECK(x.is_cuda(), "Tensor " #x " must be on CUDA")
