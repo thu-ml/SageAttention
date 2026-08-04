@@ -162,5 +162,5 @@ def forward(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, HEAD_DIM=HEAD_DIM_K,  
         STAGE=stage, 
         num_warps=4 if head_dim == 64 else 8,
-        num_stages=4)
+        num_stages=(1 if torch.version.hip is not None else 4))
     return o

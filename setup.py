@@ -23,11 +23,22 @@ from packaging.version import parse, Version
 
 from setuptools import setup, find_packages
 
-# Skip CUDA build in CI or when explicitly requested
+# Skip CUDA build in CI, when explicitly requested, or on ROCm (HIP),
+# where the Triton kernels run without any CUDA extensions.
 SKIP_CUDA_BUILD = (
     os.getenv("SAGEATTN_SKIP_CUDA_BUILD", "0").upper() in {"1", "TRUE", "YES"}
     or ("sdist" in sys.argv)
 )
+
+if not SKIP_CUDA_BUILD:
+    try:
+        import torch as _torch_for_build_check
+        if _torch_for_build_check.version.hip is not None:
+            SKIP_CUDA_BUILD = True
+            print("ROCm (HIP) detected: skipping CUDA extension build. "
+                  "SageAttention will use the Triton kernels on AMD GPUs.")
+    except ImportError:
+        pass
 
 ext_modules = []
 cmdclass = {}

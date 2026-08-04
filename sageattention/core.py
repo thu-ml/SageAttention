@@ -44,10 +44,15 @@ try:
 except:
     SM90_ENABLED = False
 
-from .quant import per_block_int8 as per_block_int8_cuda
-from .quant import per_warp_int8 as per_warp_int8_cuda
-from .quant import sub_mean
-from .quant import per_channel_fp8
+try:
+    from .quant import per_block_int8 as per_block_int8_cuda
+    from .quant import per_warp_int8 as per_warp_int8_cuda
+    from .quant import sub_mean
+    from .quant import per_channel_fp8
+except ImportError:
+    # CUDA extensions (_fused) are not built on ROCm/HIP; the Triton kernels
+    # do not depend on them.
+    pass
 
 from typing import Any, List, Literal, Optional, Tuple, Union
 import warnings
@@ -140,6 +145,10 @@ def sageattn(
     - All tensors must be on the same cuda device.
     """
         
+    # ROCm (HIP): CUDA extensions are not available, route to the Triton kernels.
+    if torch.version.hip is not None:
+        return sageattn_qk_int8_pv_fp16_triton(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, **kwargs)
+
     arch = get_cuda_arch_versions()[q.device.index]
     if arch == "sm80":
         return sageattn_qk_int8_pv_fp16_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32")
