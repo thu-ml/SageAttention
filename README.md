@@ -92,6 +92,23 @@ export EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 # Optional
 python setup.py install
 ```
 
+### Install on ROCm (AMD GPUs)
+
+On ROCm (PyTorch built with HIP), no CUDA compilation is needed: `setup.py` detects
+HIP and skips the CUDA extensions, and `sageattn()` automatically routes to the
+Triton kernels.
+
+```
+git clone https://github.com/thu-ml/SageAttention.git
+cd SageAttention
+python setup.py install
+```
+
+On RDNA3/RDNA3.5 (gfx11xx, e.g. Radeon 7900 XT / Strix Halo gfx1151) the Triton
+path with `num_stages=1` outperforms FlashAttention-2 (ROCm Triton backend) at
+long sequence lengths, e.g. 1.16-1.33x on gfx1151 at seq 8k-32k (B=1, H=48, D=128,
+bf16, cosine similarity 0.9999 vs flash).
+
 To benchmark the speed against FlashAttention3, please compile FlashAttention3 from source:
 ```
 git clone https://github.com/Dao-AILab/flash-attention.git --recursive
