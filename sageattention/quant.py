@@ -17,7 +17,18 @@ limitations under the License.
 import torch
 from typing import Any, List, Literal, Optional, Tuple, Union
 
-from . import _fused
+class _MissingFusedExtension:
+    def __getattr__(self, name):
+        raise RuntimeError(
+            "sageattention._fused is not available. This helper requires the fused "
+            "quantization extension to be built."
+        )
+
+
+try:
+    from . import _fused
+except ImportError:
+    _fused = _MissingFusedExtension()
 
 def per_block_int8(
     q: torch.Tensor, 

@@ -17,19 +17,28 @@
  */
 
 #pragma once
+#if defined(__HIP_PLATFORM_AMD__)
+#include <hip/hip_bf16.h>
+#include <hip/hip_fp16.h>
+#include <hip/hip_fp8.h>
+#include <hip/hip_runtime.h>
+#else
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 #include <cuda_runtime.h>
 #include <cuda/pipeline>
+#endif
 
+#if !defined(__HIP_PLATFORM_AMD__)
 #if (__CUDACC_VER_MAJOR__ * 10000 + __CUDACC_VER_MINOR__ * 100 >= 120400)
 #if (!defined(__CUDA_ARCH__) || (__CUDA_ARCH__ >= 890))
 #define FP8_CAST_ENABLED
 #endif
 #endif
+#endif
 
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
 #define RUNTIME_ASSERT(x) __brkpt()
 #else
 #include <assert.h>
@@ -39,13 +48,28 @@
 __device__ __forceinline__ void unpack_half2_from_uint32_to_float(float* dest, uint32_t source) {
   uint16_t h0 = source & 0xFFFF;
   uint16_t h1 = (source >> 16) & 0xFFFF;
+#if defined(__HIP_PLATFORM_AMD__)
+  union {
+    uint16_t bits;
+    half value;
+  } lo{h0}, hi{h1};
+  dest[0] = __half2float(lo.value);
+  dest[1] = __half2float(hi.value);
+#else
   asm("cvt.f32.f16 %0, %1;" : "=f"(dest[0]) : "h"(h0));
   asm("cvt.f32.f16 %0, %1;" : "=f"(dest[1]) : "h"(h1));
+#endif
 }
 
 __device__ __forceinline__ void floatx4_to_e4m3x4(uint32_t *dest, float *source0, float *source1)
 {
-#ifdef FP8_CAST_ENABLED
+#if defined(__HIP_PLATFORM_AMD__)
+  const auto lo = __hip_cvt_float2_to_fp8x2(
+      make_float2(source0[0], source0[1]), __HIP_SATFINITE, __HIP_E4M3);
+  const auto hi = __hip_cvt_float2_to_fp8x2(
+      make_float2(source1[0], source1[1]), __HIP_SATFINITE, __HIP_E4M3);
+  dest[0] = static_cast<uint32_t>(lo) | (static_cast<uint32_t>(hi) << 16);
+#elif defined(FP8_CAST_ENABLED)
   asm volatile( \
       "{\n" \
       ".reg .b16 lo;\n" \
@@ -62,7 +86,13 @@ __device__ __forceinline__ void floatx4_to_e4m3x4(uint32_t *dest, float *source0
 
 __device__ __forceinline__ void floatx4_to_e5m2x4(uint32_t *dest, float *source0, float *source1)
 {
-#ifdef FP8_CAST_ENABLED
+#if defined(__HIP_PLATFORM_AMD__)
+  const auto lo = __hip_cvt_float2_to_fp8x2(
+      make_float2(source0[0], source0[1]), __HIP_SATFINITE, __HIP_E5M2);
+  const auto hi = __hip_cvt_float2_to_fp8x2(
+      make_float2(source1[0], source1[1]), __HIP_SATFINITE, __HIP_E5M2);
+  dest[0] = static_cast<uint32_t>(lo) | (static_cast<uint32_t>(hi) << 16);
+#elif defined(FP8_CAST_ENABLED)
   asm volatile( \
       "{\n" \
       ".reg .b16 lo;\n" \
@@ -79,7 +109,13 @@ __device__ __forceinline__ void floatx4_to_e5m2x4(uint32_t *dest, float *source0
 
 __device__ __forceinline__ void halfx4_to_e4m3x4(uint32_t *dest, uint32_t *source0, uint32_t *source1)
 {
-#ifdef FP8_CAST_ENABLED
+#if defined(__HIP_PLATFORM_AMD__)
+  float s0[2];
+  float s1[2];
+  unpack_half2_from_uint32_to_float(s0, source0[0]);
+  unpack_half2_from_uint32_to_float(s1, source1[0]);
+  floatx4_to_e4m3x4(dest, s0, s1);
+#elif defined(FP8_CAST_ENABLED)
   asm volatile( \
       "{\n" \
       ".reg .b16 lo;\n" \
@@ -96,7 +132,13 @@ __device__ __forceinline__ void halfx4_to_e4m3x4(uint32_t *dest, uint32_t *sourc
 
 __device__ __forceinline__ void halfx4_to_e5m2x4(uint32_t *dest, uint32_t *source0, uint32_t *source1)
 {
-#ifdef FP8_CAST_ENABLED
+#if defined(__HIP_PLATFORM_AMD__)
+  float s0[2];
+  float s1[2];
+  unpack_half2_from_uint32_to_float(s0, source0[0]);
+  unpack_half2_from_uint32_to_float(s1, source1[0]);
+  floatx4_to_e5m2x4(dest, s0, s1);
+#elif defined(FP8_CAST_ENABLED)
   asm volatile( \
       "{\n" \
       ".reg .b16 lo;\n" \
@@ -113,7 +155,16 @@ __device__ __forceinline__ void halfx4_to_e5m2x4(uint32_t *dest, uint32_t *sourc
 
 __device__ __forceinline__ void e4m3x4_to_halfx4(uint32_t *dest0, uint32_t *dest1, uint32_t *source)
 {
-#ifdef FP8_CAST_ENABLED
+#if defined(__HIP_PLATFORM_AMD__)
+  const auto lo = __hip_cvt_fp8x2_to_halfraw2(
+      static_cast<__hip_fp8x2_storage_t>(source[0] & 0xFFFF), __HIP_E4M3);
+  const auto hi = __hip_cvt_fp8x2_to_halfraw2(
+      static_cast<__hip_fp8x2_storage_t>(source[0] >> 16), __HIP_E4M3);
+  dest0[0] = static_cast<uint32_t>(lo.x.x) |
+             (static_cast<uint32_t>(lo.y.x) << 16);
+  dest1[0] = static_cast<uint32_t>(hi.x.x) |
+             (static_cast<uint32_t>(hi.y.x) << 16);
+#elif defined(FP8_CAST_ENABLED)
   asm volatile( \
       "{\n" \
       ".reg .b16 lo, hi;\n" \
@@ -128,7 +179,16 @@ __device__ __forceinline__ void e4m3x4_to_halfx4(uint32_t *dest0, uint32_t *dest
 
 __device__ __forceinline__ void e5m2x4_to_halfx4(uint32_t *dest0, uint32_t *dest1, uint32_t *source)
 {
-#ifdef FP8_CAST_ENABLED
+#if defined(__HIP_PLATFORM_AMD__)
+  const auto lo = __hip_cvt_fp8x2_to_halfraw2(
+      static_cast<__hip_fp8x2_storage_t>(source[0] & 0xFFFF), __HIP_E5M2);
+  const auto hi = __hip_cvt_fp8x2_to_halfraw2(
+      static_cast<__hip_fp8x2_storage_t>(source[0] >> 16), __HIP_E5M2);
+  dest0[0] = static_cast<uint32_t>(lo.x.x) |
+             (static_cast<uint32_t>(lo.y.x) << 16);
+  dest1[0] = static_cast<uint32_t>(hi.x.x) |
+             (static_cast<uint32_t>(hi.y.x) << 16);
+#elif defined(FP8_CAST_ENABLED)
   asm volatile( \
       "{\n" \
       ".reg .b16 lo, hi;\n" \
@@ -143,7 +203,12 @@ __device__ __forceinline__ void e5m2x4_to_halfx4(uint32_t *dest0, uint32_t *dest
 
 __device__ __forceinline__ int8_t float_to_int8_rn(float x)
 {
+#if defined(__HIP_PLATFORM_AMD__)
+    const float clipped = fminf(127.0f, fmaxf(-128.0f, nearbyintf(x)));
+    return static_cast<int8_t>(clipped);
+#else
     uint32_t dst;
     asm volatile("cvt.rni.sat.s8.f32 %0, %1;" : "=r"(dst) : "f"(x));
     return reinterpret_cast<const int8_t&>(dst);
+#endif
 }

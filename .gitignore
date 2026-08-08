@@ -6,6 +6,14 @@
 /test
 __pycache__
 *.so
+*.pyd
+csrc/cp_async_hip.cuh
+csrc/fused/fused.hip
+csrc/fused/pybind_hip.cpp
+csrc/numeric_conversion_hip.cuh
+csrc/qattn/qk_int_sv_gfx12_native.hip
+csrc/qattn/qk_int_sv_gfx12_native_*.hip
+csrc/reduction_utils_hip.cuh
 evaluate/
 *.pkl
 *.vscode/

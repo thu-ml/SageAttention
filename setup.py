@@ -32,6 +32,207 @@ SKIP_CUDA_BUILD = (
 ext_modules = []
 cmdclass = {}
 
+
+def rocm_sdk_path(which):
+    try:
+        return subprocess.check_output(["rocm-sdk", "path", f"--{which}"], text=True).strip()
+    except Exception:
+        return None
+
+
+def rocm_arches(torch):
+    arch_env = os.getenv("GPU_ARCHS") or os.getenv("PYTORCH_ROCM_ARCH")
+    if arch_env:
+        return [a.strip().split(":", 1)[0]
+                for a in arch_env.replace(";", ",").split(",") if a.strip()]
+
+    archs = []
+    if torch.cuda.is_available():
+        for device_idx in range(torch.cuda.device_count()):
+            props = torch.cuda.get_device_properties(device_idx)
+            arch = getattr(props, "gcnArchName", "")
+            if arch:
+                archs.append(arch.split(":", 1)[0])
+    return archs
+
+
+def unique_paths(paths):
+    out = []
+    seen = set()
+    for path in paths:
+        if path and path not in seen:
+            out.append(path)
+            seen.add(path)
+    return out
+
+
+def configure_rocm(default_rocm_home):
+    sdk_root = rocm_sdk_path("root")
+    sdk_bin = rocm_sdk_path("bin")
+    rocm_home = sdk_root or default_rocm_home or os.getenv("ROCM_HOME")
+    if not rocm_home:
+        raise RuntimeError("Cannot find ROCm. Activate the ROCm Python environment.")
+
+    os.environ["ROCM_HOME"] = rocm_home
+    if os.name == "nt":
+        os.environ.setdefault("CC", "clang-cl")
+        os.environ.setdefault("CXX", "clang-cl")
+        os.environ.setdefault("DISTUTILS_USE_SDK", "1")
+
+    path_parts = [
+        os.path.join(rocm_home, "lib", "llvm", "bin"),
+        os.path.join(rocm_home, "bin"),
+        sdk_bin,
+    ]
+    os.environ["PATH"] = os.pathsep.join(unique_paths(path_parts) + [os.environ.get("PATH", "")])
+    return rocm_home
+
+
+if not SKIP_CUDA_BUILD:
+    import torch
+
+    if torch.version.hip is not None:
+        import torch.utils.cpp_extension as cpp_extension
+        from torch.utils.cpp_extension import BuildExtension, CUDAExtension, ROCM_HOME
+
+        ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
+        rocm_home = configure_rocm(ROCM_HOME)
+        cpp_extension.ROCM_HOME = rocm_home
+        amd_arches = rocm_arches(torch) or ["gfx1201"]
+        os.environ.setdefault("PYTORCH_ROCM_ARCH", ";".join(amd_arches))
+        print(f"Target AMD GPU architectures: {amd_arches}")
+
+        # torch appends the standard its own headers need, but only when the extension
+        # sets none, so hardcoding one pins it. SAGEATTN_CXX_STD forces a value.
+        cxx_std = os.getenv("SAGEATTN_CXX_STD", "").strip()
+        msvc_std = [f"/std:{cxx_std}"] if cxx_std else []
+        clang_std = [f"-std={cxx_std}"] if cxx_std else []
+
+        if os.name == "nt":
+            CXX_FLAGS = ["/O2", *msvc_std, f"/D_GLIBCXX_USE_CXX11_ABI={ABI}", "/DENABLE_BF16"]
+        else:
+            CXX_FLAGS = ["-O3", *clang_std, f"-D_GLIBCXX_USE_CXX11_ABI={ABI}", "-DENABLE_BF16"]
+
+        HIP_FLAGS = [
+            "-O3",
+            *clang_std,
+            "-ffast-math",
+            "-fgpu-flush-denormals-to-zero",
+            "-fno-offload-uniform-block",
+            "-D__HIP_PLATFORM_AMD__=1",
+            "-U__HIP_NO_HALF_OPERATORS__",
+            "-U__HIP_NO_HALF_CONVERSIONS__",
+            f"-D_GLIBCXX_USE_CXX11_ABI={ABI}",
+            "-mllvm",
+            "--lsr-drop-solution=1",
+            "-mllvm",
+            "-enable-post-misched=1",
+            "-mllvm",
+            "-amdgpu-early-inline-all=true",
+            "-mllvm",
+            "-amdgpu-function-calls=false",
+        ]
+        for arch in amd_arches:
+            HIP_FLAGS.append(f"--offload-arch={arch}")
+        HIP_FLAGS.append(f"--rocm-path={rocm_home}")
+        rocm_device_lib_path = os.path.join(rocm_home, "lib", "llvm", "amdgcn", "bitcode")
+        if os.path.isdir(rocm_device_lib_path):
+            HIP_FLAGS.append(f"--rocm-device-lib-path={rocm_device_lib_path}")
+
+        # Append flags from env if provided
+        cxx_append = os.getenv("CXX_APPEND_FLAGS", "").strip()
+        if cxx_append:
+            CXX_FLAGS += cxx_append.split()
+        nvcc_append = os.getenv("NVCC_APPEND_FLAGS", "").strip()
+        if nvcc_append:
+            HIP_FLAGS += nvcc_append.split()
+        hipcc_append = os.getenv("HIPCC_APPEND_FLAGS", "").strip()
+        if hipcc_append:
+            HIP_FLAGS += hipcc_append.split()
+
+        include_dirs = unique_paths([
+            os.path.join(rocm_home, "include"),
+        ])
+
+        if any(arch.startswith("gfx12") for arch in amd_arches):
+            ext_modules.append(
+                CUDAExtension(
+                    name="sageattention._qattn_gfx12_native",
+                    sources=[
+                        "csrc/qattn/pybind_gfx12_native.cpp",
+                        "csrc/qattn/qk_int_sv_gfx12_native_aux.cu",
+                        "csrc/qattn/qk_int_sv_gfx12_native_prepare.cu",
+                        "csrc/qattn/qk_int_sv_gfx12_native_attn_f16.cu",
+                        "csrc/qattn/qk_int_sv_gfx12_native_attn_fp8.cu",
+                        "csrc/qattn/qk_int_sv_gfx12_native_rawq_fp8.cu",
+                    ],
+                    include_dirs=include_dirs,
+                    extra_compile_args={"cxx": CXX_FLAGS, "nvcc": HIP_FLAGS},
+                )
+            )
+        else:
+            warnings.warn(
+                "ROCm build detected, but no gfx12 architecture was selected; "
+                "skipping the gfx12 native attention extension."
+            )
+
+        ext_modules.append(
+            CUDAExtension(
+                name="sageattention._fused",
+                sources=["csrc/fused/pybind.cpp", "csrc/fused/fused.cu"],
+                include_dirs=include_dirs,
+                extra_compile_args={"cxx": CXX_FLAGS, "nvcc": HIP_FLAGS},
+            )
+        )
+
+        # Resolve parallelism from env
+        parallel = None
+        if 'EXT_PARALLEL' in os.environ:
+            try:
+                parallel = int(os.getenv('EXT_PARALLEL'))
+            finally:
+                pass
+        if parallel is None and 'MAX_JOBS' in os.environ:
+            try:
+                parallel = int(os.getenv('MAX_JOBS'))
+            finally:
+                pass
+        # Defaults if not provided
+        if parallel is None:
+            parallel = 4
+        # Ensure MAX_JOBS for underlying tooling if not explicitly set
+        os.environ.setdefault('MAX_JOBS', '32')
+
+        class BuildExtensionSeparateDir(BuildExtension):
+            build_extension_patch_lock = threading.Lock()
+            thread_ext_name_map = {}
+
+            def finalize_options(self):
+                if parallel is not None:
+                    self.parallel = parallel
+                super().finalize_options()
+
+            def build_extension(self, ext):
+                with self.build_extension_patch_lock:
+                    if not getattr(self.compiler, "_compile_separate_output_dir", False):
+                        compile_orig = self.compiler.compile
+
+                        def compile_new(*args, **kwargs):
+                            return compile_orig(*args, **{
+                                **kwargs,
+                                "output_dir": os.path.join(
+                                    kwargs["output_dir"],
+                                    self.thread_ext_name_map[threading.current_thread().ident]),
+                            })
+                        self.compiler.compile = compile_new
+                        self.compiler._compile_separate_output_dir = True
+                self.thread_ext_name_map[threading.current_thread().ident] = ext.name
+                objects = super().build_extension(ext)
+                return objects
+
+        cmdclass = {"build_ext": BuildExtensionSeparateDir} if ext_modules else {}
+        SKIP_CUDA_BUILD = True
+
 if not SKIP_CUDA_BUILD:
     import torch
     from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME

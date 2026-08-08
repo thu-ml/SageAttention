@@ -33,7 +33,7 @@ enum class PrefetchMode {
   kPrefetch     // Fetch additional data from global memory to L2
 };
 
-#if (__CUDACC_VER_MAJOR__ >= 11)
+#if !defined(__HIP_PLATFORM_AMD__) && (__CUDACC_VER_MAJOR__ >= 11)
 #if (!defined(__CUDA_ARCH__) || (__CUDA_ARCH__ >= 800))
 #define CP_ASYNC_ENABLED
 #endif
