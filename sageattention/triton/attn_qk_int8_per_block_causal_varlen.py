@@ -81,12 +81,12 @@ def _attn_fwd(Q, K, V,
               BLOCK_N: tl.constexpr,  
               STAGE: tl.constexpr
               ):
-    start_m = tl.program_id(0)
+    start_m = tl.program_id(0).to(tl.int64)
 
     off_z = tl.program_id(2).to(tl.int64)
     off_h = tl.program_id(1).to(tl.int64)
 
-    cu_seqlens_q_start = tl.load(cu_seqlens_q + off_z)
+    cu_seqlens_q_start = tl.load(cu_seqlens_q + off_z).to(tl.int64)
     cu_seqlens_q_end = tl.load(cu_seqlens_q + off_z + 1)
 
     qo_len = cu_seqlens_q_end - cu_seqlens_q_start
@@ -100,7 +100,7 @@ def _attn_fwd(Q, K, V,
     q_scale_offset = cu_seq_lens_q_scale_start * H + off_h + start_m * H
     k_scale_offset = cu_seq_lens_k_scale_start * (H // num_kv_groups) + off_h // num_kv_groups
 
-    cu_seqlens_k_start = tl.load(cu_seqlens_k + off_z)
+    cu_seqlens_k_start = tl.load(cu_seqlens_k + off_z).to(tl.int64)
     cu_seqlens_k_end = tl.load(cu_seqlens_k + off_z + 1)
 
     kv_len = cu_seqlens_k_end - cu_seqlens_k_start

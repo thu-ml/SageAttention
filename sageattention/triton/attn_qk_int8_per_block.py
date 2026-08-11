@@ -86,7 +86,7 @@ def _attn_fwd(Q, K, V, Q_scale, K_scale, Out, mask, Lse,
               STAGE: tl.constexpr,
               RETURN_LSE: tl.constexpr,
               ):
-    start_m = tl.program_id(0)
+    start_m = tl.program_id(0).to(tl.int64)
 
     off_z = tl.program_id(2).to(tl.int64)
     off_h = tl.program_id(1).to(tl.int64)
