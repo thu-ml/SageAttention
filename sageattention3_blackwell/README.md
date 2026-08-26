@@ -43,6 +43,35 @@ attn_output = sageattn3_blackwell(q, k, v, is_causal=False)
 + `q, k, v` are **FP16/BF16** dtype with the shape `(batch_size, head_num, seq_len, head_dim)` 
 + `is_causal` determines the use of a causal mask.
 
+### Long non-causal sequences
+
+With `per_block_mean=True`, SA3 creates a FP32 correction tensor named
+`delta_s`. Its Blackwell TMA layout uses int32 dynamic strides. If the full
+correction would overflow that stride, SA3 automatically evaluates aligned Q
+chunks while reusing the quantized K and V tensors. This avoids the descriptor
+failure reported in [issue #382](https://github.com/thu-ml/SageAttention/issues/382)
+without changing the normal path for smaller inputs.
+
+You can also request chunking explicitly to bound `delta_s` memory:
+
+```python
+attn_output = sageattn3_blackwell(
+    q,
+    k,
+    v,
+    is_causal=False,
+    per_block_mean=True,
+    q_chunk_size=1024,
+)
+```
+
+`q_chunk_size` must be a positive multiple of 128. Chunking is limited to
+non-causal, unmasked, per-block-mean attention because the current kernel API
+does not expose an absolute query-position offset for causal chunks.
+
+For `(B=1, H=56, N=73,774, D=128)`, a 1,024-token chunk reduces the analytical
+FP32 `delta_s` allocation from about 8.89 GiB to 126.22 MiB.
+
 ## Performance
 ### Speed of Kernels
 ![Speed on RTX5090](../assets/sage3_speed.png)
