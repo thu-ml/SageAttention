@@ -48,7 +48,12 @@ if not SKIP_CUDA_BUILD:
     SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "10.0", "12.0", "12.1"}
 
     # Compiler flags.
-    CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
+    if sys.platform == "win32":
+        # MSVC rejects the GCC spellings. torch 2.13's headers need C++20, and CUDA 13's
+        # CCCL headers refuse to build under MSVC's traditional preprocessor.
+        CXX_FLAGS = ["/O2", "/std:c++20", "/Zc:preprocessor", "/bigobj", "/DENABLE_BF16"]
+    else:
+        CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
     NVCC_FLAGS = [
         "-O3",
         "-std=c++17",
@@ -59,6 +64,9 @@ if not SKIP_CUDA_BUILD:
         "-Xptxas=-v",
         "-diag-suppress=174",
     ]
+    if sys.platform == "win32":
+        NVCC_FLAGS.remove("-std=c++17")
+        NVCC_FLAGS += ["-std=c++20", "-Xcompiler", "/Zc:preprocessor", "-Xcompiler", "/bigobj"]
 
     # Append flags from env if provided
     cxx_append = os.getenv("CXX_APPEND_FLAGS", "").strip()
@@ -68,9 +76,12 @@ if not SKIP_CUDA_BUILD:
     if nvcc_append:
         NVCC_FLAGS += nvcc_append.split()
 
-    ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
-    CXX_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
-    NVCC_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
+    if sys.platform != "win32":
+        # libstdc++-only knob. Defining it under MSVC makes CUDA 13's CCCL headers take the
+        # libstdc++ path and emit _GLIBCXX_BEGIN_NAMESPACE_CXX11, which does not exist there.
+        ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
+        CXX_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
+        NVCC_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
 
     if CUDA_HOME is None:
         raise RuntimeError(
@@ -271,7 +282,7 @@ if not SKIP_CUDA_BUILD:
 
 setup(
     name='sageattention',
-    version='2.2.0',
+    version=os.getenv("SAGEATTENTION_WHEEL_VERSION", "2.2.0"),
     author='SageAttention team',
     license='Apache 2.0 License',
     description='Accurate and efficient plug-and-play low-bit attention.',
