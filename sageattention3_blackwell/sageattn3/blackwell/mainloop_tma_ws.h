@@ -28,6 +28,50 @@
 
 #include "utils.h"
 #include "named_barrier.h"
+// Valid timing ablations. All modes keep QK/PV MMA, TMA, and output stores;
+// every PV MMA consumes fully defined P and SFP fragments.
+//   0 = normal correct path, using packed-u32 MXFP8 P pack with hoisted SFP scale
+//   1 = fixed P/SFP, no online softmax
+//   2 = real online softmax, fixed P/SFP pack
+//   3 = real softmax/pack, identity O-rescale traversal
+//   4 = MXFP8 smem/TMA O-store instead of direct register O-store
+//   5 = skip final softmax normalization
+//   6 = fixed MXFP8 P values only
+//   7 = real MXFP8 softmax without cross-lane row max reduction
+//   8 = row max/reduction only, no exp2, synthetic P=1
+//   9 = real MXFP8 softmax with software exp2 approximation
+//  10 = real per-score exp2, synthetic scores_scale=1
+//  11 = real scores_scale exp2, synthetic per-score P=1
+//  12 = real MXFP8 softmax through a smaller non-quant helper
+//  13 = real MXFP8 softmax fused with P/SFP fragment packing
+//  14 = mode 13 with P/SFP scale fragment initialized once outside softmax
+//  15 = mode 13 with fixed MXFP8 P pack index mapping
+//  16 = mode 15 with P packed through e4m3x2 conversions into uint32 words
+//  17 = old normal path before packed-u32 P pack
+//  18 = mode 16 with P/SFP scale fragment initialized once outside softmax
+//  19 = mode 16 with explicit fmaf for softmax exp arguments
+#ifndef SAGE_ABLATE
+#define SAGE_ABLATE 0
+#endif
+#define SAGE_SKIP_SOFTMAX (SAGE_ABLATE == 1)
+#define SAGE_FIXED_P (SAGE_ABLATE == 1 || SAGE_ABLATE == 2)
+#define SAGE_IDENTITY_RESCALE (SAGE_ABLATE == 3)
+#define SAGE_SKIP_FINALIZE (SAGE_ABLATE == 5)
+#define SAGE_FIXED_MXFP8_P (SAGE_ABLATE == 6)
+#define SAGE_NO_XLANE_SOFTMAX (SAGE_ABLATE == 7)
+#define SAGE_NO_EXP2_SOFTMAX (SAGE_ABLATE == 8)
+#define SAGE_SOFTWARE_EXP2_SOFTMAX (SAGE_ABLATE == 9)
+#define SAGE_SCORE_EXP2_ONLY (SAGE_ABLATE == 10)
+#define SAGE_SCALE_EXP2_ONLY (SAGE_ABLATE == 11)
+#define SAGE_MXFP8_SIMPLE_SOFTMAX (SAGE_ABLATE == 12)
+#define SAGE_MXFP8_FUSED_SOFTMAX_PACK (SAGE_ABLATE == 13)
+#define SAGE_MXFP8_FUSED_PACK_HOIST_SFP (SAGE_ABLATE == 14)
+#define SAGE_MXFP8_FUSED_PACK_STATIC_MAP (SAGE_ABLATE == 15)
+#define SAGE_MXFP8_FUSED_PACK_U32 (SAGE_ABLATE == 16)
+#define SAGE_MXFP8_OLD_NORMAL (SAGE_ABLATE == 17)
+#define SAGE_MXFP8_FUSED_PACK_U32_HOIST_SFP (SAGE_ABLATE == 0 || SAGE_ABLATE == 18)
+#define SAGE_MXFP8_FUSED_PACK_U32_FMA (SAGE_ABLATE == 19)
+#define SAGE_MXFP8_FUSED_PACK_ANY (SAGE_MXFP8_FUSED_SOFTMAX_PACK || SAGE_MXFP8_FUSED_PACK_HOIST_SFP || SAGE_MXFP8_FUSED_PACK_STATIC_MAP || SAGE_MXFP8_FUSED_PACK_U32 || SAGE_MXFP8_FUSED_PACK_U32_HOIST_SFP || SAGE_MXFP8_FUSED_PACK_U32_FMA)
 namespace flash {
 
 using namespace cute;
@@ -145,7 +189,7 @@ struct CollectiveMainloopFwd {
     
     static constexpr uint32_t TmaTransactionBytesK = static_cast<uint32_t>(
         cutlass::bits_to_bytes(cosize(take<0,2>(SmemLayoutSFK{})) * cute::sizeof_bits_v<ElementSF>) +
-        cutlass::bits_to_bytes(cosize(take<0,2>(SmemLayoutDS{})) * cute::sizeof_bits_v<float>) +
+        (Ktraits::IsMXFP8 ? 0 : cutlass::bits_to_bytes(cosize(take<0,2>(SmemLayoutDS{})) * cute::sizeof_bits_v<float>)) +
         cutlass::bits_to_bytes(size(take<0,2>(SmemLayoutK{})) * sizeof_bits<Element>::value));
     
     static constexpr uint32_t TmaTransactionBytesV = static_cast<uint32_t>(
@@ -518,8 +562,10 @@ struct CollectiveMainloopFwd {
             tKgK(_, n_block), tKsK(_, smem_pipe_write_k.index()));
         copy(mainloop_params.tma_load_SFK.with(*pipeline_k.producer_get_barrier(smem_pipe_write_k), mcast_mask_kv),
             tKgSFK(_, n_block), tKsSFK(_, smem_pipe_write_k.index()));
-        copy(mainloop_params.tma_load_DS.with(*pipeline_k.producer_get_barrier(smem_pipe_write_k), mcast_mask_kv),
-            tDSgDS(_, n_block), tDSsDS(_, smem_pipe_write_k.index()));
+        if constexpr (!Ktraits::IsMXFP8) {
+            copy(mainloop_params.tma_load_DS.with(*pipeline_k.producer_get_barrier(smem_pipe_write_k), mcast_mask_kv),
+                tDSgDS(_, n_block), tDSsDS(_, smem_pipe_write_k.index()));
+        }
         ++smem_pipe_write_k;
         pipeline_v.producer_acquire(smem_pipe_write_v);
         copy(mainloop_params.tma_load_Vt.with(*pipeline_v.producer_get_barrier(smem_pipe_write_v), mcast_mask_kv),
@@ -539,8 +585,10 @@ struct CollectiveMainloopFwd {
                     tKgK(_, n_block), tKsK(_, smem_pipe_write_k.index()));
                 copy(mainloop_params.tma_load_SFK.with(*pipeline_k.producer_get_barrier(smem_pipe_write_k), mcast_mask_kv),
                     tKgSFK(_, n_block), tKsSFK(_, smem_pipe_write_k.index()));
-                copy(mainloop_params.tma_load_DS.with(*pipeline_k.producer_get_barrier(smem_pipe_write_k), mcast_mask_kv),
-                    tDSgDS(_, n_block), tDSsDS(_, smem_pipe_write_k.index()));
+                if constexpr (!Ktraits::IsMXFP8) {
+                    copy(mainloop_params.tma_load_DS.with(*pipeline_k.producer_get_barrier(smem_pipe_write_k), mcast_mask_kv),
+                        tDSgDS(_, n_block), tDSsDS(_, smem_pipe_write_k.index()));
+                }
                 ++smem_pipe_write_k;
                 pipeline_v.producer_acquire(smem_pipe_write_v);
                 copy(mainloop_params.tma_load_Vt.with(*pipeline_v.producer_get_barrier(smem_pipe_write_v), mcast_mask_kv),
@@ -617,6 +665,13 @@ struct CollectiveMainloopFwd {
         Tensor tOrSFVt = partition_fragment_SFB(sSFVt(_,_,Int<0>{}), thread_mma_pv);
         Tensor tOrSFP = make_tensor<ElementSF>(LayoutSFP{});
         Tensor tOrSFP_flt = filter_zeros(tOrSFP);
+        if constexpr ((SAGE_MXFP8_FUSED_PACK_HOIST_SFP || SAGE_MXFP8_FUSED_PACK_U32_HOIST_SFP) && Ktraits::IsMXFP8) {
+            constexpr float kPScale = 1.f / 256.f;
+            CUTLASS_PRAGMA_UNROLL
+            for (int i = 0; i < size(tOrSFP); ++i) {
+                tOrSFP(i) = cutlass::float_ue8m0_t(kPScale);
+            }
+        }
         Tensor tSrDS = make_tensor<float>(make_shape(_8{}, _4{}), make_stride(_1{}, _8{}));
         // copy qk and sf from smem to rmem
         auto smem_tiled_copy_Q = make_tiled_copy_A(SmemCopyAtomQ{}, tiled_mma_qk);
@@ -689,17 +744,19 @@ struct CollectiveMainloopFwd {
         //     cute::gemm(tiled_mma_pv, make_zip_tensor(tOrP(_, _, block_id), tOrSFP(_, _, block_id)), make_zip_tensor(tOrVt(_, _, block_id), tOrSFVt(_, _, block_id)), tOrO);
         // };
         auto add_delta_s = [&](auto& acc) {
-            auto tSsDS_stage = recast<float4>(sDS(_, _, smem_pipe_read_k.index()));
-            auto acc_float4 = recast<float4>(acc);
-            int quad_id = (threadIdx.x % 4) * 2;
-            for (int i = 0; i < 4; i++) {
-                auto num = quad_id + i * 8;
-                float4 delta_s_0 = tSsDS_stage(make_coord(_0{}, _0{}), make_coord(num, _0{}));
-                float4 delta_s_1 = tSsDS_stage(make_coord(_0{}, _0{}), make_coord(num + 1, _0{}));
-                acc_float4(make_coord(make_coord(_0{}, _0{}), _0{}), _0{}, i) = delta_s_0;
-                acc_float4(make_coord(make_coord(_0{}, _0{}), _1{}), _0{}, i) = delta_s_0;
-                acc_float4(make_coord(make_coord(_0{}, _1{}), _0{}), _0{}, i) = delta_s_1;
-                acc_float4(make_coord(make_coord(_0{}, _1{}), _1{}), _0{}, i) = delta_s_1;
+            if constexpr (!Ktraits::IsMXFP8) {
+                auto tSsDS_stage = recast<float4>(sDS(_, _, smem_pipe_read_k.index()));
+                auto acc_float4 = recast<float4>(acc);
+                int quad_id = (threadIdx.x % 4) * 2;
+                for (int i = 0; i < 4; i++) {
+                    auto num = quad_id + i * 8;
+                    float4 delta_s_0 = tSsDS_stage(make_coord(_0{}, _0{}), make_coord(num, _0{}));
+                    float4 delta_s_1 = tSsDS_stage(make_coord(_0{}, _0{}), make_coord(num + 1, _0{}));
+                    acc_float4(make_coord(make_coord(_0{}, _0{}), _0{}), _0{}, i) = delta_s_0;
+                    acc_float4(make_coord(make_coord(_0{}, _0{}), _1{}), _0{}, i) = delta_s_0;
+                    acc_float4(make_coord(make_coord(_0{}, _1{}), _0{}), _0{}, i) = delta_s_1;
+                    acc_float4(make_coord(make_coord(_0{}, _1{}), _1{}), _0{}, i) = delta_s_1;
+                }
             }
         };
         consumer_wait(pipeline_q, smem_pipe_read_q);
@@ -709,10 +766,22 @@ struct CollectiveMainloopFwd {
         ++smem_pipe_read_q;
 
         Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
-        Tensor tSrS_converion_view = make_tensor(tSrS.data(), flash::convert_to_conversion_layout(tSrS.layout()));
-        Tensor AbsMaxP = make_tensor_like<float>(
-            make_layout(shape(group<1, 4>(flatten(tSrS_converion_view.layout()(make_coord(_0{}, _), _, _)))))
-        );
+        auto tSrS_converion_view = [&] {
+            if constexpr (Ktraits::IsMXFP8) {
+                return make_tensor(tSrS.data(), tSrS.layout());
+            } else {
+                return make_tensor(tSrS.data(), flash::convert_to_conversion_layout(tSrS.layout()));
+            }
+        }();
+        auto AbsMaxP = [&] {
+            if constexpr (Ktraits::IsMXFP8) {
+                return make_tensor_like<float>(Layout<Shape<_1>>{});
+            } else {
+                return make_tensor_like<float>(
+                    make_layout(shape(group<1, 4>(flatten(tSrS_converion_view.layout()(make_coord(_0{}, _), _, _)))))
+                );
+            }
+        }();
         consumer_wait(pipeline_k, smem_pipe_read_k);
         copy_k_block(_0{});
         add_delta_s(tSrS);
@@ -732,44 +801,85 @@ struct CollectiveMainloopFwd {
         auto col_limit_causal = [&](int row, int n_block) {
             return row + 1 + seqlen_k - n_block * kBlockN - seqlen_q + m_block * kBlockM;
         };
+        auto mxfp8_phi = [](int o) {
+            int g = o / 32;
+            int r = o % 32;
+            int a = r / 8, q = (r % 8) / 2, b = r % 2;
+            return g * 32 + 16 * (a / 2) + 4 * q + 2 * (a % 2) + b;
+        };
+        auto mxfp8_inv_phi = [](int o) {
+            int g = o / 32;
+            int r = o % 32;
+            int h = r / 16;
+            int q = (r % 16) / 4;
+            int c = (r % 4) / 2;
+            int b = r % 2;
+            return g * 32 + 16 * h + 8 * c + 2 * q + b;
+        };
         {
             Tensor cS = cute::make_identity_tensor(select<0, 1>(TileShape_MNK{}));
             Tensor tScS = thread_mma_qk.partition_C(cS);
             CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < size(tSrS); ++i) {
+                int col = int(get<1>(tScS(i)));
+                if constexpr (Ktraits::IsMXFP8) { col = mxfp8_phi(col); }
                 if constexpr (!Is_causal) {  // Just masking based on col
-                    if (int(get<1>(tScS(i))) >= int(unpadded_seqlen_k - n_block * kBlockN)) { tSrS(i) = -INFINITY; }
-                } else { 
-                    if (int(get<1>(tScS(i))) >= std::min(seqlen_k - n_block * kBlockN,
-                                                        col_limit_causal(int(get<0>(tScS(i))), n_block))) {
+                    if (col >= int(unpadded_seqlen_k - n_block * kBlockN)) { tSrS(i) = -INFINITY; }
+                } else {
+                    if (col >= std::min(seqlen_k - n_block * kBlockN,
+                                        col_limit_causal(int(get<0>(tScS(i))), n_block))) {
                         tSrS(i) = -INFINITY;
                     }
                 }
             }
         }
         auto quantize = [&](auto mma_k, auto acc_conversion_view) {
-            Tensor AbsMaxP_stagek = AbsMaxP(_, make_coord(_, _, mma_k));
-            Tensor acc_conversion_stagek = acc_conversion_view(_, _, mma_k);
-            Tensor SFP = make_tensor_like<cutlass::float_ue4m3_t>(AbsMaxP_stagek.layout());
-            Tensor SFP_uint32_view = recast<uint32_t>(SFP);
-            CUTLASS_PRAGMA_UNROLL
-            for (int i = 0; i < size(AbsMaxP_stagek); i += 4) {
-                uint32_t& tmp = SFP_uint32_view(i / 4);
-                flash::packed_float_to_ue4m3(
-                    AbsMaxP_stagek(i), 
-                    AbsMaxP_stagek(i + 1), 
-                    AbsMaxP_stagek(i + 2), 
-                    AbsMaxP_stagek(i + 3), 
-                    tmp
-                );
-            }
-            int const quad_id = threadIdx.x & 3;
-            uint32_t MASK = (0xFF00FF) << ((quad_id & 1) * 8);
-            Tensor tOrSFP_uint32_view = recast<uint32_t>(tOrSFP(_, _, mma_k));
-            Tensor tOrP_uint32_view = recast<uint32_t>(tOrP(_, _, mma_k));
-        
-            CUTLASS_PRAGMA_UNROLL
-            for (int mma_m = 0; mma_m < size<1>(tOrP); ++mma_m) {
+            if constexpr (Ktraits::IsMXFP8) {
+                Tensor tOrP_stage = tOrP(_, _, mma_k);
+                Tensor tOrSFP_stage = tOrSFP(_, _, mma_k);
+
+                constexpr float kPInvScale = 256.f;
+                constexpr float kPScale = 1.f / kPInvScale;
+                CUTLASS_PRAGMA_UNROLL
+                for (int i = 0; i < size(tOrSFP_stage); ++i) {
+                    tOrSFP_stage(i) = cutlass::float_ue8m0_t(kPScale);
+                }
+                CUTLASS_PRAGMA_UNROLL
+                for (int i = 0; i < size(tOrP_stage); ++i) {
+                    if constexpr (SAGE_FIXED_P || SAGE_FIXED_MXFP8_P) {
+                        tOrP_stage(i) = cutlass::float_e4m3_t(1.f);
+                    } else {
+                        // PV's A fragment expects the inverse of the K-column MXFP8
+                        // swizzle. For this 128x128x128 SM120 atom that is a fixed
+                        // 16-element bit-1/bit-2 swap repeated once per mma_k stage.
+                        int local_i = i & 15;
+                        int src_i = (int(mma_k) << 4) | (local_i & 0x9) | ((local_i & 0x2) << 1) | ((local_i & 0x4) >> 1);
+                        tOrP_stage(i) = cutlass::float_e4m3_t(acc_conversion_view(src_i) * kPInvScale);
+                    }
+                }
+            } else {
+                Tensor AbsMaxP_stagek = AbsMaxP(_, make_coord(_, _, mma_k));
+                Tensor acc_conversion_stagek = acc_conversion_view(_, _, mma_k);
+                Tensor SFP = make_tensor_like<cutlass::float_ue4m3_t>(AbsMaxP_stagek.layout());
+                Tensor SFP_uint32_view = recast<uint32_t>(SFP);
+                CUTLASS_PRAGMA_UNROLL
+                for (int i = 0; i < size(AbsMaxP_stagek); i += 4) {
+                    uint32_t& tmp = SFP_uint32_view(i / 4);
+                    flash::packed_float_to_ue4m3(
+                        AbsMaxP_stagek(i),
+                        AbsMaxP_stagek(i + 1),
+                        AbsMaxP_stagek(i + 2),
+                        AbsMaxP_stagek(i + 3),
+                        tmp
+                    );
+                }
+                int const quad_id = threadIdx.x & 3;
+                uint32_t MASK = (0xFF00FF) << ((quad_id & 1) * 8);
+                Tensor tOrSFP_uint32_view = recast<uint32_t>(tOrSFP(_, _, mma_k));
+                Tensor tOrP_uint32_view = recast<uint32_t>(tOrP(_, _, mma_k));
+
+                CUTLASS_PRAGMA_UNROLL
+                for (int mma_m = 0; mma_m < size<1>(tOrP); ++mma_m) {
                     CUTLASS_PRAGMA_UNROLL
                     for (int i = 0; i < 4; ++i) {
                         flash::packed_float_to_e2m1(
@@ -793,21 +903,59 @@ struct CollectiveMainloopFwd {
                         uint32_t sfp = (peer_sfp & MASK) | ((local_sfp & MASK) >> 8);
                         tOrSFP_uint32_view(_0{}, mma_m) = sfp;
                     }
+                }
             }
         };
 
-        softmax_fused.template online_softmax_with_quant</*Is_first=*/true>(tSrS, AbsMaxP, mainloop_params.softmax_scale_log2);
+        if constexpr (SAGE_SKIP_SOFTMAX) {
+            softmax_fused.template init_skip_softmax(tSrS);
+        } else if constexpr (Ktraits::IsMXFP8) {
+            if constexpr (SAGE_NO_EXP2_SOFTMAX) {
+                softmax_fused.template online_softmax_no_exp2</*Is_first=*/true, /*CrossLaneReduce=*/true>(tSrS, mainloop_params.softmax_scale_log2);
+            } else if constexpr (SAGE_NO_XLANE_SOFTMAX) {
+                softmax_fused.template online_softmax_no_quant</*Is_first=*/true, /*CrossLaneReduce=*/false>(tSrS, mainloop_params.softmax_scale_log2);
+            } else if constexpr (SAGE_SOFTWARE_EXP2_SOFTMAX) {
+                softmax_fused.template online_softmax_no_quant</*Is_first=*/true, /*CrossLaneReduce=*/true, /*UseSoftwareExp2=*/true>(tSrS, mainloop_params.softmax_scale_log2);
+            } else if constexpr (SAGE_SCORE_EXP2_ONLY) {
+                softmax_fused.template online_softmax_no_quant</*Is_first=*/true, /*CrossLaneReduce=*/true, /*UseSoftwareExp2=*/false, /*SkipScaleExp2=*/true, /*SkipScoreExp2=*/false>(tSrS, mainloop_params.softmax_scale_log2);
+            } else if constexpr (SAGE_SCALE_EXP2_ONLY) {
+                softmax_fused.template online_softmax_no_quant</*Is_first=*/true, /*CrossLaneReduce=*/true, /*UseSoftwareExp2=*/false, /*SkipScaleExp2=*/false, /*SkipScoreExp2=*/true>(tSrS, mainloop_params.softmax_scale_log2);
+            } else if constexpr (SAGE_MXFP8_SIMPLE_SOFTMAX) {
+                softmax_fused.template online_softmax_mxfp8_simple</*Is_first=*/true>(tSrS, mainloop_params.softmax_scale_log2);
+            } else if constexpr (SAGE_MXFP8_FUSED_SOFTMAX_PACK) {
+                softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/true>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+            } else if constexpr (SAGE_MXFP8_FUSED_PACK_HOIST_SFP) {
+                softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/true, /*FillSFP=*/false>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+            } else if constexpr (SAGE_MXFP8_FUSED_PACK_STATIC_MAP) {
+                softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/true, /*FillSFP=*/true, /*StaticMap=*/true>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+            } else if constexpr (SAGE_MXFP8_FUSED_PACK_U32) {
+                softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/true, /*FillSFP=*/true, /*StaticMap=*/true, /*PackedP=*/true>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+            } else if constexpr (SAGE_MXFP8_FUSED_PACK_U32_HOIST_SFP) {
+                softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/true, /*FillSFP=*/false, /*StaticMap=*/true, /*PackedP=*/true>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+            } else if constexpr (SAGE_MXFP8_FUSED_PACK_U32_FMA) {
+                softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/true, /*FillSFP=*/true, /*StaticMap=*/true, /*PackedP=*/true, /*UseFma=*/true>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+            } else {
+                softmax_fused.template online_softmax_no_quant</*Is_first=*/true, /*CrossLaneReduce=*/true>(tSrS, mainloop_params.softmax_scale_log2);
+            }
+        } else {
+            softmax_fused.template online_softmax_with_quant</*Is_first=*/true>(tSrS, AbsMaxP, mainloop_params.softmax_scale_log2);
+        }
 
+        clear(tOrO_store);
         consumer_wait(pipeline_v, smem_pipe_read_v);
         copy_v_block(_0{});
-        quantize(_0{}, tSrS_converion_view);
+        if constexpr (!SAGE_MXFP8_FUSED_PACK_ANY) {
+            quantize(_0{}, tSrS_converion_view);
+        }
         CUTLASS_PRAGMA_UNROLL
         for (int v_block = 0; v_block < size<2>(tOrP); ++v_block) {
             cute::gemm(tiled_mma_pv, make_zip_tensor(tOrP(_, _, v_block), tOrSFP(_, _, v_block)), 
                                     make_zip_tensor(tOrVt(_, _, v_block), tOrSFVt(_, _, v_block)), tOrO_store);
             if (v_block < size<2>(tOrP) - 1) {
                 copy_v_block(v_block + 1);
-                quantize(v_block + 1, tSrS_converion_view);
+                if constexpr (!SAGE_MXFP8_FUSED_PACK_ANY) {
+                    quantize(v_block + 1, tSrS_converion_view);
+                }
             } else {
                 pipeline_v.consumer_release(smem_pipe_read_v);
                 ++smem_pipe_read_v;
@@ -820,7 +968,13 @@ struct CollectiveMainloopFwd {
         CUTLASS_PRAGMA_UNROLL
         for (int masking_step = 0; masking_step < n_masking_steps - 1 && n_block >= 0; ++masking_step, --n_block) {
             Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
-            Tensor tSrS_converion_view = make_tensor(tSrS.data(), flash::convert_to_conversion_layout(tSrS.layout()));
+            auto tSrS_converion_view = [&] {
+                if constexpr (Ktraits::IsMXFP8) {
+                    return make_tensor(tSrS.data(), tSrS.layout());
+                } else {
+                    return make_tensor(tSrS.data(), flash::convert_to_conversion_layout(tSrS.layout()));
+                }
+            }();
             consumer_wait(pipeline_k, smem_pipe_read_k);
             copy_k_block(_0{});
             add_delta_s(tSrS);
@@ -838,33 +992,84 @@ struct CollectiveMainloopFwd {
             Tensor tScS = thread_mma_qk.partition_C(cS);
             #pragma unroll
             for (int i = 0; i < size(tSrS); ++i) {
-                if (int(get<1>(tScS(i))) >= col_limit_causal(int(get<0>(tScS(i))), n_block - 1)) {
+                int col = int(get<1>(tScS(i)));
+                if constexpr (Ktraits::IsMXFP8) { col = mxfp8_phi(col); }
+                if (col >= col_limit_causal(int(get<0>(tScS(i))), n_block - 1)) {
                     tSrS(i) = -INFINITY;
                 }
             }
-            softmax_fused.template online_softmax_with_quant</*Is_first=*/false>(tSrS, AbsMaxP, mainloop_params.softmax_scale_log2);
+            if constexpr (SAGE_SKIP_SOFTMAX) {
+                softmax_fused.template update_skip_softmax(tSrS);
+            } else if constexpr (Ktraits::IsMXFP8) {
+                if constexpr (SAGE_NO_EXP2_SOFTMAX) {
+                    softmax_fused.template online_softmax_no_exp2</*Is_first=*/false, /*CrossLaneReduce=*/true>(tSrS, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_NO_XLANE_SOFTMAX) {
+                    softmax_fused.template online_softmax_no_quant</*Is_first=*/false, /*CrossLaneReduce=*/false>(tSrS, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_SOFTWARE_EXP2_SOFTMAX) {
+                    softmax_fused.template online_softmax_no_quant</*Is_first=*/false, /*CrossLaneReduce=*/true, /*UseSoftwareExp2=*/true>(tSrS, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_SCORE_EXP2_ONLY) {
+                    softmax_fused.template online_softmax_no_quant</*Is_first=*/false, /*CrossLaneReduce=*/true, /*UseSoftwareExp2=*/false, /*SkipScaleExp2=*/true, /*SkipScoreExp2=*/false>(tSrS, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_SCALE_EXP2_ONLY) {
+                    softmax_fused.template online_softmax_no_quant</*Is_first=*/false, /*CrossLaneReduce=*/true, /*UseSoftwareExp2=*/false, /*SkipScaleExp2=*/false, /*SkipScoreExp2=*/true>(tSrS, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_MXFP8_SIMPLE_SOFTMAX) {
+                    softmax_fused.template online_softmax_mxfp8_simple</*Is_first=*/false>(tSrS, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_MXFP8_FUSED_SOFTMAX_PACK) {
+                    softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/false>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_MXFP8_FUSED_PACK_HOIST_SFP) {
+                    softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/false, /*FillSFP=*/false>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_MXFP8_FUSED_PACK_STATIC_MAP) {
+                    softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/false, /*FillSFP=*/true, /*StaticMap=*/true>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_MXFP8_FUSED_PACK_U32) {
+                    softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/false, /*FillSFP=*/true, /*StaticMap=*/true, /*PackedP=*/true>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_MXFP8_FUSED_PACK_U32_HOIST_SFP) {
+                    softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/false, /*FillSFP=*/false, /*StaticMap=*/true, /*PackedP=*/true>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_MXFP8_FUSED_PACK_U32_FMA) {
+                    softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/false, /*FillSFP=*/true, /*StaticMap=*/true, /*PackedP=*/true, /*UseFma=*/true>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+                } else {
+                    softmax_fused.template online_softmax_no_quant</*Is_first=*/false, /*CrossLaneReduce=*/true>(tSrS, mainloop_params.softmax_scale_log2);
+                }
+            } else {
+                softmax_fused.template online_softmax_with_quant</*Is_first=*/false>(tSrS, AbsMaxP, mainloop_params.softmax_scale_log2);
+            }
             Tensor tOrO = make_fragment_like(tOrO_store);
+            clear(tOrO);
             consumer_wait(pipeline_v, smem_pipe_read_v);
             copy_v_block(_0{});
-            quantize(_0{}, tSrS_converion_view);
+            if constexpr (!SAGE_MXFP8_FUSED_PACK_ANY) {
+                quantize(_0{}, tSrS_converion_view);
+            }
             CUTLASS_PRAGMA_UNROLL
             for (int v_block = 0; v_block < size<2>(tOrP); ++v_block) {
                 cute::gemm(tiled_mma_pv, make_zip_tensor(tOrP(_, _, v_block), tOrSFP(_, _, v_block)), 
                                     make_zip_tensor(tOrVt(_, _, v_block), tOrSFVt(_, _, v_block)), tOrO);
                 if (v_block < size<2>(tOrP) - 1) {
                     copy_v_block(v_block + 1);
-                    quantize(v_block + 1, tSrS_converion_view);
+                    if constexpr (!SAGE_MXFP8_FUSED_PACK_ANY) {
+                        quantize(v_block + 1, tSrS_converion_view);
+                    }
                 }
             }
             pipeline_v.consumer_release(smem_pipe_read_v);
             ++smem_pipe_read_v;
-            if (masking_step > 0) { softmax_fused.rescale_o(tOrO_store, tOrO); }
+            if constexpr (SAGE_IDENTITY_RESCALE) {
+                softmax_fused.accumulate_o(tOrO_store, tOrO);
+            } else if constexpr (!SAGE_SKIP_SOFTMAX) {
+                softmax_fused.rescale_o(tOrO_store, tOrO);
+            } else {
+                softmax_fused.accumulate_o(tOrO_store, tOrO);
+            }
         }
 
         #pragma unroll 1
         for (; n_block >= 0; --n_block) {
             Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
-            Tensor tSrS_converion_view = make_tensor(tSrS.data(), flash::convert_to_conversion_layout(tSrS.layout()));
+            auto tSrS_converion_view = [&] {
+                if constexpr (Ktraits::IsMXFP8) {
+                    return make_tensor(tSrS.data(), tSrS.layout());
+                } else {
+                    return make_tensor(tSrS.data(), flash::convert_to_conversion_layout(tSrS.layout()));
+                }
+            }();
             consumer_wait(pipeline_k, smem_pipe_read_k);
             copy_k_block(_0{});
             add_delta_s(tSrS);
@@ -879,30 +1084,74 @@ struct CollectiveMainloopFwd {
                     ++smem_pipe_read_k;
                 }
             }
-            softmax_fused.template online_softmax_with_quant</*Is_first=*/false>(tSrS, AbsMaxP, mainloop_params.softmax_scale_log2);
+            if constexpr (SAGE_SKIP_SOFTMAX) {
+                softmax_fused.template update_skip_softmax(tSrS);
+            } else if constexpr (Ktraits::IsMXFP8) {
+                if constexpr (SAGE_NO_EXP2_SOFTMAX) {
+                    softmax_fused.template online_softmax_no_exp2</*Is_first=*/false, /*CrossLaneReduce=*/true>(tSrS, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_NO_XLANE_SOFTMAX) {
+                    softmax_fused.template online_softmax_no_quant</*Is_first=*/false, /*CrossLaneReduce=*/false>(tSrS, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_SOFTWARE_EXP2_SOFTMAX) {
+                    softmax_fused.template online_softmax_no_quant</*Is_first=*/false, /*CrossLaneReduce=*/true, /*UseSoftwareExp2=*/true>(tSrS, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_SCORE_EXP2_ONLY) {
+                    softmax_fused.template online_softmax_no_quant</*Is_first=*/false, /*CrossLaneReduce=*/true, /*UseSoftwareExp2=*/false, /*SkipScaleExp2=*/true, /*SkipScoreExp2=*/false>(tSrS, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_SCALE_EXP2_ONLY) {
+                    softmax_fused.template online_softmax_no_quant</*Is_first=*/false, /*CrossLaneReduce=*/true, /*UseSoftwareExp2=*/false, /*SkipScaleExp2=*/false, /*SkipScoreExp2=*/true>(tSrS, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_MXFP8_SIMPLE_SOFTMAX) {
+                    softmax_fused.template online_softmax_mxfp8_simple</*Is_first=*/false>(tSrS, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_MXFP8_FUSED_SOFTMAX_PACK) {
+                    softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/false>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_MXFP8_FUSED_PACK_HOIST_SFP) {
+                    softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/false, /*FillSFP=*/false>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_MXFP8_FUSED_PACK_STATIC_MAP) {
+                    softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/false, /*FillSFP=*/true, /*StaticMap=*/true>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_MXFP8_FUSED_PACK_U32) {
+                    softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/false, /*FillSFP=*/true, /*StaticMap=*/true, /*PackedP=*/true>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_MXFP8_FUSED_PACK_U32_HOIST_SFP) {
+                    softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/false, /*FillSFP=*/false, /*StaticMap=*/true, /*PackedP=*/true>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+                } else if constexpr (SAGE_MXFP8_FUSED_PACK_U32_FMA) {
+                    softmax_fused.template online_softmax_mxfp8_pack</*Is_first=*/false, /*FillSFP=*/true, /*StaticMap=*/true, /*PackedP=*/true, /*UseFma=*/true>(tSrS, tOrP, tOrSFP, mainloop_params.softmax_scale_log2);
+                } else {
+                    softmax_fused.template online_softmax_no_quant</*Is_first=*/false, /*CrossLaneReduce=*/true>(tSrS, mainloop_params.softmax_scale_log2);
+                }
+            } else {
+                softmax_fused.template online_softmax_with_quant</*Is_first=*/false>(tSrS, AbsMaxP, mainloop_params.softmax_scale_log2);
+            }
             Tensor tOrO = make_fragment_like(tOrO_store);
+            clear(tOrO);
             consumer_wait(pipeline_v, smem_pipe_read_v);
             copy_v_block(_0{});
-            quantize(_0{}, tSrS_converion_view);
+            if constexpr (!SAGE_MXFP8_FUSED_PACK_ANY) {
+                quantize(_0{}, tSrS_converion_view);
+            }
             CUTLASS_PRAGMA_UNROLL
             for (int v_block = 0; v_block < size<2>(tOrP); ++v_block) {
                 cute::gemm(tiled_mma_pv, make_zip_tensor(tOrP(_, _, v_block), tOrSFP(_, _, v_block)), 
                                     make_zip_tensor(tOrVt(_, _, v_block), tOrSFVt(_, _, v_block)), tOrO);
                 if (v_block < size<2>(tOrP) - 1) {
                     copy_v_block(v_block + 1);
-                    quantize(v_block + 1, tSrS_converion_view);
+                    if constexpr (!SAGE_MXFP8_FUSED_PACK_ANY) {
+                        quantize(v_block + 1, tSrS_converion_view);
+                    }
                 } else {
                     pipeline_v.consumer_release(smem_pipe_read_v);
                     ++smem_pipe_read_v;
                 }
             }
-            softmax_fused.rescale_o(tOrO_store, tOrO);
+            if constexpr (SAGE_IDENTITY_RESCALE) {
+                softmax_fused.accumulate_o(tOrO_store, tOrO);
+            } else if constexpr (!SAGE_SKIP_SOFTMAX) {
+                softmax_fused.rescale_o(tOrO_store, tOrO);
+            } else {
+                softmax_fused.accumulate_o(tOrO_store, tOrO);
+            }
         }
-        softmax_fused.finalize(tOrO_store);
+        if constexpr (!SAGE_SKIP_FINALIZE && !SAGE_SKIP_SOFTMAX) {
+            softmax_fused.finalize(tOrO_store);
+        }
         return;
     }
 
 };
 
 } // namespace flash
-

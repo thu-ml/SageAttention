@@ -178,6 +178,42 @@ struct CollectiveEpilogueFwd{
         tma_store_arrive();
     }
 
+    // MXFP8 variant: no smem staging for O. The accumulator's per-thread values
+    // are scattered (2 contiguous elements per row per MMA_N step), so this trades
+    // one TMA store for narrow stores. In exchange it frees the 32KB smem_o that
+    // would otherwise put SharedStorage over SM120's ~99KB opt-in limit, and it
+    // removes the epilogue's serialization against the next work tile -- the
+    // producer never has to wait on a store from the previous tile.
+    // partition_C on the *global* tile hands each thread exactly the addresses its
+    // accumulator elements belong to, so no manual index math is needed.
+    template <typename Params_, typename FrgTensorO, typename TiledMma,
+              typename WorkTileInfo, typename SchedulerParams>
+    CUTLASS_DEVICE void
+    direct_store(
+        Params_ const& epilogue_params,
+        TiledMma tiled_mma,
+        FrgTensorO const& tOrO,
+        WorkTileInfo work_tile_info,
+        SchedulerParams const& scheduler_params,
+        int thread_idx
+    ) {
+        auto [m_block, bidh, bidb] = work_tile_info.get_block_coord(scheduler_params);
+        Tensor mO = make_tensor(make_gmem_ptr(epilogue_params.ptr_O), epilogue_params.shape_O,
+                                epilogue_params.stride_O);
+        Tensor gO = local_tile(mO(_, _, bidh, bidb), select<0, 2>(TileShape_MNK{}),
+                               make_coord(m_block, _0{}));
+        auto thread_mma = tiled_mma.get_thread_slice(thread_idx);
+        Tensor tOgO = thread_mma.partition_C(gO);
+        // Identity tile in the same partitioning, to recover each element's row for
+        // the seqlen_q % kBlockM tail that the TMA store would have handled itself.
+        Tensor tOcO = thread_mma.partition_C(cute::make_identity_tensor(select<0, 2>(TileShape_MNK{})));
+        const int rows_left = get<0>(epilogue_params.shape_O) - m_block * kBlockM;
+        CUTLASS_PRAGMA_UNROLL
+        for (int i = 0; i < size(tOrO); ++i) {
+            if (get<0>(tOcO(i)) < rows_left) { tOgO(i) = static_cast<Element>(tOrO(i)); }
+        }
+    }
+
     CUTLASS_DEVICE void
     store_tail() {
         tma_store_wait<0>();

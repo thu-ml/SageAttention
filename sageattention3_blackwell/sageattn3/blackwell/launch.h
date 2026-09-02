@@ -98,11 +98,17 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
 
 template<typename T, int Headdim, typename O = cutlass::bfloat16_t>
 void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream) {
+    // MXFP8 holds Q/K/V at one byte per element, twice NVFP4's, so it needs one
+    // fewer pipeline stage to fit SM120's ~99KB opt-in smem ceiling. Shrinking
+    // kBlockM/kBlockN instead is not an option: the 128x4 MXFP8 scale chunk
+    // requires both to be multiples of 128 (BlockScaledConfig::deduce_smem_layoutSF*
+    // divides the tile extent by Blk_MN = 128).
+    static constexpr int kStages = cute::is_same_v<T, cutlass::float_e4m3_t> ? 2 : 3;
     BOOL_SWITCH(params.is_causal, Is_causal, [&] {
         BOOL_SWITCH(params.per_block_mean, per_block, [&] {
             if constexpr (Headdim == 64 || Headdim == 128) {
                 run_flash_fwd<
-                    Flash_fwd_kernel_traits<Headdim, 128, 128, 3, 1, per_block, T, O>,
+                    Flash_fwd_kernel_traits<Headdim, 128, 128, kStages, 1, per_block, T, O>,
                     Is_causal
                 >(params, stream);
             } else {
