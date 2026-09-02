@@ -63,6 +63,7 @@ void set_params_fprop(Flash_fwd_params &params,
                       int window_size_right,
                       bool per_block_mean,
                       bool is_bf16,
+                      bool is_mxfp8,
                       bool seqlenq_ngroups_swapped=false) {
 
     // Reset the parameters
@@ -77,12 +78,13 @@ void set_params_fprop(Flash_fwd_params &params,
     params.sfv_ptr = sfv.data_ptr();
     
     // All stride are in elements, not bytes.
-    params.q_row_stride = q.stride(-2) * 2;
-    params.k_row_stride = k.stride(-2) * 2;
-    params.v_row_stride = v.stride(-2) * 2;;
-    params.q_head_stride = q.stride(-3) * 2;
-    params.k_head_stride = k.stride(-3) * 2;
-    params.v_head_stride = v.stride(-3) * 2; // for packed q k v
+    const int qkv_stride_factor = is_mxfp8 ? 1 : 2;
+    params.q_row_stride = q.stride(-2) * qkv_stride_factor;
+    params.k_row_stride = k.stride(-2) * qkv_stride_factor;
+    params.v_row_stride = v.stride(-2) * qkv_stride_factor;
+    params.q_head_stride = q.stride(-3) * qkv_stride_factor;
+    params.k_head_stride = k.stride(-3) * qkv_stride_factor;
+    params.v_head_stride = v.stride(-3) * qkv_stride_factor; // for packed q k v
 
     params.ds_row_stride = delta_s.stride(-2);
     params.ds_head_stride = delta_s.stride(-3);
@@ -98,9 +100,9 @@ void set_params_fprop(Flash_fwd_params &params,
     params.o_head_stride = out.stride(-3);
 
     if (cu_seqlens_q_d == nullptr) {
-        params.q_batch_stride = q.stride(0) * 2;
-        params.k_batch_stride = k.stride(0) * 2;
-        params.v_batch_stride = v.stride(0) * 2;
+        params.q_batch_stride = q.stride(0) * qkv_stride_factor;
+        params.k_batch_stride = k.stride(0) * qkv_stride_factor;
+        params.v_batch_stride = v.stride(0) * qkv_stride_factor;
         params.ds_batch_stride = delta_s.stride(0);
         params.sfq_batch_stride = sfq.stride(0);
         params.sfk_batch_stride = sfk.stride(0);
@@ -179,24 +181,35 @@ void set_params_fprop(Flash_fwd_params &params,
 
     params.is_seqlens_k_cumulative = true;
     params.is_bf16 = is_bf16;
+    params.is_e4m3 = is_mxfp8;
     #ifdef FLASHATTENTION_DISABLE_UNEVEN_K
         TORCH_CHECK(d == d_rounded, "This flash attention build does not support headdim not being a multiple of 32.");
     #endif
 }
 
-template<bool IsBF16>
+template<bool IsBF16, bool IsMXFP8>
 void run_mha_fwd_dispatch_dtype(Flash_fwd_params &params, cudaStream_t stream) {
     using OType = std::conditional_t<IsBF16, cutlass::bfloat16_t, cutlass::half_t>;
-    if (params.d == 64) {
-        run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 64, OType>(params, stream);
-    } else if (params.d == 128) {
-        run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 128, OType>(params, stream);
+    using QKVType = std::conditional_t<IsMXFP8, cutlass::float_e4m3_t, cutlass::nv_float4_t<cutlass::float_e2m1_t>>;
+    if constexpr (IsMXFP8) {
+        TORCH_CHECK(params.d == 128, "Tensor-Core MXFP8 path currently supports head_dim=128");
+        run_mha_fwd_<QKVType, 128, OType>(params, stream);
+    } else {
+        if (params.d == 64) {
+            run_mha_fwd_<QKVType, 64, OType>(params, stream);
+        } else if (params.d == 128) {
+            run_mha_fwd_<QKVType, 128, OType>(params, stream);
+        }
     }
 }
 
 void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split_kernel = false) {
     BOOL_SWITCH(params.is_bf16, IsBF16, ([&] {
-        run_mha_fwd_dispatch_dtype<IsBF16>(params, stream);
+        if (params.is_e4m3) {
+            run_mha_fwd_dispatch_dtype<IsBF16, true>(params, stream);
+        } else {
+            run_mha_fwd_dispatch_dtype<IsBF16, false>(params, stream);
+        }
     }));
 }
 
@@ -213,7 +226,8 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
         const float softmax_scale,
         bool is_causal, 
         bool per_block_mean,
-        bool is_bf16
+        bool is_bf16,
+        bool is_mxfp8=false
     ) {
 
     auto dprops = at::cuda::getCurrentDeviceProperties();
@@ -223,12 +237,20 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
 
     auto q_dtype = q.dtype();
     auto sfq_dtype = sfq.dtype();
-    TORCH_CHECK(q_dtype == torch::kUInt8, "q dtype must be uint8");
+    if (is_mxfp8) {
+        TORCH_CHECK(q_dtype == torch::kFloat8_e4m3fn, "q dtype must be float8_e4m3fn for MXFP8");
+    } else {
+        TORCH_CHECK(q_dtype == torch::kUInt8, "q dtype must be uint8 for NVFP4");
+    }
     TORCH_CHECK(k.dtype() == q_dtype, "query and key must have the same dtype");
     TORCH_CHECK(v.dtype() == q_dtype, "query and value must have the same dtype");
     CHECK_DEVICE(q); CHECK_DEVICE(k); CHECK_DEVICE(v);
 
-    TORCH_CHECK(sfq_dtype == torch::kFloat8_e4m3fn, "q dtype must be uint8");
+    if (is_mxfp8) {
+        TORCH_CHECK(sfq_dtype == torch::kUInt8, "scale dtype must be uint8 for MXFP8 UE8M0");
+    } else {
+        TORCH_CHECK(sfq_dtype == torch::kFloat8_e4m3fn, "scale dtype must be float8_e4m3fn for NVFP4");
+    }
     TORCH_CHECK(sfk.dtype() == sfq_dtype, "query and key must have the same dtype");
     TORCH_CHECK(sfv.dtype() == sfq_dtype, "query and value must have the same dtype");
     CHECK_DEVICE(sfq); CHECK_DEVICE(sfk); CHECK_DEVICE(sfv);
@@ -248,12 +270,13 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
     int seqlen_q = sizes[2];
     int num_heads = sizes[1];
     const int head_size_og = sizes[3];
-    const int unpacked_head_size = head_size_og * 2;
+    const int unpacked_head_size = is_mxfp8 ? head_size_og : head_size_og * 2;
     const int seqlen_k = k.size(2);
     const int num_heads_k = k.size(1);
     
     TORCH_CHECK(batch_size > 0, "batch size must be postive");
     TORCH_CHECK(unpacked_head_size <= 256, "FlashAttention forward only supports head dimension at most 256");
+    TORCH_CHECK(!is_mxfp8 || unpacked_head_size == 128, "MXFP8 path currently supports head_dim=128");
     TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide number of heads in query");
     TORCH_CHECK(num_heads == num_heads_k, "We do not support MQA/GQA yet");
 
@@ -261,7 +284,13 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
 
     CHECK_SHAPE(q, batch_size, num_heads, seqlen_q, head_size_og);
     CHECK_SHAPE(k, batch_size, num_heads_k, seqlen_k, head_size_og);
-    CHECK_SHAPE(v, batch_size, num_heads_k, unpacked_head_size, seqlen_k/2);
+    // Vt is (B, H, D, seqlen_k); NVFP4 packs two e2m1 per byte so its last extent
+    // is halved, MXFP8 stores one e4m3 per byte and keeps it whole.
+    if (is_mxfp8) {
+        CHECK_SHAPE(v, batch_size, num_heads_k, unpacked_head_size, seqlen_k);
+    } else {
+        CHECK_SHAPE(v, batch_size, num_heads_k, unpacked_head_size, seqlen_k/2);
+    }
     // CHECK_SHAPE(delta_s, batch_size, num_heads, seqlen_q / 128, seqlen_k);
     // CHECK_SHAPE(sfq, batch_size, seqlen_q, num_heads, unpacked_head_size);
     // CHECK_SHAPE(sfk, batch_size, seqlen_k, num_heads_k, unpacked_head_size);
@@ -305,7 +334,8 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
                      /*window_size_left=*/-1,
                      /*window_size_right=*/is_causal ? 0 : -1,
                      per_block_mean,
-                     is_bf16
+                     is_bf16,
+                     is_mxfp8
                     );
     // TODO: 132 sm count?
     auto tile_count_semaphore = is_causal ? torch::full({1}, 132, opts.dtype(torch::kInt32)) : torch::empty({1}, opts.dtype(torch::kInt32));
@@ -335,7 +365,188 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
 
 
 
+
+namespace mxfp8_simple_impl {
+
+__device__ __forceinline__ float ue8m0_to_float_kernel(uint8_t bits) {
+    return ldexpf(1.0f, int(bits) - 127);
+}
+
+template <typename OutT>
+__global__ void mxfp8_fwd_simple_kernel(
+    cutlass::float_e4m3_t const* __restrict__ q,
+    cutlass::float_e4m3_t const* __restrict__ k,
+    cutlass::float_e4m3_t const* __restrict__ v,
+    uint8_t const* __restrict__ sfq,
+    uint8_t const* __restrict__ sfk,
+    uint8_t const* __restrict__ sfv,
+    OutT* __restrict__ out,
+    int B, int H, int QL, int KL, int D,
+    float softmax_scale,
+    bool is_causal) {
+
+    extern __shared__ float smem[];
+    float* red = smem;
+    __shared__ float shared_score;
+    __shared__ float row_max;
+    __shared__ float row_sum;
+
+    int row = blockIdx.x;
+    int h = blockIdx.y;
+    int b = blockIdx.z;
+    int tid = threadIdx.x;
+
+    int q_base = ((b * H + h) * QL + row) * D;
+    int out_base = q_base;
+
+    if (tid == 0) {
+        row_max = -INFINITY;
+        row_sum = 0.0f;
+    }
+    __syncthreads();
+
+    for (int col = 0; col < KL; ++col) {
+        bool masked = is_causal && col > row;
+        float partial = 0.0f;
+        if (!masked) {
+            int k_base = ((b * H + h) * KL + col) * D;
+            for (int d = tid; d < D; d += blockDim.x) {
+                float qs = ue8m0_to_float_kernel(sfq[((b * H + h) * QL + row) * (D / 32) + d / 32]);
+                float ks = ue8m0_to_float_kernel(sfk[((b * H + h) * KL + col) * (D / 32) + d / 32]);
+                partial += float(q[q_base + d]) * qs * float(k[k_base + d]) * ks;
+            }
+        }
+        red[tid] = partial;
+        __syncthreads();
+        for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+            if (tid < offset) { red[tid] += red[tid + offset]; }
+            __syncthreads();
+        }
+        if (tid == 0) {
+            float score = masked ? -INFINITY : red[0] * softmax_scale;
+            row_max = fmaxf(row_max, score);
+        }
+        __syncthreads();
+    }
+
+    for (int col = 0; col < KL; ++col) {
+        bool masked = is_causal && col > row;
+        float partial = 0.0f;
+        if (!masked) {
+            int k_base = ((b * H + h) * KL + col) * D;
+            for (int d = tid; d < D; d += blockDim.x) {
+                float qs = ue8m0_to_float_kernel(sfq[((b * H + h) * QL + row) * (D / 32) + d / 32]);
+                float ks = ue8m0_to_float_kernel(sfk[((b * H + h) * KL + col) * (D / 32) + d / 32]);
+                partial += float(q[q_base + d]) * qs * float(k[k_base + d]) * ks;
+            }
+        }
+        red[tid] = partial;
+        __syncthreads();
+        for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+            if (tid < offset) { red[tid] += red[tid + offset]; }
+            __syncthreads();
+        }
+        if (tid == 0) {
+            float score = masked ? -INFINITY : red[0] * softmax_scale;
+            float p = expf(score - row_max);
+            shared_score = p;
+            row_sum += p;
+        }
+        __syncthreads();
+    }
+
+    for (int d = tid; d < D; d += blockDim.x) {
+        float acc = 0.0f;
+        for (int col = 0; col < KL; ++col) {
+            bool masked = is_causal && col > row;
+            float partial = 0.0f;
+            if (!masked) {
+                int k_base = ((b * H + h) * KL + col) * D;
+                for (int kd = tid; kd < D; kd += blockDim.x) {
+                    float qs = ue8m0_to_float_kernel(sfq[((b * H + h) * QL + row) * (D / 32) + kd / 32]);
+                    float ks = ue8m0_to_float_kernel(sfk[((b * H + h) * KL + col) * (D / 32) + kd / 32]);
+                    partial += float(q[q_base + kd]) * qs * float(k[k_base + kd]) * ks;
+                }
+            }
+            red[tid] = partial;
+            __syncthreads();
+            for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+                if (tid < offset) { red[tid] += red[tid + offset]; }
+                __syncthreads();
+            }
+            if (tid == 0) {
+                float score = masked ? -INFINITY : red[0] * softmax_scale;
+                shared_score = expf(score - row_max) / row_sum;
+            }
+            __syncthreads();
+            int v_base = ((b * H + h) * KL + col) * D;
+            float vs = ue8m0_to_float_kernel(sfv[((b * H + h) * KL + col) * (D / 32) + d / 32]);
+            acc += shared_score * float(v[v_base + d]) * vs;
+            __syncthreads();
+        }
+        out[out_base + d] = OutT(acc);
+    }
+}
+
+std::vector<at::Tensor> mxfp8_fwd_simple(
+    at::Tensor q, at::Tensor k, at::Tensor v,
+    at::Tensor sfq, at::Tensor sfk, at::Tensor sfv,
+    int64_t unpadded_k,
+    bool is_causal,
+    bool is_bf16) {
+
+    CHECK_DEVICE(q); CHECK_DEVICE(k); CHECK_DEVICE(v);
+    CHECK_DEVICE(sfq); CHECK_DEVICE(sfk); CHECK_DEVICE(sfv);
+    TORCH_CHECK(q.dtype() == torch::kFloat8_e4m3fn, "q must be float8_e4m3fn");
+    TORCH_CHECK(k.dtype() == q.dtype() && v.dtype() == q.dtype(), "q/k/v dtype mismatch");
+    TORCH_CHECK(sfq.dtype() == torch::kUInt8, "sfq must be uint8 UE8M0");
+    TORCH_CHECK(sfk.dtype() == sfq.dtype() && sfv.dtype() == sfq.dtype(), "scale dtype mismatch");
+    TORCH_CHECK(q.is_contiguous() && k.is_contiguous() && v.is_contiguous(), "q/k/v must be contiguous");
+    TORCH_CHECK(sfq.is_contiguous() && sfk.is_contiguous() && sfv.is_contiguous(), "scales must be contiguous");
+
+    int B = q.size(0), H = q.size(1), QL = q.size(2), D = q.size(3);
+    int KL = int(unpadded_k);
+    TORCH_CHECK(D == 128, "mxfp8_fwd_simple currently supports head_dim=128");
+    CHECK_SHAPE(k, B, H, k.size(2), D);
+    CHECK_SHAPE(v, B, H, k.size(2), D);
+    CHECK_SHAPE(sfq, B, H, QL, D / 32);
+    CHECK_SHAPE(sfk, B, H, k.size(2), D / 32);
+    CHECK_SHAPE(sfv, B, H, k.size(2), D / 32);
+    TORCH_CHECK(KL <= k.size(2), "unpadded_k exceeds K length");
+
+    auto out_dtype = is_bf16 ? at::ScalarType::BFloat16 : at::ScalarType::Half;
+    auto out = torch::empty({B, H, QL, D}, q.options().dtype(out_dtype));
+    dim3 grid(QL, H, B);
+    int threads = 128;
+    size_t shmem = threads * sizeof(float);
+    float softmax_scale = 1.0f / sqrtf(float(D));
+    auto stream = at::cuda::getCurrentCUDAStream().stream();
+    at::cuda::CUDAGuard device_guard{(char)q.get_device()};
+    if (is_bf16) {
+        mxfp8_fwd_simple_kernel<cutlass::bfloat16_t><<<grid, threads, shmem, stream>>>(
+            reinterpret_cast<cutlass::float_e4m3_t const*>(q.data_ptr()),
+            reinterpret_cast<cutlass::float_e4m3_t const*>(k.data_ptr()),
+            reinterpret_cast<cutlass::float_e4m3_t const*>(v.data_ptr()),
+            sfq.data_ptr<uint8_t>(), sfk.data_ptr<uint8_t>(), sfv.data_ptr<uint8_t>(),
+            reinterpret_cast<cutlass::bfloat16_t*>(out.data_ptr()),
+            B, H, QL, KL, D, softmax_scale, is_causal);
+    } else {
+        mxfp8_fwd_simple_kernel<cutlass::half_t><<<grid, threads, shmem, stream>>>(
+            reinterpret_cast<cutlass::float_e4m3_t const*>(q.data_ptr()),
+            reinterpret_cast<cutlass::float_e4m3_t const*>(k.data_ptr()),
+            reinterpret_cast<cutlass::float_e4m3_t const*>(v.data_ptr()),
+            sfq.data_ptr<uint8_t>(), sfk.data_ptr<uint8_t>(), sfv.data_ptr<uint8_t>(),
+            reinterpret_cast<cutlass::half_t*>(out.data_ptr()),
+            B, H, QL, KL, D, softmax_scale, is_causal);
+    }
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return {out};
+}
+
+} // namespace mxfp8_simple_impl
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.doc() = "FlashAttention";
     m.def("fwd", &mha_fwd, "Forward pass");
+    m.def("mxfp8_fwd_simple", &mxfp8_simple_impl::mxfp8_fwd_simple, "Simple native CUDA MXFP8 forward baseline");
 }

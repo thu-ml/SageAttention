@@ -157,11 +157,13 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
             collective_mainloop.load_tail(pipeline_q, pipeline_k, pipeline_v, 
                                           smem_pipe_write_q, smem_pipe_write_k, smem_pipe_write_v);
         } else if (producer_warp_role == ProducerWarpRole::Epilogue) {
-            for (auto work_tile_info = scheduler.get_initial_work(); work_tile_info.is_valid(scheduler_params); work_tile_info = scheduler.get_next_work(scheduler_params, work_tile_info)) {
-                barrier_o.wait();
-                collective_epilogue.tma_store(shared_storage, epilogue_params, work_tile_info, scheduler_params, threadIdx.x);
-                collective_epilogue.store_tail();
-                barrier_o.arrive();
+            if constexpr (!Ktraits::IsMXFP8) {
+                for (auto work_tile_info = scheduler.get_initial_work(); work_tile_info.is_valid(scheduler_params); work_tile_info = scheduler.get_next_work(scheduler_params, work_tile_info)) {
+                    barrier_o.wait();
+                    collective_epilogue.tma_store(shared_storage, epilogue_params, work_tile_info, scheduler_params, threadIdx.x);
+                    collective_epilogue.store_tail();
+                    barrier_o.arrive();
+                }
             }
             
         }
@@ -191,9 +193,15 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
 
             collective_mainloop.mma(mainloop_params, pipeline_q, pipeline_k, pipeline_v, smem_pipe_read_q, smem_pipe_read_k, smem_pipe_read_v,
                                     tOrO, softmax_fused, n_block_max, threadIdx.x - NumCopyThreads, work_idx, m_block, shared_storage);
-            barrier_o.wait();
-            collective_epilogue.mma_store(shared_storage, tiled_mma_pv, tOrO, threadIdx.x - NumCopyThreads); 
-            barrier_o.arrive();
+            if constexpr (Ktraits::IsMXFP8 && SAGE_ABLATE != 4) {
+                // No smem_o to stage through; store straight from registers.
+                collective_epilogue.direct_store(epilogue_params, tiled_mma_pv, tOrO, work_tile_info,
+                                                 scheduler_params, threadIdx.x - NumCopyThreads);
+            } else {
+                barrier_o.wait();
+                collective_epilogue.mma_store(shared_storage, tiled_mma_pv, tOrO, threadIdx.x - NumCopyThreads);
+                barrier_o.arrive();
+            }
             ++work_idx;
         }
     }

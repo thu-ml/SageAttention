@@ -115,6 +115,45 @@ def scale_and_quant_fp4_transpose(x: torch.Tensor) -> Tuple[torch.Tensor, torch.
     fp4quant_cuda.scaled_fp4_quant_trans(x, packed_fp4, fp8_scale, 1)
     return packed_fp4, fp8_scale
 
+def scale_and_quant_mxfp8(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Reference quantizer: row-major scales, for the mxfp8_ref correctness baseline.
+    The native kernel needs the swizzled 128x4 scale layout, so it uses the CUDA
+    quantizers below instead."""
+    assert x.ndim == 4
+    B, H, N, D = x.shape
+    assert D % 32 == 0
+    x_blocks = x.to(torch.float32).reshape(B, H, N, D // 32, 32)
+    amax = x_blocks.abs().amax(dim=-1)
+    min_scale = torch.full_like(amax, 2.0 ** -126)
+    scale = torch.maximum(2.0 ** torch.ceil(torch.log2(torch.clamp(amax / 448.0, min=2.0 ** -126))), min_scale)
+    ue8m0_scale = torch.clamp(torch.log2(scale).to(torch.int16) + 127, 0, 255).to(torch.uint8)
+    fp8 = (x_blocks / scale.unsqueeze(-1)).reshape(B, H, N, D).to(torch.float8_e4m3fn)
+    return fp8, ue8m0_scale
+
+def scale_and_quant_mxfp8_cuda(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    assert x.ndim == 4
+    B, H, N, D = x.shape
+    fp8 = torch.empty((B, H, N, D), device=x.device, dtype=torch.float8_e4m3fn)
+    ue8m0_scale = torch.empty((B, H, N, D // 32), device=x.device, dtype=torch.uint8)
+    fp4quant_cuda.scaled_mxfp8_quant(x, fp8, ue8m0_scale, 1)
+    return fp8, ue8m0_scale
+
+def scale_and_quant_mxfp8_permute(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    assert x.ndim == 4
+    B, H, N, D = x.shape
+    fp8 = torch.empty((B, H, N, D), device=x.device, dtype=torch.float8_e4m3fn)
+    ue8m0_scale = torch.empty((B, H, N, D // 32), device=x.device, dtype=torch.uint8)
+    fp4quant_cuda.scaled_mxfp8_quant_permute(x, fp8, ue8m0_scale, 1)
+    return fp8, ue8m0_scale
+
+def scale_and_quant_mxfp8_transpose(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    assert x.ndim == 4
+    B, H, N, D = x.shape
+    fp8 = torch.empty((B, H, D, N), device=x.device, dtype=torch.float8_e4m3fn)
+    ue8m0_scale = torch.empty((B, H, D, N // 32), device=x.device, dtype=torch.uint8)
+    fp4quant_cuda.scaled_mxfp8_quant_trans(x, fp8, ue8m0_scale, 1)
+    return fp8, ue8m0_scale
+
 def blockscaled_fp4_attn(qlist: Tuple, 
                          klist: Tuple,
                          vlist: Tuple,
@@ -125,28 +164,112 @@ def blockscaled_fp4_attn(qlist: Tuple,
                          is_bf16: bool = True
                         ):
     softmax_scale = (qlist[0].shape[-1] * 2) ** (-0.5)
-    return fp4attn_cuda.fwd(qlist[0], klist[0], vlist[0], qlist[1], klist[1], vlist[1], delta_s, KL, None, softmax_scale, is_causal, per_block_mean, is_bf16)
+    # pybind11 does not expose C++ default arguments, so is_mxfp8 must be passed.
+    return fp4attn_cuda.fwd(qlist[0], klist[0], vlist[0], qlist[1], klist[1], vlist[1], delta_s, KL, None, softmax_scale, is_causal, per_block_mean, is_bf16, False)
 
+def blockscaled_mxfp8_attn(qlist: Tuple,
+                           klist: Tuple,
+                           vlist: Tuple,
+                           delta_s: torch.Tensor,
+                           KL: int,
+                           is_causal: bool = False,
+                           per_block_mean: bool = True,
+                           is_bf16: bool = True
+                          ):
+    # Unlike NVFP4, the last extent is the real head_dim (one e4m3 per byte).
+    softmax_scale = qlist[0].shape[-1] ** (-0.5)
+    return fp4attn_cuda.fwd(qlist[0], klist[0], vlist[0], qlist[1], klist[1], vlist[1], delta_s, KL, None,
+                            softmax_scale, is_causal, per_block_mean, is_bf16, True)
 
-def sageattn3_blackwell(q, k, v, attn_mask = None, is_causal = False, per_block_mean = True, **kwargs):
+def blockscaled_mxfp8_attn_ref(qlist: Tuple,
+                               klist: Tuple,
+                               vlist: Tuple,
+                               delta_s: torch.Tensor,
+                               KL: int,
+                               is_causal: bool = False,
+                               per_block_mean: bool = True,
+                               is_bf16: bool = True
+                              ):
+    def dequant_mxfp8(tensor: torch.Tensor, scale_ue8m0: torch.Tensor) -> torch.Tensor:
+        scale = torch.ldexp(
+            torch.ones_like(scale_ue8m0, dtype=torch.float32),
+            scale_ue8m0.to(torch.int16) - 127,
+        )
+        return (tensor.to(torch.float32).reshape(*scale.shape, 32) * scale.unsqueeze(-1)).flatten(-2)
+
+    q = dequant_mxfp8(*qlist)
+    k = dequant_mxfp8(*klist)
+    v = dequant_mxfp8(*vlist)
+    out = sdpa(q, k[:, :, :KL, :], v[:, :, :KL, :], is_causal=is_causal)
+    return (out.to(torch.bfloat16 if is_bf16 else torch.float16),)
+
+_buf_cache = {}
+
+def _buf(tag, shape, dtype, device):
+    """Reused scratch buffer. Creating a tensor from Python costs ~2.5us regardless
+    of size, and the mxfp8 path needs six of them per call -- more than the CUDA
+    quantization work itself at short sequence lengths. Safe here because every
+    buffer is consumed by the attention kernel inside the same call; not safe for
+    concurrent calls with identical shapes.
+
+    The tag is part of the key on purpose: in self-attention Q and K have identical
+    shapes, so keying on shape alone hands out the same buffer for both and K's
+    quantization overwrites Q's."""
+    key = (tag, shape, dtype, device)
+    b = _buf_cache.get(key)
+    if b is None:
+        b = torch.empty(shape, dtype=dtype, device=device)
+        _buf_cache[key] = b
+    return b
+
+def sageattn3_blackwell(q, k, v, attn_mask = None, is_causal = False, per_block_mean = True, quant_format = "mxfp8_tc", **kwargs):
     if q.size(-1) >= 256:
         print(f"Unsupported Headdim {q.size(-1)}")
         return sdpa(q, k, v, is_causal = is_causal)
     QL = q.size(2)
     KL = k.size(2)
     is_bf16 = q.dtype == torch.bfloat16
-    q, k, v, delta_s = preprocess_qkv(q, k, v, per_block_mean)
-    qlist_from_cuda = scale_and_quant_fp4(q)
-    klist_from_cuda = scale_and_quant_fp4_permute(k)
-    vlist_from_cuda = scale_and_quant_fp4_transpose(v)
-    o_fp4 = blockscaled_fp4_attn(
-    qlist_from_cuda,
-    klist_from_cuda, 
-    vlist_from_cuda,
-    delta_s,
-    KL,
-    is_causal,
-    per_block_mean,
-    is_bf16
-    )[0][:, :, :QL, :].contiguous()
-    return o_fp4
+    if quant_format == "mxfp8_ref":
+        # Dequantize-and-SDPA baseline. Measures pure quantization round-trip error,
+        # and does NOT run the SageAttention algorithm (no smoothing, no delta_s).
+        qlist_from_cuda = scale_and_quant_mxfp8(q.contiguous())
+        klist_from_cuda = scale_and_quant_mxfp8(k.contiguous())
+        vlist_from_cuda = scale_and_quant_mxfp8(v.contiguous())
+        out = blockscaled_mxfp8_attn_ref(
+            qlist_from_cuda, klist_from_cuda, vlist_from_cuda,
+            None, KL, is_causal, per_block_mean, is_bf16
+        )[0]
+        return out[:, :, :QL, :].contiguous()
+    if quant_format == "mxfp8":
+        q8, qsf = scale_and_quant_mxfp8(q.contiguous())
+        k8, ksf = scale_and_quant_mxfp8(k.contiguous())
+        v8, vsf = scale_and_quant_mxfp8(v.contiguous())
+        out = fp4attn_cuda.mxfp8_fwd_simple(
+            q8, k8, v8, qsf, ksf, vsf, KL, is_causal, is_bf16
+        )[0]
+        return out[:, :, :QL, :].contiguous()
+    if quant_format == "mxfp8_tc":
+        if q.size(-1) != 128:
+            raise ValueError("mxfp8_tc currently supports head_dim=128")
+        def pad_128(x):
+            L = x.size(2)
+            pad_len = (128 - L % 128) % 128
+            if pad_len == 0:
+                return x.contiguous()
+            return F.pad(x, (0, 0, 0, pad_len), value=0).contiguous()
+        q_pad, k_pad, v_pad = map(pad_128, [q, k, v])
+        qlist_from_cuda = scale_and_quant_mxfp8_cuda(q_pad)
+        klist_from_cuda = scale_and_quant_mxfp8_permute(k_pad)
+        vlist_from_cuda = scale_and_quant_mxfp8_transpose(v_pad)
+        delta_s = torch.empty((1, 1, 1, 1), device=q.device, dtype=torch.float32)
+        out = blockscaled_mxfp8_attn(
+            qlist_from_cuda, klist_from_cuda, vlist_from_cuda,
+            delta_s, KL, is_causal, False, is_bf16
+        )[0]
+        return out[:, :, :QL, :].contiguous()
+    if quant_format == "nvfp4":
+        raise ValueError(
+            "quant_format='nvfp4' is not validated in this MXFP8 D128 clean branch. "
+            "Use the official SageAttention3 Blackwell package for the original NVFP4 path."
+        )
+    raise ValueError(f"Unsupported quant_format: {quant_format}")

@@ -196,6 +196,32 @@ __forceinline__ __device__ float ptx_exp2(float x) {
   return y;
 }
 
+__forceinline__ __device__ float sw_exp2(float x) {
+  int n;
+  asm volatile("cvt.rni.s32.f32 %0, %1;" : "=r"(n) : "f"(x));
+  n = max(-126, min(127, n));
+  float f = x - float(n);
+  float p = 1.3333558146e-3f;
+  p = fmaf(p, f, 9.6181291076e-3f);
+  p = fmaf(p, f, 5.5504108665e-2f);
+  p = fmaf(p, f, 2.4022650696e-1f);
+  p = fmaf(p, f, 6.9314718246e-1f);
+  p = fmaf(p, f, 1.f);
+  uint32_t bits = uint32_t(n + 127) << 23;
+  float scale;
+  asm volatile("mov.b32 %0, %1;" : "=f"(scale) : "r"(bits));
+  return p * scale;
+}
+
+template <bool Software>
+__forceinline__ __device__ float softmax_exp2(float x) {
+  if constexpr (Software) {
+    return sw_exp2(x);
+  } else {
+    return ptx_exp2(x);
+  }
+}
+
 CUTLASS_DEVICE void
 packed_float_to_ue4m3(
   float const &f0, float const &f1, float const &f2, float const &f3,
