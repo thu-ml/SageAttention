@@ -74,3 +74,32 @@ void mean_scale_fuse_quant_cuda(
                 int num_tokens,
                 float scale_max,
                 int tensor_layout);
+
+// Paged KV quant: cache layout [num_blocks, page_size, H, D]
+void mean_k_paged_cuda(
+                torch::Tensor k_cache,
+                torch::Tensor mean,
+                torch::Tensor block_table,
+                torch::Tensor seq_lens,
+                int page_size);
+
+void quant_k_paged_int8_cuda(
+                torch::Tensor k_cache,
+                torch::Tensor k_out,
+                torch::Tensor scale,
+                torch::Tensor block_table,
+                torch::Tensor seq_lens,
+                int page_size,
+                int kv_cap,
+                int quant_block,
+                c10::optional<torch::Tensor> mean);
+
+void quant_v_paged_fp8_cuda(
+                torch::Tensor v_cache,
+                torch::Tensor v_out,
+                torch::Tensor scale,
+                torch::Tensor block_table,
+                torch::Tensor seq_lens,
+                int page_size,
+                int kv_cap,
+                float scale_max);

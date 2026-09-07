@@ -103,3 +103,36 @@ torch::Tensor qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf(torch::Tensor q
                     int qk_quant_gran,
                     float sm_scale,
                     int return_lse);
+
+torch::Tensor qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf_seqlens(torch::Tensor query,
+                    torch::Tensor key,
+                    torch::Tensor value,
+                    torch::Tensor output,
+                    torch::Tensor query_scale,
+                    torch::Tensor key_scale,
+                    torch::Tensor value_scale,
+                    torch::Tensor seq_lens,
+                    int tensor_layout,
+                    int is_causal,
+                    int qk_quant_gran,
+                    float sm_scale,
+                    int return_lse);
+
+// K+V paged seqlens (CUDA-graph friendly). Supports qo_len>=1; set is_causal
+// for full-prefill (typically qo_len == kv_len_actual).
+torch::Tensor qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf_seqlens_paged(
+                    torch::Tensor query,
+                    torch::Tensor key_cache,
+                    torch::Tensor value_cache,
+                    torch::Tensor output,
+                    torch::Tensor query_scale,
+                    torch::Tensor key_scale,
+                    torch::Tensor value_scale,
+                    torch::Tensor seq_lens,
+                    torch::Tensor block_table,
+                    int block_size,
+                    int kv_len,
+                    int is_causal,
+                    int qk_quant_gran,
+                    float sm_scale,
+                    int return_lse);

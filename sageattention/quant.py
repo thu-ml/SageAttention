@@ -293,5 +293,122 @@ def per_channel_fp8(
         return v_fp8, v_scale, None
 
 
+def per_warp_int8_q(
+    q: torch.Tensor,
+    BLKQ: int = 128,
+    WARPQ: int = 32,
+    tensor_layout: str = "HND",
+):
+    """Quantize dense Q only (per-warp INT8). Used with paged K/V quant."""
+    q_int8 = torch.empty(q.shape, dtype=torch.int8, device=q.device)
+    if tensor_layout == "HND":
+        b, h_qo, qo_len, head_dim = q.shape
+    elif tensor_layout == "NHD":
+        b, qo_len, h_qo, head_dim = q.shape
+    else:
+        raise ValueError(f"Unknown tensor layout: {tensor_layout}")
+    _tensor_layout = 0 if tensor_layout == "NHD" else 1
+    q_scale = torch.empty(
+        (b, h_qo, ((qo_len + BLKQ - 1) // BLKQ) * (BLKQ // WARPQ)),
+        device=q.device,
+        dtype=torch.float32,
+    )
+    _fused.quant_per_warp_int8_cuda(q, q_int8, q_scale, BLKQ, WARPQ, _tensor_layout)
+    return q_int8, q_scale
 
-    
+
+def mean_k_paged(
+    k_cache: torch.Tensor,
+    block_table: torch.Tensor,
+    seq_lens: torch.Tensor,
+    page_size: int,
+) -> torch.Tensor:
+    """Mean of paged K over logical tokens. Returns float32 ``[B, H, D]``."""
+    batch = block_table.size(0)
+    num_kv_heads = k_cache.size(2)
+    head_dim = k_cache.size(3)
+    mean = torch.empty(
+        (batch, num_kv_heads, head_dim), dtype=torch.float32, device=k_cache.device
+    )
+    _fused.mean_k_paged_cuda(k_cache, mean, block_table, seq_lens, page_size)
+    return mean
+
+
+def quant_k_paged_int8(
+    k_cache: torch.Tensor,
+    block_table: torch.Tensor,
+    seq_lens: torch.Tensor,
+    page_size: int,
+    kv_cap: int,
+    km: Optional[torch.Tensor] = None,
+    BLKK: int = 64,
+):
+    """Quantize bf16/fp16 paged K cache to INT8 in-place layout.
+
+    Parameters
+    ----------
+    k_cache : torch.Tensor
+        ``[num_blocks, page_size, H, D]`` fp16/bf16.
+    Returns
+    -------
+    k_int8, k_scale : ``[num_blocks, page_size, H, D]`` int8 and
+        ``[B, H, ceil(kv_cap / BLKK)]`` float32.
+    """
+    batch = block_table.size(0)
+    num_kv_heads = k_cache.size(2)
+    k_int8 = torch.empty(k_cache.shape, dtype=torch.int8, device=k_cache.device)
+    k_scale = torch.empty(
+        (batch, num_kv_heads, (kv_cap + BLKK - 1) // BLKK),
+        dtype=torch.float32,
+        device=k_cache.device,
+    )
+    _fused.quant_k_paged_int8_cuda(
+        k_cache,
+        k_int8,
+        k_scale,
+        block_table,
+        seq_lens,
+        page_size,
+        kv_cap,
+        BLKK,
+        km,
+    )
+    return k_int8, k_scale
+
+
+def quant_v_paged_fp8(
+    v_cache: torch.Tensor,
+    block_table: torch.Tensor,
+    seq_lens: torch.Tensor,
+    page_size: int,
+    kv_cap: int,
+    scale_max: float = 2.25,
+):
+    """Quantize bf16/fp16 paged V cache to FP8 (logical token order).
+
+    Writes ``[num_blocks, page_size, H, D]`` float8_e4m3fn; the paged attention
+    kernel applies the fused.cu seq permute on load.
+    """
+    batch = block_table.size(0)
+    num_kv_heads = v_cache.size(2)
+    head_dim = v_cache.size(3)
+    v_fp8 = torch.empty(
+        v_cache.shape, dtype=torch.float8_e4m3fn, device=v_cache.device
+    )
+    v_scale = torch.empty(
+        (batch, num_kv_heads, head_dim), dtype=torch.float32, device=v_cache.device
+    )
+    _fused.quant_v_paged_fp8_cuda(
+        v_cache,
+        v_fp8,
+        v_scale,
+        block_table,
+        seq_lens,
+        page_size,
+        kv_cap,
+        scale_max,
+    )
+    return v_fp8, v_scale
+
+
+
