@@ -46,8 +46,10 @@ except:
 
 from .quant import per_block_int8 as per_block_int8_cuda
 from .quant import per_warp_int8 as per_warp_int8_cuda
+from .quant import per_warp_int8_q
 from .quant import sub_mean
 from .quant import per_channel_fp8
+from .quant import mean_k_paged, quant_k_paged_int8, quant_v_paged_fp8
 
 from typing import Any, List, Literal, Optional, Tuple, Union
 import warnings
@@ -329,6 +331,160 @@ def sageattn_qk_int8_pv_fp16_triton(
         return o, lse / 1.44269504 + lse_correction * sm_scale if smooth_k else lse / 1.44269504
     else:
         return o
+
+
+def sageattn_qk_int8_pv_fp8_cuda_seqlens(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    seq_lens: torch.Tensor,
+    sm_scale: Optional[float] = None,
+    smooth_k: bool = True,
+) -> torch.Tensor:
+    """CUDA-graph-friendly batched decode variant of the sm89/sm120 FP8 kernel.
+
+    Equivalent to ``sageattn_qk_int8_pv_fp8_cuda`` with ``qk_quant_gran=
+    "per_warp"``, ``pv_accum_dtype="fp32+fp16"`` and ``is_causal=False``, but
+    the per-request KV length is read on device from ``seq_lens`` instead of
+    the (fixed) tensor shapes. This lets a captured CUDA graph be replayed
+    with different sequence lengths, which the dense per-request Python loop
+    cannot do.
+
+    Args:
+        q: Query, HND layout ``[batch, num_qo_heads, qo_len, head_dim]``.
+        k: Key, HND layout ``[batch, num_kv_heads, kv_cap, head_dim]`` padded to
+            ``kv_cap``. Padding rows past ``seq_lens[b]`` are masked inside the
+            kernel and **must** be zero-filled by the caller: the per-block
+            quantization scales and the ``smooth_k`` mean are computed over
+            the whole padded buffer.
+        v: Value, same padded layout as ``k``. Padding rows **must** be
+            zero-filled, otherwise the per-channel FP8 scale (a max over the
+            whole padded length) gets polluted.
+        seq_lens: Real KV length per request, int32 CUDA tensor, ``[batch]``.
+        sm_scale: Softmax scale, defaults to ``head_dim**-0.5``.
+        smooth_k: Subtract the per-request K mean before INT8 quantization.
+            The mean is computed as ``k.sum(seq_dim) / seq_lens`` (padding is
+            zero), which is device-side and CUDA-graph safe.
+
+    Returns:
+        Output tensor, same shape and dtype as ``q``.
+    """
+    assert SM89_ENABLED, "SM89 kernel is not available. Make sure you GPUs with compute capability 8.9."
+    assert q.is_cuda and k.is_cuda and v.is_cuda and seq_lens.is_cuda
+    assert q.dtype == k.dtype == v.dtype
+    assert q.dtype in [torch.float16, torch.bfloat16]
+    assert q.dim() == 4 and k.dim() == 4 and v.dim() == 4
+    head_dim = q.size(-1)
+    assert 64 <= head_dim <= 128
+
+    # Do not call torch.cuda.set_device here: it breaks CUDA graph capture/replay.
+
+    if sm_scale is None:
+        sm_scale = head_dim**-0.5
+
+    if head_dim < 128:
+        q = torch.nn.functional.pad(q, (0, 128 - head_dim))
+        k = torch.nn.functional.pad(k, (0, 128 - head_dim))
+        v = torch.nn.functional.pad(v, (0, 128 - head_dim))
+
+    km = None
+    if smooth_k:
+        # Padding rows are zero, so the masked mean is a plain sum divided by
+        # the device-side lengths (keeps CUDA graphs replay-safe).
+        # clamp avoids /0 for cudagraph-padded slots with seq_lens==0.
+        # NHD: seq dim is 1; HND: seq dim is 2. This API uses HND below.
+        km = k.sum(dim=2) / seq_lens.to(k.dtype).clamp(min=1)[:, None, None]
+
+    q_int8, q_scale, k_int8, k_scale = per_warp_int8_cuda(
+        q, k, km, tensor_layout="HND", BLKQ=128, WARPQ=32, BLKK=64)
+    v_fp8, v_scale, _ = per_channel_fp8(
+        v, tensor_layout="HND", scale_max=2.25, smooth_v=False)
+
+    o = torch.empty(q.shape, dtype=q.dtype, device=q.device)
+    sm89_compile.qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf_seqlens(
+        q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale,
+        seq_lens.to(torch.int32), 1, 0, 2, sm_scale, 0)
+    return o[..., :head_dim]
+
+
+def sageattn_qk_int8_pv_fp8_cuda_seqlens_paged(
+    q: torch.Tensor,
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    seq_lens: torch.Tensor,
+    block_table: torch.Tensor,
+    block_size: int,
+    kv_cap: int,
+    sm_scale: Optional[float] = None,
+    smooth_k: bool = True,
+    is_causal: bool = False,
+) -> torch.Tensor:
+    """Paged-quant + paged-KV attention (no dense gather/scatter/permute).
+
+    Parameters
+    ----------
+    q : torch.Tensor
+        Dense query, HND ``[B, Hq, qo_len, D]``. Prefill may use ``qo_len>1``.
+    k_cache, v_cache : torch.Tensor
+        BF16/FP16 paged caches ``[num_blocks, block_size, Hkv, D]``.
+    seq_lens : torch.Tensor
+        Device int32 ``[B]`` actual KV lengths.
+    block_table : torch.Tensor
+        Device int32 ``[B, max_pages]``.
+    block_size : int
+        Page size (must match cache size(1)).
+    kv_cap : int
+        Padded KV capacity used for K-scale indexing (same role as dense pad).
+        Must be covered by ``block_table.size(1) * block_size``.
+    is_causal : bool
+        Causal mask. Full prefill should use ``qo_len == seq_lens[i]``.
+        Decode uses ``False``.
+    """
+    assert SM89_ENABLED, "SM89 kernel is not available. Make sure you GPUs with compute capability 8.9."
+    assert q.is_cuda and k_cache.is_cuda and v_cache.is_cuda and seq_lens.is_cuda
+    assert block_table.is_cuda
+    assert q.dtype == k_cache.dtype == v_cache.dtype
+    assert q.dtype in [torch.float16, torch.bfloat16]
+    assert q.dim() == 4 and k_cache.dim() == 4 and v_cache.dim() == 4
+    head_dim = q.size(-1)
+    assert 64 <= head_dim <= 128
+    assert k_cache.size(1) == block_size and v_cache.size(1) == block_size
+    assert k_cache.size(2) == v_cache.size(2) and k_cache.size(3) == v_cache.size(3)
+    assert block_table.size(1) * block_size >= kv_cap
+
+    if sm_scale is None:
+        sm_scale = head_dim**-0.5
+
+    orig_head_dim = head_dim
+    if head_dim < 128:
+        q = torch.nn.functional.pad(q, (0, 128 - head_dim))
+        # Caches must already be padded to 128 for this path, or head_dim==128.
+        assert k_cache.size(-1) == 128 and v_cache.size(-1) == 128
+        head_dim = 128
+
+    km = None
+    if smooth_k:
+        km = mean_k_paged(k_cache, block_table, seq_lens, block_size)
+        # Match dense path: smooth uses mean cast to Q/K dtype.
+        km = km.to(dtype=k_cache.dtype).float()
+
+    q_int8, q_scale = per_warp_int8_q(
+        q, BLKQ=128, WARPQ=32, tensor_layout="HND")
+    k_int8, k_scale = quant_k_paged_int8(
+        k_cache, block_table, seq_lens, block_size, kv_cap, km=km, BLKK=64)
+    v_fp8, v_scale = quant_v_paged_fp8(
+        v_cache, block_table, seq_lens, block_size, kv_cap, scale_max=2.25)
+
+    o = torch.empty(q.shape, dtype=q.dtype, device=q.device)
+    sm89_compile.qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf_seqlens_paged(
+        q_int8, k_int8, v_fp8.view(torch.int8), o, q_scale, k_scale, v_scale,
+        seq_lens.to(torch.int32), block_table.to(torch.int32),
+        int(block_size), int(kv_cap), 1 if is_causal else 0, 2, sm_scale, 0)
+    return o[..., :orig_head_dim]
+
+
+# Back-compat alias used by early K-only tests.
+sageattn_qk_int8_pv_fp8_cuda_seqlens_paged_k = sageattn_qk_int8_pv_fp8_cuda_seqlens_paged
 
 
 def sageattn_varlen(

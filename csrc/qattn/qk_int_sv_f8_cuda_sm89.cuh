@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <ATen/cuda/CUDAContext.h>
 #include "../utils.cuh"
 #include <cuda_fp16.h>
 #include <cuda_pipeline_primitives.h>
@@ -50,7 +51,10 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
                       const uint32_t stride_bz_k, const uint32_t stride_seq_k, const uint32_t stride_h_k,
                       const uint32_t stride_bz_v, const uint32_t stride_h_v, const uint32_t stride_d_v,
                       const uint32_t stride_bz_o, const uint32_t stride_seq_o, const uint32_t stride_h_o,
-                      float sm_scale)
+                      float sm_scale, const int* __restrict__ seq_lens,
+                      const int* __restrict__ block_table,
+                      const uint32_t block_size,
+                      const uint32_t block_table_stride)
 {
   // compile time check
   static_assert(DTypeQK == DataType::kInt8 || DTypeQK == DataType::kInt4, "DTypeQK must be int8 or int4");
@@ -85,6 +89,34 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
   const uint32_t bx = blockIdx.x;
   const uint32_t num_qo_heads = gridDim.y;
   const uint32_t head_id = blockIdx.y;
+
+  // When seq_lens is provided (CUDA-graph decode), the KV tensors are padded
+  // to a fixed capacity and the real per-request length is read from device
+  // memory, so replaying the graph with new lengths needs no host-side change.
+  // Scale-tensor strides below keep using the padded kv_len on purpose: the
+  // quantization kernels always write scales for the full padded buffer.
+  uint32_t kv_len_actual = kv_len;
+  if (seq_lens != nullptr)
+  {
+    const int sl = seq_lens[batch_id];
+    if (sl >= 0 && (uint32_t)sl < kv_len)
+    {
+      kv_len_actual = (uint32_t)sl;
+    }
+  }
+
+  // Paged KV path: K/V are read from paged caches via block_table.
+  // K cache: [num_blocks, block_size, H, D] int8 (logical token order).
+  // V cache: same layout, fp8 bytes (logical token order); loader applies
+  // the fused.cu seq permute when filling smem so MMA sees dense-equivalent data.
+  const bool paged_kv = (block_table != nullptr);
+  const int *block_table_row =
+      paged_kv ? block_table + batch_id * block_table_stride : nullptr;
+  const uint32_t num_kv_heads_paged = num_qo_heads / num_kv_groups;
+  const uint32_t page_elems_per_token = num_kv_heads_paged * head_dim;
+  const uint32_t k_head_offset_bytes =
+      (head_id / num_kv_groups) * head_dim;
+  uint32_t V_buf_idx_base = 0;
 
   // transfer to base 2 instead of base e with better numerical efficiency
   sm_scale *= math::log2e;
@@ -176,6 +208,9 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
   //                                             for fp16: 32
   constexpr SwizzleMode swizzle_mode_V = (V_SMEM_STRIDE == 64) ? SwizzleMode::k64B : SwizzleMode::k128B;
   smem_t<swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V> smem_V(smem + V_smem_idx_offset * QK_SMEM_STRIDE);
+  // Paged V: token-major staging [CTA_K, head_dim] after Q/K/V (see smem_max).
+  int8_t *smem_V_stage =
+      smem + (CTA_Q + CTA_K + CTA_K) * QK_SMEM_STRIDE;
   constexpr SwizzleMode swizzle_mode_O = (O_SMEM_STRIDE == 32) ? SwizzleMode::k64B : SwizzleMode::k128B;
   smem_t<swizzle_mode_O, O_SMEM_STRIDE / PACK_SIZE_O> smem_O(smem);
 
@@ -221,8 +256,8 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
 
   const uint32_t num_iterations = div_ceil(
       mask_mode == MaskMode::kCausal
-          ? min(kv_len, (bx + 1) * CTA_Q)
-          : kv_len,
+          ? min(kv_len_actual, (bx + 1) * CTA_Q)
+          : kv_len_actual,
       CTA_K);
 
   // load Q with predicate
@@ -245,8 +280,18 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
   }
 
   // load K with predicate
-  load_global_to_share<global_to_shared_line_lanes_QK, global_to_shared_copy_lines_per_warp_QK, QK_smem_iters_row, K_smem_iters_col, swizzle_mode_QK, QK_SMEM_STRIDE / PACK_SIZE_QK, CTA_K>(
-    &K_lane_base_ptr, K_smem_offset_load, stride_seq_k, smem_K, K_load_idx_lane_base, kv_len);
+  if (paged_kv)
+  {
+    load_global_to_share_paged<global_to_shared_line_lanes_QK, global_to_shared_copy_lines_per_warp_QK, QK_smem_iters_row, K_smem_iters_col, swizzle_mode_QK, QK_SMEM_STRIDE / PACK_SIZE_QK, CTA_K>(
+      &K_lane_base_ptr, K_smem_offset_load, K, block_table_row, block_size,
+      page_elems_per_token, k_head_offset_bytes, smem_K,
+      K_load_idx_lane_base, kv_len_actual, lane_id);
+  }
+  else
+  {
+    load_global_to_share<global_to_shared_line_lanes_QK, global_to_shared_copy_lines_per_warp_QK, QK_smem_iters_row, K_smem_iters_col, swizzle_mode_QK, QK_SMEM_STRIDE / PACK_SIZE_QK, CTA_K>(
+      &K_lane_base_ptr, K_smem_offset_load, stride_seq_k, smem_K, K_load_idx_lane_base, kv_len_actual);
+  }
   cp_async::commit_group();
 
   float q_scale = Q_scale[q_scale_idx];
@@ -257,14 +302,23 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
   sm_scale = original_sm_scale * dequant_scale;
 
   // load V
-  // ! we assume that V is padded. If not, there might be illegal memory access or nan issue.
-  // for fp16: 
-  // load_global_to_share                stride_seq_v
-  load_fp8_V_global_to_share<global_to_shared_line_lanes_V, global_to_shared_copy_lines_per_warp_V, V_smem_iters_row, V_smem_iters_col, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V, CTA_K>(
-    &V_lane_base_ptr, V_smem_offset_load, stride_d_v, smem_V);
+  // ! dense path assumes V is padded. Paged path predicates on kv_len_actual.
+  if (paged_kv)
+  {
+    load_fp8_V_global_to_share_paged<global_to_shared_line_lanes_V, global_to_shared_copy_lines_per_warp_V, V_smem_iters_row, V_smem_iters_col, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V, CTA_K, head_dim, num_warps>(
+      V_smem_offset_load, V, block_table_row, block_size,
+      page_elems_per_token, k_head_offset_bytes, smem_V, smem_V_stage,
+      V_buf_idx_base, kv_len_actual, lane_id, warp_id);
+  }
+  else
+  {
+    load_fp8_V_global_to_share<global_to_shared_line_lanes_V, global_to_shared_copy_lines_per_warp_V, V_smem_iters_row, V_smem_iters_col, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V, CTA_K>(
+      &V_lane_base_ptr, V_smem_offset_load, stride_d_v, smem_V);
+  }
   cp_async::commit_group();
 
   K_load_idx_lane_base += CTA_K;
+  V_buf_idx_base += CTA_K;
 
 #pragma unroll
   for (uint32_t iter = 1; iter < num_iterations - 1; iter++)
@@ -326,9 +380,19 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
 
     __syncthreads();
 
-    // load K without predicate
-    load_global_to_share<global_to_shared_line_lanes_QK, global_to_shared_copy_lines_per_warp_QK, QK_smem_iters_row, K_smem_iters_col, swizzle_mode_QK, QK_SMEM_STRIDE / PACK_SIZE_QK, CTA_K>(
-      &K_lane_base_ptr, K_smem_offset_load, stride_seq_k, smem_K);
+    // load K without predicate (rows < kv_len_actual in this middle-tile range)
+    if (paged_kv)
+    {
+      load_global_to_share_paged<global_to_shared_line_lanes_QK, global_to_shared_copy_lines_per_warp_QK, QK_smem_iters_row, K_smem_iters_col, swizzle_mode_QK, QK_SMEM_STRIDE / PACK_SIZE_QK, CTA_K>(
+        &K_lane_base_ptr, K_smem_offset_load, K, block_table_row, block_size,
+        page_elems_per_token, k_head_offset_bytes, smem_K,
+        K_load_idx_lane_base, kv_len_actual, lane_id);
+    }
+    else
+    {
+      load_global_to_share<global_to_shared_line_lanes_QK, global_to_shared_copy_lines_per_warp_QK, QK_smem_iters_row, K_smem_iters_col, swizzle_mode_QK, QK_SMEM_STRIDE / PACK_SIZE_QK, CTA_K>(
+        &K_lane_base_ptr, K_smem_offset_load, stride_seq_k, smem_K);
+    }
     cp_async::commit_group();
 
     dequant_scale = q_scale * K_scale[k_scale_idx + iter * k_scale_advance_offset];
@@ -359,13 +423,22 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
     }
     __syncthreads();
     // load V
-    // for fp16: 
-    // load_global_to_share                stride_seq_v
-    load_fp8_V_global_to_share<global_to_shared_line_lanes_V, global_to_shared_copy_lines_per_warp_V, V_smem_iters_row, V_smem_iters_col, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V, CTA_K>(
-      &V_lane_base_ptr, V_smem_offset_load, stride_d_v, smem_V);
+    if (paged_kv)
+    {
+      load_fp8_V_global_to_share_paged<global_to_shared_line_lanes_V, global_to_shared_copy_lines_per_warp_V, V_smem_iters_row, V_smem_iters_col, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V, CTA_K, head_dim, num_warps>(
+        V_smem_offset_load, V, block_table_row, block_size,
+        page_elems_per_token, k_head_offset_bytes, smem_V, smem_V_stage,
+        V_buf_idx_base, kv_len_actual, lane_id, warp_id);
+    }
+    else
+    {
+      load_fp8_V_global_to_share<global_to_shared_line_lanes_V, global_to_shared_copy_lines_per_warp_V, V_smem_iters_row, V_smem_iters_col, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V, CTA_K>(
+        &V_lane_base_ptr, V_smem_offset_load, stride_d_v, smem_V);
+    }
     cp_async::commit_group();
   
     K_load_idx_lane_base += CTA_K;
+    V_buf_idx_base += CTA_K;
   }
 
   // second last iter, apply causal mask
@@ -435,8 +508,18 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
     __syncthreads();
 
     // load K with predicate
-    load_global_to_share<global_to_shared_line_lanes_QK, global_to_shared_copy_lines_per_warp_QK, QK_smem_iters_row, K_smem_iters_col, swizzle_mode_QK, QK_SMEM_STRIDE / PACK_SIZE_QK, CTA_K>(
-      &K_lane_base_ptr, K_smem_offset_load, stride_seq_k, smem_K, K_load_idx_lane_base, kv_len);
+    if (paged_kv)
+    {
+      load_global_to_share_paged<global_to_shared_line_lanes_QK, global_to_shared_copy_lines_per_warp_QK, QK_smem_iters_row, K_smem_iters_col, swizzle_mode_QK, QK_SMEM_STRIDE / PACK_SIZE_QK, CTA_K>(
+        &K_lane_base_ptr, K_smem_offset_load, K, block_table_row, block_size,
+        page_elems_per_token, k_head_offset_bytes, smem_K,
+        K_load_idx_lane_base, kv_len_actual, lane_id);
+    }
+    else
+    {
+      load_global_to_share<global_to_shared_line_lanes_QK, global_to_shared_copy_lines_per_warp_QK, QK_smem_iters_row, K_smem_iters_col, swizzle_mode_QK, QK_SMEM_STRIDE / PACK_SIZE_QK, CTA_K>(
+        &K_lane_base_ptr, K_smem_offset_load, stride_seq_k, smem_K, K_load_idx_lane_base, kv_len_actual);
+    }
     cp_async::commit_group();
 
     dequant_scale = q_scale * K_scale[k_scale_idx + (num_iterations - 1) * k_scale_advance_offset];
@@ -468,12 +551,21 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
 
     __syncthreads();
     // load V
-    // for fp16: 
-    // load_global_to_share                stride_seq_v
-    load_fp8_V_global_to_share<global_to_shared_line_lanes_V, global_to_shared_copy_lines_per_warp_V, V_smem_iters_row, V_smem_iters_col, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V, CTA_K>(
-      &V_lane_base_ptr, V_smem_offset_load, stride_d_v, smem_V);
+    if (paged_kv)
+    {
+      load_fp8_V_global_to_share_paged<global_to_shared_line_lanes_V, global_to_shared_copy_lines_per_warp_V, V_smem_iters_row, V_smem_iters_col, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V, CTA_K, head_dim, num_warps>(
+        V_smem_offset_load, V, block_table_row, block_size,
+        page_elems_per_token, k_head_offset_bytes, smem_V, smem_V_stage,
+        V_buf_idx_base, kv_len_actual, lane_id, warp_id);
+    }
+    else
+    {
+      load_fp8_V_global_to_share<global_to_shared_line_lanes_V, global_to_shared_copy_lines_per_warp_V, V_smem_iters_row, V_smem_iters_col, swizzle_mode_V, V_SMEM_STRIDE / PACK_SIZE_V, CTA_K>(
+        &V_lane_base_ptr, V_smem_offset_load, stride_d_v, smem_V);
+    }
     cp_async::commit_group();
     K_load_idx_lane_base += CTA_K;
+    V_buf_idx_base += CTA_K;
   }
 
   // last iter, apply causal mask and out of bound mask
@@ -514,7 +606,7 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
     {
       apply_causal_mask<num_tiles_q, num_tiles_k>(Q_idx_lane_base, K_idx_lane_base, RS_f32);
     }
-    apply_out_of_bound_mask<num_tiles_q, num_tiles_k>(K_idx_lane_base, RS_f32, kv_len);
+    apply_out_of_bound_mask<num_tiles_q, num_tiles_k>(K_idx_lane_base, RS_f32, kv_len_actual);
     K_idx_lane_base += CTA_K;
 
     if constexpr (std::is_same<DTypeSVAccum, float>::value)

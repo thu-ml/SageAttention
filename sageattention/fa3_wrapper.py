@@ -61,15 +61,29 @@ def fa3_fp8(
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
-    q_scale = (q.abs().max().to(torch.float32) / 448.0).unsqueeze(-1)
-    k_scale = (k.abs().max().to(torch.float32) / 448.0).unsqueeze(-1)
-    v_scale = (v.abs().max().to(torch.float32) / 448.0).unsqueeze(-1)
+    # FA3 Hopper expects descale tensors of shape [batch, nheads_kv].
+    # After optional HND->NHD transpose, q/k/v are NHD: [B, S, H, D].
+    q_scale = (q.abs().amax(dim=(1, 3)).to(torch.float32) / 448.0).contiguous()
+    k_scale = (k.abs().amax(dim=(1, 3)).to(torch.float32) / 448.0).contiguous()
+    v_scale = (v.abs().amax(dim=(1, 3)).to(torch.float32) / 448.0).contiguous()
 
-    q_f8 = (q / q_scale).to(torch.float8_e4m3fn)
-    k_f8 = (k / k_scale).to(torch.float8_e4m3fn)
-    v_f8 = (v / v_scale).to(torch.float8_e4m3fn)
+    q_f8 = (q / q_scale[:, None, :, None]).to(torch.float8_e4m3fn)
+    k_f8 = (k / k_scale[:, None, :, None]).to(torch.float8_e4m3fn)
+    v_f8 = (v / v_scale[:, None, :, None]).to(torch.float8_e4m3fn)
 
-    o = flash_attn_func_v3(q_f8, k_f8, v_f8, descale_q=q_scale, descale_k=k_scale, descale_v=v_scale, causal=is_causal, softmax_scale=sm_scale)[0].to(dtype)
+    # Prefer current hopper arg names; fall back to older descale_q/k/v.
+    try:
+        o = flash_attn_func_v3(
+            q_f8, k_f8, v_f8,
+            q_descale=q_scale, k_descale=k_scale, v_descale=v_scale,
+            causal=is_causal, softmax_scale=sm_scale,
+        )[0].to(dtype)
+    except TypeError:
+        o = flash_attn_func_v3(
+            q_f8, k_f8, v_f8,
+            descale_q=q_scale, descale_k=k_scale, descale_v=v_scale,
+            causal=is_causal, softmax_scale=sm_scale,
+        )[0].to(dtype)
     
     if tensor_layout == "HND":
         o = o.transpose(1, 2)

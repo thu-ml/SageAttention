@@ -30,4 +30,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
   m.def("transpose_pad_permute_cuda", py::overload_cast<torch::Tensor, torch::Tensor, int>(&transpose_pad_permute_cuda), "transpose_pad_permute_cuda");
   m.def("scale_fuse_quant_cuda", py::overload_cast<torch::Tensor, torch::Tensor, torch::Tensor, int, float, int>(&scale_fuse_quant_cuda), "scale_fuse_quant_cuda");
   m.def("mean_scale_fuse_quant_cuda", py::overload_cast<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, int, float, int>(&mean_scale_fuse_quant_cuda), "mean_scale_fuse_quant_cuda");
+
+  m.def("mean_k_paged_cuda", &mean_k_paged_cuda, "mean_k_paged_cuda");
+  m.def("quant_k_paged_int8_cuda", &quant_k_paged_int8_cuda, "quant_k_paged_int8_cuda");
+  m.def("quant_v_paged_fp8_cuda", &quant_v_paged_fp8_cuda, "quant_v_paged_fp8_cuda");
 }

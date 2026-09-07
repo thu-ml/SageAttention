@@ -169,6 +169,163 @@ __device__ __forceinline__ void load_fp8_V_global_to_share(int8_t **lane_ptr, ui
   *lane_ptr -= (smem_iters_col * global_to_shared_copy_lines_per_warp_per_iter) * gmem_stride;
 }
 
+// Paged K load (predicate variant). Same per-lane work partition as
+// ``load_global_to_share``: each column-iteration loads ``CTA`` rows (tokens)
+// worth of int8 data into smem. The difference is that the gmem address of
+// every 16B chunk is resolved through ``block_table`` instead of a dense
+// pointer, so K never needs to be gathered into a dense buffer.
+//
+// K cache layout (vLLM): [num_blocks, block_size, num_kv_heads, head_dim].
+// ``base_idx`` is the lane's first row (token) within the CTA tile; rows
+// advance by ``global_to_shared_copy_lines_per_warp_per_iter`` per column-
+// iteration, matching the dense loader's gmem row step.
+template <uint32_t global_to_shared_line_lanes, uint32_t global_to_shared_copy_lines_per_warp_per_iter,
+          uint32_t smem_iters_row, uint32_t smem_iters_col, SwizzleMode swizzle_mode, uint32_t stride, uint32_t CTA>
+__device__ __forceinline__ void load_global_to_share_paged(int8_t **lane_ptr, uint32_t &smem_offset,
+                                                    const int8_t *paged_base,
+                                                    const int *block_table_row,
+                                                    const uint32_t block_size,
+                                                    const uint32_t page_elems_per_token,
+                                                    const uint32_t head_offset_bytes,
+                                                    const smem_t<swizzle_mode, stride> &smem,
+                                                    uint32_t base_idx, uint32_t max_len,
+                                                    const uint32_t lane_id)
+{
+  static_assert(global_to_shared_copy_lines_per_warp_per_iter * global_to_shared_line_lanes == WARP_SIZE);
+  constexpr uint32_t pack_size = 16; // int8 bytes per 128b chunk
+  const uint32_t col0 = (lane_id % global_to_shared_line_lanes) * pack_size;
+
+  uint32_t row = base_idx;
+#pragma unroll
+  for (uint32_t i = 0; i < smem_iters_col; i++)
+  {
+    uint32_t col = col0;
+#pragma unroll
+    for (uint32_t j = 0; j < smem_iters_row; j++)
+    {
+      const bool pred = row < max_len;
+      const int8_t *src_base = paged_base + head_offset_bytes + col;
+      cp_async::load_128b_paged<cp_async::PrefetchMode::kPrefetch>(
+          smem.base + smem_offset,
+          src_base, block_table_row, row, block_size,
+          page_elems_per_token, pred);
+      smem_offset = smem.advance_offset_by_column<global_to_shared_line_lanes>(smem_offset);
+      col += global_to_shared_line_lanes * pack_size;
+    }
+    smem_offset = smem.advance_offset_by_row<global_to_shared_copy_lines_per_warp_per_iter>(smem_offset - (smem_iters_row * global_to_shared_line_lanes));
+    row += global_to_shared_copy_lines_per_warp_per_iter;
+  }
+  smem_offset -= (smem_iters_col * global_to_shared_copy_lines_per_warp_per_iter * stride);
+}
+
+// Paged V load (optimized, sync).
+//
+// value_cache layout matches K: [num_blocks, block_size, H, D] in *logical*
+// token order. Dense SageAttention expects V in transposed+permuted
+// [B, H, D, S] order in smem. Instead of gathering 1 byte × 16 tokens from
+// gmem (very slow), we:
+//   1) cp.async 16B along D into a token-major stage (same as K), writing
+//      each logical token into its *permuted* stage row (fused.cu P map);
+//   2) wait; then copy stage → V smem (gather 16 tokens at fixed d).
+//
+// ``stage`` must be CTA × head_dim bytes of dynamic smem (linear, no swizzle).
+template <uint32_t global_to_shared_line_lanes, uint32_t global_to_shared_copy_lines_per_warp_per_iter,
+          uint32_t smem_iters_row, uint32_t smem_iters_col, SwizzleMode swizzle_mode, uint32_t stride, uint32_t CTA,
+          uint32_t head_dim, uint32_t num_warps>
+__device__ __forceinline__ void load_fp8_V_global_to_share_paged(uint32_t &smem_offset,
+                                                    const int8_t *paged_base,
+                                                    const int *block_table_row,
+                                                    const uint32_t block_size,
+                                                    const uint32_t page_elems_per_token,
+                                                    const uint32_t head_offset_bytes,
+                                                    const smem_t<swizzle_mode, stride> &smem,
+                                                    int8_t *stage,
+                                                    const uint32_t V_buf_base,
+                                                    const uint32_t max_len,
+                                                    const uint32_t lane_id,
+                                                    const uint32_t warp_id)
+{
+  static_assert(global_to_shared_copy_lines_per_warp_per_iter * global_to_shared_line_lanes == WARP_SIZE);
+  constexpr uint32_t pack_size = 16;
+  // fused.cu: 0,1,4,5,8,9,12,13,2,3,6,7,10,11,14,15
+  constexpr uint32_t P[16] = {0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15};
+
+  // ---- Phase A: K-like vector async load into permuted stage rows ----
+  constexpr uint32_t qk_line_lanes = (head_dim == 32) ? 2 : (head_dim == 64) ? 4 : 8;
+  constexpr uint32_t qk_copy_lines = WARP_SIZE / qk_line_lanes;
+  constexpr uint32_t qk_iters_row = head_dim / (qk_line_lanes * pack_size);
+  constexpr uint32_t qk_iters_col = CTA / (num_warps * qk_copy_lines);
+
+  {
+    const uint32_t row0 =
+        V_buf_base + CTA / num_warps * warp_id + lane_id / qk_line_lanes;
+    const uint32_t col0 = (lane_id % qk_line_lanes) * pack_size;
+    uint32_t row = row0;
+#pragma unroll
+    for (uint32_t i = 0; i < qk_iters_col; i++)
+    {
+      uint32_t col = col0;
+      const uint32_t local = row - V_buf_base;
+      const uint32_t dest_row = (local & ~15u) + P[local & 15u];
+      int8_t *dst_row = stage + static_cast<uint32_t>(dest_row * head_dim);
+#pragma unroll
+      for (uint32_t j = 0; j < qk_iters_row; j++)
+      {
+        const bool pred = row < max_len;
+        const int8_t *gmem_ptr = paged_base;
+        if (pred)
+        {
+          const uint32_t page_id = row / block_size;
+          const uint32_t offset = row % block_size;
+          const uint32_t block_id =
+              static_cast<uint32_t>(block_table_row[page_id]);
+          gmem_ptr = paged_base + head_offset_bytes + col +
+                     (static_cast<uint64_t>(block_id) * block_size + offset) *
+                         page_elems_per_token;
+        }
+        cp_async::pred_load_128b<cp_async::PrefetchMode::kPrefetch,
+                                 cp_async::SharedMemFillMode::kFillZero>(
+            dst_row + col, gmem_ptr, pred);
+        col += qk_line_lanes * pack_size;
+      }
+      row += qk_copy_lines;
+    }
+  }
+  cp_async::commit_group();
+  cp_async::wait_group<0>();
+  __syncthreads();
+
+  // ---- Phase B: stage[token][d] (buffer order) → V smem ----
+  const uint32_t d_row0 =
+      (head_dim / num_warps) * warp_id + lane_id / global_to_shared_line_lanes;
+  const uint32_t tok_chunk0 =
+      (lane_id % global_to_shared_line_lanes) * pack_size;
+
+  uint32_t d_row = d_row0;
+#pragma unroll
+  for (uint32_t i = 0; i < smem_iters_col; i++)
+  {
+    uint32_t tok_chunk = tok_chunk0;
+#pragma unroll
+    for (uint32_t j = 0; j < smem_iters_row; j++)
+    {
+      alignas(16) int8_t tmp[16];
+#pragma unroll
+      for (uint32_t t = 0; t < 16; t++)
+      {
+        tmp[t] = stage[(tok_chunk + t) * head_dim + d_row];
+      }
+      *reinterpret_cast<uint4 *>(smem.base + smem_offset) =
+          *reinterpret_cast<const uint4 *>(tmp);
+      smem_offset = smem.advance_offset_by_column<global_to_shared_line_lanes>(smem_offset);
+      tok_chunk += global_to_shared_line_lanes * pack_size;
+    }
+    smem_offset = smem.advance_offset_by_row<global_to_shared_copy_lines_per_warp_per_iter>(smem_offset - (smem_iters_row * global_to_shared_line_lanes));
+    d_row += global_to_shared_copy_lines_per_warp_per_iter;
+  }
+  smem_offset -= (smem_iters_col * global_to_shared_copy_lines_per_warp_per_iter * stride);
+}
+
 template <uint32_t num_warps_q, uint32_t num_warps_k, 
           uint32_t num_tiles_q, uint32_t num_tiles_k, uint32_t num_tiles_qk_inner, 
           SwizzleMode swizzle_mode, uint32_t stride, DataType DTypeQK>

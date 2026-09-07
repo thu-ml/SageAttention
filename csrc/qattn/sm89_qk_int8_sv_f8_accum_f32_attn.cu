@@ -152,7 +152,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn(torch::Tensor query,
             dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
             dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
 
-            kernel_func<<<grid, block, smem_max>>>(
+            // Launch on PyTorch's current stream so CUDA Graph capture works.
+            kernel_func<<<grid, block, smem_max, at::cuda::getCurrentCUDAStream()>>>(
               query.data_ptr<int8_t>(), 
               key.data_ptr<int8_t>(),
               reinterpret_cast<int8_t*>(value.data_ptr()),
@@ -169,7 +170,7 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn(torch::Tensor query,
               stride_bz_k, stride_seq_k, stride_h_k,
               stride_bz_v, stride_h_v, stride_d_v,
               stride_bz_o, stride_seq_o, stride_h_o,
-              sm_scale);
+              sm_scale, nullptr, nullptr, 0u, 0u);
           });
         });
       });

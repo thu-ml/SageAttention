@@ -196,6 +196,8 @@ if not SKIP_CUDA_BUILD:
                     "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_fuse_v_scale_attn.cu",
                     "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf.cu",
                     "csrc/qattn/sm89_qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf.cu",
+                    "csrc/qattn/sm89_qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf_seqlens.cu",
+                    "csrc/qattn/sm89_qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf_seqlens_paged.cu",
                 ],
                 extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
             )
@@ -217,7 +219,11 @@ if not SKIP_CUDA_BUILD:
     ext_modules.append(
         CUDAExtension(
             name="sageattention._fused",
-            sources=["csrc/fused/pybind.cpp", "csrc/fused/fused.cu"],
+            sources=[
+                "csrc/fused/pybind.cpp",
+                "csrc/fused/fused.cu",
+                "csrc/fused/fused_paged.cu",
+            ],
             extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
         )
     )

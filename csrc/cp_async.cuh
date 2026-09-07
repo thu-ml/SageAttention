@@ -138,4 +138,60 @@ __device__ __forceinline__ void pred_load_128b(T* smem_ptr, const T* gmem_ptr, b
 #endif
 }
 
+// Paged variant: address K/V directly from a vLLM-style paged KV cache.
+// Each lane still copies 16 bytes. The token index within the current CTA
+// tile is resolved through ``block_table`` so the kernel can read scattered
+// physical blocks instead of a pre-gathered dense buffer.
+//
+// ``smem_ptr`` / ``gmem_base`` are typed independently (smem is often
+// ``b128_t*``, gmem is ``int8_t*``), so we take ``void*`` / ``const void*``.
+template <PrefetchMode prefetch_mode>
+__device__ __forceinline__ void load_128b_paged(
+    void* smem_ptr, const void* gmem_base, const int* block_table_row,
+    const uint32_t token_idx, const uint32_t block_size,
+    const uint32_t page_elems_per_token, bool predicate) {
+  const int8_t* base = static_cast<const int8_t*>(gmem_base);
+#ifdef CP_ASYNC_ENABLED
+  const uint32_t page_id = token_idx / block_size;
+  const uint32_t offset = token_idx % block_size;
+  const uint32_t block_id =
+      static_cast<uint32_t>(block_table_row[page_id]);
+  const int8_t* gmem_ptr =
+      base +
+      (static_cast<uint64_t>(block_id) * block_size + offset) *
+          page_elems_per_token;
+  uint32_t smem_int_ptr =
+      static_cast<uint32_t>(__cvta_generic_to_shared(smem_ptr));
+  if constexpr (prefetch_mode == PrefetchMode::kPrefetch) {
+    asm volatile(
+        "{\n"
+        " .reg .pred p;\n"
+        " setp.ne.b32 p, %0, 0;\n"
+        " @p cp.async.cg.shared.global.L2::128B [%1], [%2], %3, %3;\n"
+        "}\n" ::"r"((int)predicate),
+        "r"(smem_int_ptr), "l"(gmem_ptr), "n"(16));
+  } else {
+    asm volatile(
+        "{\n"
+        " .reg .pred p;\n"
+        " setp.ne.b32 p, %0, 0;\n"
+        " @p cp.async.cg.shared.global [%1], [%2], %3, %3;\n"
+        "}\n" ::"r"((int)predicate),
+        "r"(smem_int_ptr), "l"(gmem_ptr), "n"(16));
+  }
+#else
+  if (predicate) {
+    const uint32_t page_id = token_idx / block_size;
+    const uint32_t offset = token_idx % block_size;
+    const uint32_t block_id =
+        static_cast<uint32_t>(block_table_row[page_id]);
+    const int8_t* gmem_ptr =
+        base +
+        (static_cast<uint64_t>(block_id) * block_size + offset) *
+            page_elems_per_token;
+    *((uint4*)smem_ptr) = *((const uint4*)gmem_ptr);
+  }
+#endif
+}
+
 } // namespace cp_async

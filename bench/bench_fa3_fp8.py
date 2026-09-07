@@ -1,5 +1,30 @@
 import torch
-from flash_attn.utils.benchmark import benchmark_forward
+import inspect
+try:
+    from flash_attn.utils.benchmark import benchmark_forward
+except ModuleNotFoundError:
+    import torch.utils.benchmark as torch_benchmark
+
+    def benchmark_forward(
+        fn, *inputs, repeats=10, desc="", verbose=True, amp=False, amp_dtype=torch.float16, **kwinputs
+    ):
+        if verbose:
+            print(desc, "- Forward pass")
+
+        def amp_wrapper(*inputs, **kwinputs):
+            with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=amp):
+                fn(*inputs, **kwinputs)
+
+        t = torch_benchmark.Timer(
+            stmt="fn_amp(*inputs, **kwinputs)",
+            globals={"fn_amp": amp_wrapper, "inputs": inputs, "kwinputs": kwinputs},
+            num_threads=torch.get_num_threads(),
+        )
+        m = t.timeit(repeats)
+        if verbose:
+            print(m)
+        return t, m
+
 from flash_attn_interface import flash_attn_func as flash_attn_func_v3
 
 import argparse
@@ -17,6 +42,27 @@ headdim = args.head_dim
 print(f"FlashAttention3-FP8 Benchmark")
 print(f"batch: {batch}, head: {head}, headdim: {headdim}")
 
+_fa3_param_names = set(inspect.signature(flash_attn_func_v3).parameters.keys())
+
+
+def run_fa3(q, k, v, is_causal, descale_q, descale_k, descale_v, headdim):
+    kwargs = {}
+    if "causal" in _fa3_param_names:
+        kwargs["causal"] = is_causal
+    if "softmax_scale" in _fa3_param_names:
+        kwargs["softmax_scale"] = 1 / headdim**0.5
+    # Current hopper API
+    if "q_descale" in _fa3_param_names:
+        kwargs["q_descale"] = descale_q
+        kwargs["k_descale"] = descale_k
+        kwargs["v_descale"] = descale_v
+    # Older API
+    elif "descale_q" in _fa3_param_names:
+        kwargs["descale_q"] = descale_q
+        kwargs["descale_k"] = descale_k
+        kwargs["descale_v"] = descale_v
+    return flash_attn_func_v3(q, k, v, **kwargs)
+
 is_causal = False
 print(f"is_causal: {is_causal}")
 for seq_len in {1024, 2048, 4096, 8192, 16384, 32768}:
@@ -24,12 +70,27 @@ for seq_len in {1024, 2048, 4096, 8192, 16384, 32768}:
     q = torch.randn(batch, seq_len, head, headdim, dtype=torch.float16, device="cuda").to(torch.float8_e4m3fn)
     k = torch.randn(batch, seq_len, head, headdim, dtype=torch.float16, device="cuda").to(torch.float8_e4m3fn)
     v = torch.randn(batch, seq_len, head, headdim, dtype=torch.float16, device="cuda").to(torch.float8_e4m3fn)
-    descale_q = torch.tensor([1.0], dtype=torch.float32, device="cuda")
-    descale_k = torch.tensor([1.0], dtype=torch.float32, device="cuda")
-    descale_v = torch.tensor([1.0], dtype=torch.float32, device="cuda")
-    for i in range(5): flash_attn_func_v3(q, k, v, 1 / headdim**0.5, causal=is_causal, descale_q=descale_q, descale_k=descale_k, descale_v=descale_v)
+    # FA3 requires descale shape [batch, nheads]
+    descale_q = torch.ones(batch, head, dtype=torch.float32, device="cuda")
+    descale_k = torch.ones(batch, head, dtype=torch.float32, device="cuda")
+    descale_v = torch.ones(batch, head, dtype=torch.float32, device="cuda")
+    for i in range(5):
+        run_fa3(q, k, v, is_causal, descale_q, descale_k, descale_v, headdim)
     torch.cuda.synchronize()
-    _, time = benchmark_forward(flash_attn_func_v3, q, k, v, 1 / headdim**0.5, causal=is_causal,descale_q=descale_q, descale_k=descale_k, descale_v=descale_v, repeats=100, verbose=False, desc='Triton')
+    _, time = benchmark_forward(
+        run_fa3,
+        q,
+        k,
+        v,
+        is_causal,
+        descale_q,
+        descale_k,
+        descale_v,
+        headdim,
+        repeats=100,
+        verbose=False,
+        desc="Triton",
+    )
     print(f'{seq_len} flops:{flops/time.mean*1e-12}')
 
 is_causal = True
@@ -39,10 +100,24 @@ for seq_len in {1024, 2048, 4096, 8192, 16384, 32768}:
     q = torch.randn(batch, seq_len, head, headdim, dtype=torch.float16, device="cuda").to(torch.float8_e4m3fn)
     k = torch.randn(batch, seq_len, head, headdim, dtype=torch.float16, device="cuda").to(torch.float8_e4m3fn)
     v = torch.randn(batch, seq_len, head, headdim, dtype=torch.float16, device="cuda").to(torch.float8_e4m3fn)
-    descale_q = torch.tensor([1.0], dtype=torch.float32, device="cuda")
-    descale_k = torch.tensor([1.0], dtype=torch.float32, device="cuda")
-    descale_v = torch.tensor([1.0], dtype=torch.float32, device="cuda")
-    for i in range(5): flash_attn_func_v3(q, k, v, 1 / headdim**0.5, causal=is_causal, descale_q=descale_q, descale_k=descale_k, descale_v=descale_v)
+    descale_q = torch.ones(batch, head, dtype=torch.float32, device="cuda")
+    descale_k = torch.ones(batch, head, dtype=torch.float32, device="cuda")
+    descale_v = torch.ones(batch, head, dtype=torch.float32, device="cuda")
+    for i in range(5):
+        run_fa3(q, k, v, is_causal, descale_q, descale_k, descale_v, headdim)
     torch.cuda.synchronize()
-    _, time = benchmark_forward(flash_attn_func_v3, q, k, v, 1 / headdim**0.5, causal=is_causal,descale_q=descale_q, descale_k=descale_k, descale_v=descale_v, repeats=100, verbose=False, desc='Triton')
+    _, time = benchmark_forward(
+        run_fa3,
+        q,
+        k,
+        v,
+        is_causal,
+        descale_q,
+        descale_k,
+        descale_v,
+        headdim,
+        repeats=100,
+        verbose=False,
+        desc="Triton",
+    )
     print(f'{seq_len} flops:{flops/time.mean*1e-12}')

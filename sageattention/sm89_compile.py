@@ -66,6 +66,28 @@ def qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf(
     )
 
 
+@torch.library.custom_op("sageattention_sm89::qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf_seqlens", mutates_args=("output",), device_types="cuda")
+def qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf_seqlens(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    output: torch.Tensor,
+    query_scale: torch.Tensor,
+    key_scale: torch.Tensor,
+    value_scale: torch.Tensor,
+    seq_lens: torch.Tensor,
+    tensor_layout: int,
+    is_causal: int,
+    qk_quant_gran: int,
+    sm_scale: float,
+    return_lse: int,
+) -> torch.Tensor:
+    return _qattn_sm89.qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf_seqlens(
+        query, key, value, output, query_scale, key_scale, value_scale,
+        seq_lens, tensor_layout, is_causal, qk_quant_gran, sm_scale, return_lse
+    )
+
+
 def sm89_qk_with_key_value(
     query: torch.Tensor, 
     key: torch.Tensor, 
@@ -99,6 +121,89 @@ def sm89_qk_with_key_value(
 torch.library.register_fake("sageattention_sm89::qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf")(sm89_qk_with_key_value)
 torch.library.register_fake("sageattention_sm89::qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf")(sm89_qk_with_key_value)
 torch.library.register_fake("sageattention_sm89::qk_int8_sv_f8_accum_f32_fuse_v_scale_attn")(sm89_qk_with_key_value)
+
+
+@torch.library.register_fake("sageattention_sm89::qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf_seqlens")
+def sm89_qk_with_key_value_seqlens(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    output: torch.Tensor,
+    query_scale: torch.Tensor,
+    key_scale: torch.Tensor,
+    value_scale: torch.Tensor,
+    seq_lens: torch.Tensor,
+    tensor_layout: int,
+    is_causal: int,
+    qk_quant_gran: int,
+    sm_scale: float,
+    return_lse: int,
+) -> torch.Tensor:
+    return sm89_qk_with_key_value(
+        query, key, value, output, query_scale, key_scale, value_scale,
+        tensor_layout, is_causal, qk_quant_gran, sm_scale, return_lse
+    )
+
+
+@torch.library.custom_op(
+    "sageattention_sm89::qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf_seqlens_paged",
+    mutates_args=("output",),
+    device_types="cuda",
+)
+def qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf_seqlens_paged(
+    query: torch.Tensor,
+    key_cache: torch.Tensor,
+    value_cache: torch.Tensor,
+    output: torch.Tensor,
+    query_scale: torch.Tensor,
+    key_scale: torch.Tensor,
+    value_scale: torch.Tensor,
+    seq_lens: torch.Tensor,
+    block_table: torch.Tensor,
+    block_size: int,
+    kv_len: int,
+    is_causal: int,
+    qk_quant_gran: int,
+    sm_scale: float,
+    return_lse: int,
+) -> torch.Tensor:
+    return _qattn_sm89.qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf_seqlens_paged(
+        query, key_cache, value_cache, output, query_scale, key_scale, value_scale,
+        seq_lens, block_table, block_size, kv_len, is_causal, qk_quant_gran,
+        sm_scale, return_lse
+    )
+
+
+@torch.library.register_fake(
+    "sageattention_sm89::qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf_seqlens_paged"
+)
+def sm89_qk_with_key_value_seqlens_paged(
+    query: torch.Tensor,
+    key_cache: torch.Tensor,
+    value_cache: torch.Tensor,
+    output: torch.Tensor,
+    query_scale: torch.Tensor,
+    key_scale: torch.Tensor,
+    value_scale: torch.Tensor,
+    seq_lens: torch.Tensor,
+    block_table: torch.Tensor,
+    block_size: int,
+    kv_len: int,
+    is_causal: int,
+    qk_quant_gran: int,
+    sm_scale: float,
+    return_lse: int,
+) -> torch.Tensor:
+    batch_size = query.size(0)
+    num_qo_heads = query.size(1)
+    qo_len = query.size(2)
+    if return_lse:
+        return torch.empty(
+            (batch_size, num_qo_heads, qo_len),
+            dtype=torch.float32,
+            device=query.device,
+        )
+    return torch.empty((0))
 
 
 @torch.library.custom_op("sageattention_sm89::qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn", mutates_args=("output",), device_types="cuda")
