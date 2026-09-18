@@ -450,6 +450,12 @@ struct CollectiveMainloopFwd {
 
         auto [m_block, bidh, bidb] = work_tile_info.get_block_coord(scheduler_params);
 
+        // GQA/MQA: the tile is indexed by the query head; K/V/SFK/SFV are indexed
+        // by the KV head that group of query heads attends with. For MHA
+        // (h == h_k) the group size is 1 and bidh_k == bidh.
+        int const head_group_size = get<2>(mainloop_params.shape_Q) / get<2>(mainloop_params.shape_K);
+        int const bidh_k = bidh / head_group_size;
+
         int n_block_max = get_n_block_max(mainloop_params, m_block);
 
         Tensor sQ = make_tensor(make_smem_ptr(shared_storage.smem_q.begin()), SmemLayoutQ{});
@@ -471,8 +477,8 @@ struct CollectiveMainloopFwd {
         constexpr uint32_t cluster_shape_x = get<0>(ClusterShape());
         uint2 cluster_local_block_id = {block_rank_in_cluster % cluster_shape_x, block_rank_in_cluster / cluster_shape_x};
         Tensor gQ = local_tile(mQ(_, _, bidh, bidb), select<0, 2>(TileShape_MNK{}), make_coord(m_block, _0{}));  // (M, K)
-        Tensor gK = local_tile(mK(_, _, bidh, bidb), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}));  // (N, K, _)
-        Tensor gVt = local_tile(mVt(_, _, bidh, bidb), make_shape(shape<2>(TileShape_MNK{}), shape<1>(TileShape_MNK{})), make_coord(_0{}, _));  // (N, K, _)
+        Tensor gK = local_tile(mK(_, _, bidh_k, bidb), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}));  // (N, K, _)
+        Tensor gVt = local_tile(mVt(_, _, bidh_k, bidb), make_shape(shape<2>(TileShape_MNK{}), shape<1>(TileShape_MNK{})), make_coord(_0{}, _));  // (N, K, _)
         Tensor gDS = [&] {
                         if constexpr (BlockMean) {
                             return local_tile(mDS(_, _, bidh, bidb), select<0, 1>(TileShape_MNK{}), make_coord(m_block, _));
@@ -481,8 +487,8 @@ struct CollectiveMainloopFwd {
                         }
                     }();
         Tensor gSFQ = local_tile(mSFQ(_, _, bidh, bidb), select<0, 2>(TileShape_MNK{}), make_coord(m_block, _0{}));
-        Tensor gSFK = local_tile(mSFK(_, _, bidh, bidb), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}));
-        Tensor gSFVt = local_tile(mSFVt(_, _, bidh, bidb), make_shape(shape<2>(TileShape_MNK{}), shape<1>(TileShape_MNK{})), make_coord(_0{}, _));
+        Tensor gSFK = local_tile(mSFK(_, _, bidh_k, bidb), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}));
+        Tensor gSFVt = local_tile(mSFVt(_, _, bidh_k, bidb), make_shape(shape<2>(TileShape_MNK{}), shape<1>(TileShape_MNK{})), make_coord(_0{}, _));
         auto block_tma_q = mainloop_params.tma_load_Q.get_slice(_0{});
         Tensor tQgQ = block_tma_q.partition_S(gQ);
         Tensor tQsQ = block_tma_q.partition_D(sQ);

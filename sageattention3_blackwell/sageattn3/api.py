@@ -81,14 +81,33 @@ def preprocess_qkv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, per_block_
             return x.contiguous()
         return F.pad(x, (0, 0, 0, pad_len), value=0).contiguous()
     
-    k -= k.mean(dim=-2, keepdim=True)  
+    # Do not mutate the caller's K tensor: the in-place subtraction silently
+    # corrupts K for any caller that reuses or shares it across grouped heads.
+    k = k - k.mean(dim=-2, keepdim=True)
     q, k, v = map(lambda x: pad_128(x), [q, k, v])
     if per_block_mean:
         q, qm = triton_group_mean(q)
     else:
         qm = q.mean(dim=-2, keepdim=True)
         q = q - qm
-    delta_s = torch.matmul(qm, k.transpose(-2, -1)).to(torch.float32).contiguous()
+    num_q_heads = q.size(1)
+    num_kv_heads = k.size(1)
+    if num_q_heads % num_kv_heads:
+        raise ValueError("the number of Q heads must be divisible by KV heads")
+    if num_q_heads == num_kv_heads:
+        delta_s = torch.matmul(qm, k.transpose(-2, -1))
+    else:
+        # GQA: compute the mean correction with grouped indexing instead of
+        # materializing K num_q_heads / num_kv_heads times.
+        q_per_kv = num_q_heads // num_kv_heads
+        grouped_qm = qm.reshape(
+            qm.size(0), num_kv_heads, q_per_kv, qm.size(-2), qm.size(-1)
+        )
+        grouped_kt = k.transpose(-2, -1).unsqueeze(2)
+        delta_s = torch.matmul(grouped_qm, grouped_kt).reshape(
+            qm.size(0), num_q_heads, qm.size(-2), k.size(-2)
+        )
+    delta_s = delta_s.to(torch.float32).contiguous()
     return q, k, v, delta_s
 
 def scale_and_quant_fp4(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -120,12 +139,15 @@ def blockscaled_fp4_attn(qlist: Tuple,
                          vlist: Tuple,
                          delta_s: torch.Tensor,
                          KL: int,
-                         is_causal: bool = False, 
+                         is_causal: bool = False,
                          per_block_mean: bool = True,
-                         is_bf16: bool = True
+                         is_bf16: bool = True,
+                         softmax_scale: float = None,
+                         num_sms: int = 0,
                         ):
-    softmax_scale = (qlist[0].shape[-1] * 2) ** (-0.5)
-    return fp4attn_cuda.fwd(qlist[0], klist[0], vlist[0], qlist[1], klist[1], vlist[1], delta_s, KL, None, softmax_scale, is_causal, per_block_mean, is_bf16)
+    if softmax_scale is None:
+        softmax_scale = (qlist[0].shape[-1] * 2) ** (-0.5)
+    return fp4attn_cuda.fwd(qlist[0], klist[0], vlist[0], qlist[1], klist[1], vlist[1], delta_s, KL, None, softmax_scale, is_causal, per_block_mean, is_bf16, num_sms)
 
 
 def sageattn3_blackwell(q, k, v, attn_mask = None, is_causal = False, per_block_mean = True, **kwargs):
@@ -134,6 +156,21 @@ def sageattn3_blackwell(q, k, v, attn_mask = None, is_causal = False, per_block_
         return sdpa(q, k, v, is_causal = is_causal)
     QL = q.size(2)
     KL = k.size(2)
+    head_dim = q.size(-1)
+    if k.size(-1) != head_dim or v.size(-1) != head_dim:
+        raise ValueError("Q, K, and V must have the same head dimension")
+    if head_dim not in (64, 128):
+        # The kernel only compiles head_dim 64 and 128; pad smaller head dims
+        # (the zero tail is transparent for the block-scaled FP4 quantization
+        # and the dot products) and slice the output back.
+        if head_dim < 64:
+            padded_head_dim = 64
+        elif head_dim < 128:
+            padded_head_dim = 128
+        else:
+            raise ValueError(f"Unsupported head dimension: {head_dim}")
+        pad = padded_head_dim - head_dim
+        q, k, v = (F.pad(x, (0, pad)) for x in (q, k, v))
     is_bf16 = q.dtype == torch.bfloat16
     q, k, v, delta_s = preprocess_qkv(q, k, v, per_block_mean)
     qlist_from_cuda = scale_and_quant_fp4(q)
@@ -141,12 +178,16 @@ def sageattn3_blackwell(q, k, v, attn_mask = None, is_causal = False, per_block_
     vlist_from_cuda = scale_and_quant_fp4_transpose(v)
     o_fp4 = blockscaled_fp4_attn(
     qlist_from_cuda,
-    klist_from_cuda, 
+    klist_from_cuda,
     vlist_from_cuda,
     delta_s,
     KL,
     is_causal,
     per_block_mean,
-    is_bf16
-    )[0][:, :, :QL, :].contiguous()
+    is_bf16,
+    kwargs.get("sm_scale", head_dim ** (-0.5)),
+    # num_sms <= 0 lets the kernel size its persistent grid from the
+    # current device's SM count instead of a hardcoded value.
+    kwargs.get("num_sms", 0),
+    )[0][:, :, :QL, :head_dim].contiguous()
     return o_fp4

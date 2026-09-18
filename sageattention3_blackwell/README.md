@@ -42,6 +42,11 @@ attn_output = sageattn3_blackwell(q, k, v, is_causal=False)
 ```
 + `q, k, v` are **FP16/BF16** dtype with the shape `(batch_size, head_num, seq_len, head_dim)` 
 + `is_causal` determines the use of a causal mask.
++ GQA/MQA is supported: `k` and `v` may use fewer heads than `q` as long as `q.head_num` is divisible by `kv.head_num`.
++ Non-standard head dimensions below 128 (e.g. 96 or 120) are transparently padded to the next supported kernel width (64/128); the output is sliced back to the original head dimension.
++ Optional keyword arguments:
+  + `sm_scale`: softmax scale (defaults to `head_dim ** -0.5`).
+  + `num_sms`: persistent-scheduler grid size. `num_sms=0` (default) derives the grid from the current device's SM count; a positive value pins it explicitly.
 
 ## Performance
 ### Speed of Kernels

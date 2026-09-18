@@ -30,7 +30,7 @@
 
 
 template<typename Kernel_traits, bool Is_causal>
-void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
+void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream, int num_sms) {
     using Element = typename Kernel_traits::Element;
     using ElementSF = typename Kernel_traits::ElementSF;
     using ElementOut = typename Kernel_traits::ElementOut;
@@ -59,7 +59,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
             static_cast<ElementSF const*>(params.sfv_ptr),
             {params.d, params.seqlen_k, params.h_k, params.b},  // shape_SFVt
             static_cast<float const*>(params.delta_s_ptr),
-            {params.seqlen_s, params.seqlen_k, params.h_k, params.b},
+            {params.seqlen_s, params.seqlen_k, params.h, params.b},
             {params.ds_row_stride, _1{}, params.ds_head_stride, params.ds_batch_stride},
             params.scale_softmax_log2
         });
@@ -86,7 +86,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
     static constexpr int ctaSize = Kernel_traits::kNWarps * 32;
     params.m_block_divmod = cutlass::FastDivmod(num_blocks_m);
     params.total_blocks = num_blocks_m * params.h * params.b;
-    dim3 grid_dims = Scheduler::get_grid_dim(scheduler_args, 170);
+    dim3 grid_dims = Scheduler::get_grid_dim(scheduler_args, num_sms);
     dim3 block_dims(ctaSize);
     dim3 cluster_dims(size<0>(ClusterShape{}), size<1>(ClusterShape{}), size<2>(ClusterShape{}));
     cutlass::ClusterLaunchParams launch_params{grid_dims, block_dims, cluster_dims, smem_size, stream};
@@ -97,14 +97,14 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
 
 
 template<typename T, int Headdim, typename O = cutlass::bfloat16_t>
-void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream) {
+void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream, int num_sms) {
     BOOL_SWITCH(params.is_causal, Is_causal, [&] {
         BOOL_SWITCH(params.per_block_mean, per_block, [&] {
             if constexpr (Headdim == 64 || Headdim == 128) {
                 run_flash_fwd<
                     Flash_fwd_kernel_traits<Headdim, 128, 128, 3, 1, per_block, T, O>,
                     Is_causal
-                >(params, stream);
+                >(params, stream, num_sms);
             } else {
                 static_assert(Headdim == 64 || Headdim == 128, "Unsupported Headdim");
             }

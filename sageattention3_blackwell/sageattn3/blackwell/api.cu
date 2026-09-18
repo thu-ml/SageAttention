@@ -185,18 +185,18 @@ void set_params_fprop(Flash_fwd_params &params,
 }
 
 template<bool IsBF16>
-void run_mha_fwd_dispatch_dtype(Flash_fwd_params &params, cudaStream_t stream) {
+void run_mha_fwd_dispatch_dtype(Flash_fwd_params &params, cudaStream_t stream, int num_sms) {
     using OType = std::conditional_t<IsBF16, cutlass::bfloat16_t, cutlass::half_t>;
     if (params.d == 64) {
-        run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 64, OType>(params, stream);
+        run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 64, OType>(params, stream, num_sms);
     } else if (params.d == 128) {
-        run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 128, OType>(params, stream);
+        run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 128, OType>(params, stream, num_sms);
     }
 }
 
-void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split_kernel = false) {
+void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split_kernel = false, int num_sms = 0) {
     BOOL_SWITCH(params.is_bf16, IsBF16, ([&] {
-        run_mha_fwd_dispatch_dtype<IsBF16>(params, stream);
+        run_mha_fwd_dispatch_dtype<IsBF16>(params, stream, num_sms);
     }));
 }
 
@@ -211,9 +211,10 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
         int unpadded_k,
         c10::optional<at::Tensor> &out_,             // batch_size x seqlen_q x num_heads x head_size
         const float softmax_scale,
-        bool is_causal, 
+        bool is_causal,
         bool per_block_mean,
-        bool is_bf16
+        bool is_bf16,
+        int64_t num_sms = 0
     ) {
 
     auto dprops = at::cuda::getCurrentDeviceProperties();
@@ -255,7 +256,6 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
     TORCH_CHECK(batch_size > 0, "batch size must be postive");
     TORCH_CHECK(unpacked_head_size <= 256, "FlashAttention forward only supports head dimension at most 256");
     TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide number of heads in query");
-    TORCH_CHECK(num_heads == num_heads_k, "We do not support MQA/GQA yet");
 
     TORCH_CHECK(unpacked_head_size == 64 || unpacked_head_size == 128 || unpacked_head_size == 256, "Only support head size 64, 128, and 256 for now");
 
@@ -313,7 +313,10 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
 
     if (seqlen_k > 0) {
         auto stream = at::cuda::getCurrentCUDAStream().stream();
-        run_mha_fwd(params, stream);
+        // The persistent scheduler grid should cover the device's SMs; num_sms <= 0
+        // selects the current device's SM count, > 0 pins an explicit grid size.
+        int grid_sms = num_sms > 0 ? static_cast<int>(num_sms) : dprops->multiProcessorCount;
+        run_mha_fwd(params, stream, /*force_split_kernel=*/false, grid_sms);
     } else {
         // If seqlen_k == 0, then we have an empty tensor. We need to set the output to 0.
         out.zero_();
@@ -337,5 +340,11 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.doc() = "FlashAttention";
-    m.def("fwd", &mha_fwd, "Forward pass");
+    m.def("fwd", &mha_fwd, "Forward pass",
+          py::arg("q"), py::arg("k"), py::arg("v"),
+          py::arg("sfq"), py::arg("sfk"), py::arg("sfv"),
+          py::arg("delta_s"), py::arg("unpadded_k"), py::arg("out"),
+          py::arg("softmax_scale"), py::arg("is_causal"),
+          py::arg("per_block_mean"), py::arg("is_bf16"),
+          py::arg("num_sms") = 0);
 }
