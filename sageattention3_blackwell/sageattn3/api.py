@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 """
+import warnings
 import torch
 import triton
 import triton.language as tl
@@ -129,6 +130,9 @@ def blockscaled_fp4_attn(qlist: Tuple,
 
 
 def sageattn3_blackwell(q, k, v, attn_mask = None, is_causal = False, per_block_mean = True, **kwargs):
+    if attn_mask is not None:
+        warnings.warn("sageattn3_blackwell does not support attn_mask, falling back to SDPA")
+        return sdpa(q, k, v, attn_mask = attn_mask, is_causal = is_causal)
     if q.size(-1) >= 256:
         print(f"Unsupported Headdim {q.size(-1)}")
         return sdpa(q, k, v, is_causal = is_causal)
