@@ -178,6 +178,7 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
         for (auto work_tile_info = scheduler.get_initial_work(); work_tile_info.is_valid(scheduler_params); work_tile_info = scheduler.get_next_work(scheduler_params, work_tile_info)) {
             // Attention output (GEMM-II) accumulator.
             Tensor tOrO = partition_fragment_C(tiled_mma_pv, select<0, 2>(TileShape_MNK{}));
+            clear(tOrO);
             // flash::Softmax<2 * (2 * kBlockM / NumMmaThreads)> softmax;
             flash::SoftmaxFused<2 * (2 * kBlockM / NumMmaThreads)> softmax_fused;
             auto block_coord = work_tile_info.get_block_coord(scheduler_params);
