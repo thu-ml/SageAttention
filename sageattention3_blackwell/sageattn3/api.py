@@ -144,13 +144,8 @@ def sageattn3_blackwell(q, k, v, attn_mask = None, is_causal = False, per_block_
     QL = q.size(2)
     KL = k.size(2)
     is_bf16 = q.dtype == torch.bfloat16
-    # GQA: kernel asserts num_heads == num_heads_k (api.cu:260); expand kv heads to MHA.
-    # v1 correctness path; true in-kernel GQA (kv-head mapping in the scheduler) is a
-    # bandwidth optimization for later — K/V TMA loads grow G× here.
-    _g = q.size(1) // k.size(1)
-    if _g > 1:
-        k = k.repeat_interleave(_g, dim=1)
-        v = v.repeat_interleave(_g, dim=1)
+    # GQA is native in the kernel (kv-group head mapping in the mainloop load);
+    # only delta_s needs the per-q-head expansion (cheap: qm is tiny).
     q, k, v, delta_s = preprocess_qkv(q, k, v, per_block_mean)
     qlist_from_cuda = scale_and_quant_fp4(q)
     klist_from_cuda = scale_and_quant_fp4_permute(k)
