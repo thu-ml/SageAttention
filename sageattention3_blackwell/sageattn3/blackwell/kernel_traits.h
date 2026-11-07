@@ -189,9 +189,22 @@ struct Flash_fwd_kernel_traits {
     using SmemLayoutAtomO = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, ElementOut,
         decltype(cute::get<0>(TileShape_MNK{})), decltype(cute::get<2>(TileShape_MNK{}))>());
     using SmemLayoutO = decltype(tile_to_shape(SmemLayoutAtomO{}, select<0, 2>(TileShape_MNK{}), Step<_1, _2>{}));
+    // head_dim 256 epilogue: on sm_120/121 (99KB opt-in smem/block) the output tile
+    // (kBlockM * 256 * 2B = 64KB at kBlockM=128) does not fit next to the K/V stages,
+    // so consumers store the accumulator straight to gmem (FA2-style make_tiled_copy_C)
+    // instead of the smem-staged TMA epilogue. sm_100 (227KB) keeps the stock epilogue.
+    // Defined per-arch in setup.py; hd64/128 always use the stock epilogue.
+#ifdef SAGE3_HD256_DIRECT_STORE
+    static constexpr bool kUseDirectStoreO = (kHeadDim == 256);
+#else
+    static constexpr bool kUseDirectStoreO = false;
+#endif
+    using SmemLayoutOStorage = std::conditional_t<kUseDirectStoreO,
+        Layout<Shape<_1>, Stride<_0>>,
+        SmemLayoutO>;
     using SharedStorage = SharedStorageQKVOwithSF<kStages, EpiStages, Element, ElementSF, ElementOut,
-        SmemLayoutQ, SmemLayoutK, SmemLayoutV, SmemLayoutDS, 
-        SmemLayoutO, SmemLayoutSFQ, SmemLayoutSFK, SmemLayoutSFVt>;
+        SmemLayoutQ, SmemLayoutK, SmemLayoutV, SmemLayoutDS,
+        SmemLayoutOStorage, SmemLayoutSFQ, SmemLayoutSFK, SmemLayoutSFVt>;
     using MainloopPipeline = typename cutlass::PipelineTmaAsync<kStages>;
     using PipelineState = typename cutlass::PipelineState<kStages>;
     using MainloopPipelineQ = cutlass::PipelineTmaAsync<1>;

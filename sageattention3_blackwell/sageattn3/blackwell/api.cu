@@ -191,6 +191,8 @@ void run_mha_fwd_dispatch_dtype(Flash_fwd_params &params, cudaStream_t stream) {
         run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 64, OType>(params, stream);
     } else if (params.d == 128) {
         run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 128, OType>(params, stream);
+    } else if (params.d == 256) {
+        run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 256, OType>(params, stream);
     }
 }
 
