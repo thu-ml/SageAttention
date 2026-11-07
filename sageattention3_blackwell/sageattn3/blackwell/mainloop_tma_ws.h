@@ -858,7 +858,7 @@ struct CollectiveMainloopFwd {
             }
             pipeline_v.consumer_release(smem_pipe_read_v);
             ++smem_pipe_read_v;
-            if (masking_step > 0) { softmax_fused.rescale_o(tOrO_store, tOrO); }
+            softmax_fused.rescale_o(tOrO_store, tOrO);
         }
 
         #pragma unroll 1
