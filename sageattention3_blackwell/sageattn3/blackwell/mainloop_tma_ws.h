@@ -732,15 +732,23 @@ struct CollectiveMainloopFwd {
         auto col_limit_causal = [&](int row, int n_block) {
             return row + 1 + seqlen_k - n_block * kBlockN - seqlen_q + m_block * kBlockM;
         };
+        // K/V are stored in the 32-token interleaved order the blockscaled MMA
+        // expects (per 32-token group: [0,1,8,9,16,17,24,25, 2,3,10,11,18,19,26,27,
+        // 4,5,12,13,20,21,28,29, 6,7,14,15,22,23,30,31]). The score fragment's
+        // column j is therefore token perm(j), not token j — mask by token index.
+        auto frag_to_token = [](int col) {
+            int j32 = col & 31;
+            return (col & ~31) + 2 * (j32 >> 3) + 8 * ((j32 >> 1) & 3) + (col & 1);
+        };
         {
             Tensor cS = cute::make_identity_tensor(select<0, 1>(TileShape_MNK{}));
             Tensor tScS = thread_mma_qk.partition_C(cS);
             CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < size(tSrS); ++i) {
                 if constexpr (!Is_causal) {  // Just masking based on col
-                    if (int(get<1>(tScS(i))) >= int(unpadded_seqlen_k - n_block * kBlockN)) { tSrS(i) = -INFINITY; }
+                    if (frag_to_token(int(get<1>(tScS(i)))) >= int(unpadded_seqlen_k - n_block * kBlockN)) { tSrS(i) = -INFINITY; }
                 } else { 
-                    if (int(get<1>(tScS(i))) >= std::min(seqlen_k - n_block * kBlockN,
+                    if (frag_to_token(int(get<1>(tScS(i)))) >= std::min(seqlen_k - n_block * kBlockN,
                                                         col_limit_causal(int(get<0>(tScS(i))), n_block))) {
                         tSrS(i) = -INFINITY;
                     }
@@ -838,7 +846,7 @@ struct CollectiveMainloopFwd {
             Tensor tScS = thread_mma_qk.partition_C(cS);
             #pragma unroll
             for (int i = 0; i < size(tSrS); ++i) {
-                if (int(get<1>(tScS(i))) >= col_limit_causal(int(get<0>(tScS(i))), n_block - 1)) {
+                if (frag_to_token(int(get<1>(tScS(i)))) >= col_limit_causal(int(get<0>(tScS(i))), n_block - 1)) {
                     tSrS(i) = -INFINITY;
                 }
             }
