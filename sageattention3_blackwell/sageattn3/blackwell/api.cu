@@ -191,6 +191,8 @@ void run_mha_fwd_dispatch_dtype(Flash_fwd_params &params, cudaStream_t stream) {
         run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 64, OType>(params, stream);
     } else if (params.d == 128) {
         run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 128, OType>(params, stream);
+    } else if (params.d == 256) {
+        run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 256, OType>(params, stream);
     }
 }
 
@@ -255,7 +257,6 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
     TORCH_CHECK(batch_size > 0, "batch size must be postive");
     TORCH_CHECK(unpacked_head_size <= 256, "FlashAttention forward only supports head dimension at most 256");
     TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide number of heads in query");
-    TORCH_CHECK(num_heads == num_heads_k, "We do not support MQA/GQA yet");
 
     TORCH_CHECK(unpacked_head_size == 64 || unpacked_head_size == 128 || unpacked_head_size == 256, "Only support head size 64, 128, and 256 for now");
 

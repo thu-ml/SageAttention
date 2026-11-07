@@ -59,7 +59,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
             static_cast<ElementSF const*>(params.sfv_ptr),
             {params.d, params.seqlen_k, params.h_k, params.b},  // shape_SFVt
             static_cast<float const*>(params.delta_s_ptr),
-            {params.seqlen_s, params.seqlen_k, params.h_k, params.b},
+            {params.seqlen_s, params.seqlen_k, params.h, params.b},
             {params.ds_row_stride, _1{}, params.ds_head_stride, params.ds_batch_stride},
             params.scale_softmax_log2
         });
@@ -105,8 +105,26 @@ void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream) {
                     Flash_fwd_kernel_traits<Headdim, 128, 128, 3, 1, per_block, T, O>,
                     Is_causal
                 >(params, stream);
+            } else if constexpr (Headdim == 256) {
+#ifdef SAGE3_HD256_DIRECT_STORE
+                // sm_120/121 (99KB opt-in smem/block): the output tile does not fit
+                // next to the K/V stages, so the epilogue stores accum -> gmem directly
+                // (no smem_o) and <128,128,2> fits at ~93.5KB
+                // (q 16KB + k 2x16KB + v 2x16KB + SF ~10KB + ds/pipes ~3KB).
+                run_flash_fwd<
+                    Flash_fwd_kernel_traits<Headdim, 128, 128, 2, 1, per_block, T, O>,
+                    Is_causal
+                >(params, stream);
+#else
+                // sm_100 (227KB opt-in smem/block): stock smem-staged TMA epilogue,
+                // same block geometry as the head_dim 128 config (~188KB incl. smem_o).
+                run_flash_fwd<
+                    Flash_fwd_kernel_traits<Headdim, 128, 128, 3, 1, per_block, T, O>,
+                    Is_causal
+                >(params, stream);
+#endif
             } else {
-                static_assert(Headdim == 64 || Headdim == 128, "Unsupported Headdim");
+                static_assert(Headdim == 64 || Headdim == 128 || Headdim == 256, "Unsupported Headdim");
             }
         });
     });

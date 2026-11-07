@@ -81,14 +81,23 @@ def preprocess_qkv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, per_block_
             return x.contiguous()
         return F.pad(x, (0, 0, 0, pad_len), value=0).contiguous()
     
-    k -= k.mean(dim=-2, keepdim=True)  
+    k -= k.mean(dim=-2, keepdim=True)
     q, k, v = map(lambda x: pad_128(x), [q, k, v])
     if per_block_mean:
         q, qm = triton_group_mean(q)
     else:
         qm = q.mean(dim=-2, keepdim=True)
         q = q - qm
-    delta_s = torch.matmul(qm, k.transpose(-2, -1)).to(torch.float32).contiguous()
+    # GQA: delta_s is per q-head (q head h attends kv head h // G); expand kv heads only
+    # for this correction term — the kernel itself consumes unexpanded k/v (num_heads_k).
+    _g = q.shape[1] // k.shape[1]
+    k_for_ds = k.repeat_interleave(_g, dim=1) if _g > 1 else k
+    delta_s = torch.matmul(qm, k_for_ds.transpose(-2, -1)).to(torch.float32).contiguous()
+    # DS row count must equal seqlen_q / kBlockM (kernel tiles delta_s by kBlockM and
+    # indexes it by m_block — see mainloop_tma_ws.h). triton_group_mean GROUP_SIZE=128
+    # gives seqlen_q/128 rows, matching kBlockM=128 (hd64/128 + the hd256 direct-store
+    # build). If the hd256 config is ever changed to kBlockM=64, delta_s needs
+    # repeat_interleave(2, dim=2) (both 64-token halves share the 128-token mean — exact).
     return q, k, v, delta_s
 
 def scale_and_quant_fp4(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -129,12 +138,14 @@ def blockscaled_fp4_attn(qlist: Tuple,
 
 
 def sageattn3_blackwell(q, k, v, attn_mask = None, is_causal = False, per_block_mean = True, **kwargs):
-    if q.size(-1) >= 256:
+    if q.size(-1) > 256:
         print(f"Unsupported Headdim {q.size(-1)}")
         return sdpa(q, k, v, is_causal = is_causal)
     QL = q.size(2)
     KL = k.size(2)
     is_bf16 = q.dtype == torch.bfloat16
+    # GQA is native in the kernel (kv-group head mapping in the mainloop load);
+    # only delta_s needs the per-q-head expansion (cheap: qm is tiny).
     q, k, v, delta_s = preprocess_qkv(q, k, v, per_block_mean)
     qlist_from_cuda = scale_and_quant_fp4(q)
     klist_from_cuda = scale_and_quant_fp4_permute(k)

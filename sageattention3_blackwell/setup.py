@@ -66,9 +66,13 @@ if not SKIP_CUDA_BUILD:
     elif (cc_major, cc_minor) == (12, 0):  # sm_120
         cc_flag.append("-gencode")
         cc_flag.append("arch=compute_120a,code=sm_120a")
+        # sm_120 has only 99KB opt-in smem/block (vs 227KB on sm_100): head_dim 256
+        # uses the direct-store epilogue (no smem_o) there.
+        cc_flag.append("-DSAGE3_HD256_DIRECT_STORE")
     elif (cc_major, cc_minor) == (12, 1):  # sm_121
         cc_flag.append("-gencode")
         cc_flag.append("arch=compute_121a,code=sm_121a")
+        cc_flag.append("-DSAGE3_HD256_DIRECT_STORE")
     else:
         raise RuntimeError("Unsupported GPU")
 
@@ -88,7 +92,7 @@ if not SKIP_CUDA_BUILD:
     nvcc_flags = [
         "-O3",
         # "-O0",
-        "-std=c++17",
+        "-std=c++20",
         "-U__CUDA_NO_HALF_OPERATORS__",
         "-U__CUDA_NO_HALF_CONVERSIONS__",
         "-U__CUDA_NO_BFLOAT16_OPERATORS__",
@@ -119,7 +123,7 @@ if not SKIP_CUDA_BUILD:
             name="fp4attn_cuda",
             sources=["sageattn3/blackwell/api.cu"],
             extra_compile_args={
-                "cxx": ["-O3", "-std=c++17"],
+                "cxx": ["-O3", "-std=c++20"],
                 "nvcc": append_nvcc_threads(
                     nvcc_flags + ["-DEXECMODE=0"] + cc_flag
                 ),
@@ -134,7 +138,7 @@ if not SKIP_CUDA_BUILD:
             name="fp4quant_cuda",
             sources=["sageattn3/quantization/fp4_quantization_4d.cu"],
             extra_compile_args={
-                "cxx": ["-O3", "-std=c++17"],
+                "cxx": ["-O3", "-std=c++20"],
                 "nvcc": append_nvcc_threads(
                     nvcc_flags + ["-DEXECMODE=0"] + cc_flag
                 ),
