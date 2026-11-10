@@ -12,3 +12,6 @@ evaluate/
 bench_qk_int8_pv_fp8_cuda_head96.py
 *test.py
 *unmask.py
+sageattention3_blackwell/csrc/
+sageattention3_blackwell/sageattn3.egg-info/
+

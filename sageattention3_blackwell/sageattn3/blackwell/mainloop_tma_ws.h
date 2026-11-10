@@ -470,9 +470,11 @@ struct CollectiveMainloopFwd {
         uint32_t block_rank_in_cluster = cute::block_rank_in_cluster();
         constexpr uint32_t cluster_shape_x = get<0>(ClusterShape());
         uint2 cluster_local_block_id = {block_rank_in_cluster % cluster_shape_x, block_rank_in_cluster / cluster_shape_x};
+        // GQA: q head bidh attends kv-group head bidh / (h / h_k). Q/DS/SFQ stay per-q-head.
+        int const bidh_kv = bidh / (get<2>(mainloop_params.shape_Q) / get<2>(mainloop_params.shape_K));
         Tensor gQ = local_tile(mQ(_, _, bidh, bidb), select<0, 2>(TileShape_MNK{}), make_coord(m_block, _0{}));  // (M, K)
-        Tensor gK = local_tile(mK(_, _, bidh, bidb), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}));  // (N, K, _)
-        Tensor gVt = local_tile(mVt(_, _, bidh, bidb), make_shape(shape<2>(TileShape_MNK{}), shape<1>(TileShape_MNK{})), make_coord(_0{}, _));  // (N, K, _)
+        Tensor gK = local_tile(mK(_, _, bidh_kv, bidb), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}));  // (N, K, _)
+        Tensor gVt = local_tile(mVt(_, _, bidh_kv, bidb), make_shape(shape<2>(TileShape_MNK{}), shape<1>(TileShape_MNK{})), make_coord(_0{}, _));  // (N, K, _)
         Tensor gDS = [&] {
                         if constexpr (BlockMean) {
                             return local_tile(mDS(_, _, bidh, bidb), select<0, 1>(TileShape_MNK{}), make_coord(m_block, _));
@@ -481,8 +483,8 @@ struct CollectiveMainloopFwd {
                         }
                     }();
         Tensor gSFQ = local_tile(mSFQ(_, _, bidh, bidb), select<0, 2>(TileShape_MNK{}), make_coord(m_block, _0{}));
-        Tensor gSFK = local_tile(mSFK(_, _, bidh, bidb), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}));
-        Tensor gSFVt = local_tile(mSFVt(_, _, bidh, bidb), make_shape(shape<2>(TileShape_MNK{}), shape<1>(TileShape_MNK{})), make_coord(_0{}, _));
+        Tensor gSFK = local_tile(mSFK(_, _, bidh_kv, bidb), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}));
+        Tensor gSFVt = local_tile(mSFVt(_, _, bidh_kv, bidb), make_shape(shape<2>(TileShape_MNK{}), shape<1>(TileShape_MNK{})), make_coord(_0{}, _));
         auto block_tma_q = mainloop_params.tma_load_Q.get_slice(_0{});
         Tensor tQgQ = block_tma_q.partition_S(gQ);
         Tensor tQsQ = block_tma_q.partition_D(sQ);
@@ -730,7 +732,22 @@ struct CollectiveMainloopFwd {
         
          
         auto col_limit_causal = [&](int row, int n_block) {
+            // Requires seqlen_q / seqlen_k to be 128 multiples (the api hands
+            // in 128-padded quant output buffers). The "unpadded-Q corruption"
+            // once suspected in this kernel was actually the fp4 QUANT kernel
+            // writing full 128-row blocks into unpadded output allocations
+            // (OOB, trampling neighbouring K/V tensors) — see
+            // fp4_quantization_4d.cu. This kernel is fine under the padded
+            // contract.
             return row + 1 + seqlen_k - n_block * kBlockN - seqlen_q + m_block * kBlockM;
+        };
+        // K/V are stored in the 32-token interleaved order the blockscaled MMA
+        // expects (per 32-token group: [0,1,8,9,16,17,24,25, 2,3,10,11,18,19,26,27,
+        // 4,5,12,13,20,21,28,29, 6,7,14,15,22,23,30,31]). The score fragment's
+        // column j is therefore token perm(j), not token j — mask by token index.
+        auto frag_to_token = [](int col) {
+            int j32 = col & 31;
+            return (col & ~31) + 2 * (j32 >> 3) + 8 * ((j32 >> 1) & 3) + (col & 1);
         };
         {
             Tensor cS = cute::make_identity_tensor(select<0, 1>(TileShape_MNK{}));
@@ -738,9 +755,9 @@ struct CollectiveMainloopFwd {
             CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < size(tSrS); ++i) {
                 if constexpr (!Is_causal) {  // Just masking based on col
-                    if (int(get<1>(tScS(i))) >= int(unpadded_seqlen_k - n_block * kBlockN)) { tSrS(i) = -INFINITY; }
-                } else { 
-                    if (int(get<1>(tScS(i))) >= std::min(seqlen_k - n_block * kBlockN,
+                    if (frag_to_token(int(get<1>(tScS(i)))) >= int(unpadded_seqlen_k - n_block * kBlockN)) { tSrS(i) = -INFINITY; }
+                } else {
+                    if (frag_to_token(int(get<1>(tScS(i)))) >= std::min(seqlen_k - n_block * kBlockN,
                                                         col_limit_causal(int(get<0>(tScS(i))), n_block))) {
                         tSrS(i) = -INFINITY;
                     }
@@ -803,7 +820,7 @@ struct CollectiveMainloopFwd {
         quantize(_0{}, tSrS_converion_view);
         CUTLASS_PRAGMA_UNROLL
         for (int v_block = 0; v_block < size<2>(tOrP); ++v_block) {
-            cute::gemm(tiled_mma_pv, make_zip_tensor(tOrP(_, _, v_block), tOrSFP(_, _, v_block)), 
+            cute::gemm(tiled_mma_pv, make_zip_tensor(tOrP(_, _, v_block), tOrSFP(_, _, v_block)),
                                     make_zip_tensor(tOrVt(_, _, v_block), tOrSFVt(_, _, v_block)), tOrO_store);
             if (v_block < size<2>(tOrP) - 1) {
                 copy_v_block(v_block + 1);
@@ -813,7 +830,7 @@ struct CollectiveMainloopFwd {
                 ++smem_pipe_read_v;
             }
         }
-        
+
         n_block--;
         constexpr int n_masking_steps = !Is_causal ? 1 : cute::ceil_div(kBlockM, kBlockN) + 1;
         // // Only go through these if Is_causal, since n_masking_steps = 1 when !Is_causal
@@ -838,7 +855,7 @@ struct CollectiveMainloopFwd {
             Tensor tScS = thread_mma_qk.partition_C(cS);
             #pragma unroll
             for (int i = 0; i < size(tSrS); ++i) {
-                if (int(get<1>(tScS(i))) >= col_limit_causal(int(get<0>(tScS(i))), n_block - 1)) {
+                if (frag_to_token(int(get<1>(tScS(i)))) >= col_limit_causal(int(get<0>(tScS(i))), n_block - 1)) {
                     tSrS(i) = -INFINITY;
                 }
             }
@@ -858,7 +875,7 @@ struct CollectiveMainloopFwd {
             }
             pipeline_v.consumer_release(smem_pipe_read_v);
             ++smem_pipe_read_v;
-            if (masking_step > 0) { softmax_fused.rescale_o(tOrO_store, tOrO); }
+            softmax_fused.rescale_o(tOrO_store, tOrO);
         }
 
         #pragma unroll 1

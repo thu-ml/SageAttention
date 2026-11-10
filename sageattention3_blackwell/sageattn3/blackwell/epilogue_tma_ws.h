@@ -183,6 +183,51 @@ struct CollectiveEpilogueFwd{
         tma_store_wait<0>();
     }
 
+    // hd256 direct-store epilogue: consumers write the converted accum fragment
+    // straight to gmem (FA2-style), eliminating smem_o + the producer-warp TMA store.
+    // The gmem partition is built from the PV MMA itself (make_tiled_copy_C) so every
+    // thread stores exactly the (m, k) values it owns in the accumulator.
+    template <typename Params, typename FrgTensorO, typename TiledMma,
+              typename WorkTileInfo, typename SchedulerParams>
+    CUTLASS_DEVICE void
+    direct_store(
+        Params const& epilogue_params,
+        TiledMma tiled_mma,
+        FrgTensorO const& tOrO,
+        WorkTileInfo work_tile_info,
+        SchedulerParams const& scheduler_params,
+        int thread_idx
+    ) {
+        auto [m_block, bidh, bidb] = work_tile_info.get_block_coord(scheduler_params);
+        // fp32 accum -> Element in registers (same conversion as mma_store)
+        constexpr int numel = decltype(size(tOrO))::value;
+        cutlass::NumericArrayConverter<Element, float, numel> convert_op;
+        auto frag = convert_op(*reinterpret_cast<const cutlass::Array<float, numel> *>(tOrO.data()));
+        auto tOrO_out = make_tensor(make_rmem_ptr<Element>(&frag), tOrO.layout());
+
+        Tensor mO = make_tensor(make_gmem_ptr(epilogue_params.ptr_O),
+                                epilogue_params.shape_O, epilogue_params.stride_O);
+        Tensor gO = local_tile(mO(_, _, bidh, bidb), select<0, 2>(TileShape_MNK{}),
+                               make_coord(m_block, _0{}));  // (M, K)
+
+        auto gmem_tiled_copy_O = make_tiled_copy_C(
+            Copy_Atom<AutoVectorizingCopyWithAssumedAlignment<128>, Element>{}, tiled_mma);
+        auto gmem_thr_copy_O = gmem_tiled_copy_O.get_thread_slice(thread_idx);
+        Tensor tOgO = gmem_thr_copy_O.partition_D(gO);
+        Tensor taccOrO = gmem_thr_copy_O.retile_S(tOrO_out);
+
+        // predicate OOB rows, mirroring store_zero
+        Tensor cO = cute::make_identity_tensor(select<0, 2>(TileShape_MNK{}));
+        Tensor tOcO = gmem_thr_copy_O.partition_D(cO);
+        Tensor tOpO = make_tensor<bool>(make_shape(size<2>(tOgO)));
+        #pragma unroll
+        for (int k = 0; k < size(tOpO); ++k) { tOpO(k) = get<1>(tOcO(_0{}, _0{}, k)) < get<1>(epilogue_params.shape_O); }
+        flash::copy</*Is_even_MN=*/false, /*Is_even_K=*/false, /*Clear_OOB_MN=*/false, /*Clear_OOB_K=*/false>(
+            gmem_tiled_copy_O, taccOrO, tOgO, tOcO, tOpO,
+            get<0>(epilogue_params.shape_O) - m_block * kBlockM
+        );
+    }
+
     // Write 0 to output and -inf to LSE
     CUTLASS_DEVICE void
     store_zero(
