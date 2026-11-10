@@ -732,6 +732,13 @@ struct CollectiveMainloopFwd {
         
          
         auto col_limit_causal = [&](int row, int n_block) {
+            // Requires seqlen_q / seqlen_k to be 128 multiples (the api hands
+            // in 128-padded quant output buffers). The "unpadded-Q corruption"
+            // once suspected in this kernel was actually the fp4 QUANT kernel
+            // writing full 128-row blocks into unpadded output allocations
+            // (OOB, trampling neighbouring K/V tensors) — see
+            // fp4_quantization_4d.cu. This kernel is fine under the padded
+            // contract.
             return row + 1 + seqlen_k - n_block * kBlockN - seqlen_q + m_block * kBlockM;
         };
         // K/V are stored in the 32-token interleaved order the blockscaled MMA
@@ -749,7 +756,7 @@ struct CollectiveMainloopFwd {
             for (int i = 0; i < size(tSrS); ++i) {
                 if constexpr (!Is_causal) {  // Just masking based on col
                     if (frag_to_token(int(get<1>(tScS(i)))) >= int(unpadded_seqlen_k - n_block * kBlockN)) { tSrS(i) = -INFINITY; }
-                } else { 
+                } else {
                     if (frag_to_token(int(get<1>(tScS(i)))) >= std::min(seqlen_k - n_block * kBlockN,
                                                         col_limit_causal(int(get<0>(tScS(i))), n_block))) {
                         tSrS(i) = -INFINITY;
@@ -813,7 +820,7 @@ struct CollectiveMainloopFwd {
         quantize(_0{}, tSrS_converion_view);
         CUTLASS_PRAGMA_UNROLL
         for (int v_block = 0; v_block < size<2>(tOrP); ++v_block) {
-            cute::gemm(tiled_mma_pv, make_zip_tensor(tOrP(_, _, v_block), tOrSFP(_, _, v_block)), 
+            cute::gemm(tiled_mma_pv, make_zip_tensor(tOrP(_, _, v_block), tOrSFP(_, _, v_block)),
                                     make_zip_tensor(tOrVt(_, _, v_block), tOrSFVt(_, _, v_block)), tOrO_store);
             if (v_block < size<2>(tOrP) - 1) {
                 copy_v_block(v_block + 1);
@@ -823,7 +830,7 @@ struct CollectiveMainloopFwd {
                 ++smem_pipe_read_v;
             }
         }
-        
+
         n_block--;
         constexpr int n_masking_steps = !Is_causal ? 1 : cute::ceil_div(kBlockM, kBlockN) + 1;
         // // Only go through these if Is_causal, since n_masking_steps = 1 when !Is_causal

@@ -139,7 +139,8 @@ __global__ void scaled_fp4_quant_kernel(
     int batch_size, int num_heads, int num_tokens,
     int stride_bz_input, int stride_h_input, int stride_seq_input,
     int stride_bz_output, int stride_h_output, int stride_seq_output,
-    int stride_bz_output_sf, int stride_h_output_sf, int stride_seq_output_sf) {
+    int stride_bz_output_sf, int stride_h_output_sf, int stride_seq_output_sf,
+    float* qmean) {
   static_assert(std::is_same<T, half>::value || std::is_same<T, nv_bfloat16>::value, "Only half and bfloat16 input are supported");
   using PackedVec = PackedVec<T>;
 
@@ -187,6 +188,86 @@ __global__ void scaled_fp4_quant_kernel(
                                           head_id * stride_h_input +   // head dim
                                           load_token_id * stride_seq_input + // seq dim
                                           (threadIdx.x % NUM_THREADS_PER_TOKEN) * CVT_FP4_ELTS_PER_THREAD + dhalf * 128)[0]; // feature dim
+  }
+
+  // ---- folded per-block mean subtraction (Q path: qmean != nullptr) ----
+  // Per-feature mean over this 128-token block, subtracted before quantization,
+  // replacing the old pad-128 + group-mean pass. Atomic smem accumulation
+  // (order-nondeterministic, last-ulp only); sum includes OOB zero-fills and is
+  // divided by BLOCK_SIZE to stay bit-compatible with the old pipeline.
+  constexpr uint32_t TOTAL_FEATURES = NUM_THREADS_PER_TOKEN * CVT_FP4_ELTS_PER_THREAD;
+  constexpr uint32_t NUM_WARPS = (BLOCK_SIZE * NUM_THREADS_PER_TOKEN) / 32;
+  // Per-warp partial sums (no atomics: sm_120 traps on vector smem atomics,
+  // and scalar atomics on 128 shared addresses were 128-deep contention —
+  // measured 0.29ms vs 0.02ms no-fold).
+  __shared__ alignas(16) float smem_part[NUM_WARPS][TOTAL_FEATURES];
+  __shared__ alignas(16) float smem_mean[128];
+  if (qmean != nullptr) {
+    const int slice = threadIdx.x % NUM_THREADS_PER_TOKEN;
+    float acc[CVT_FP4_ELTS_PER_THREAD];
+    #pragma unroll
+    for (int i = 0; i < CVT_FP4_ELTS_PER_THREAD / 2; i++) {
+      float2 v;
+      if constexpr (std::is_same<T, half>::value) { v = __half22float2(in_vec.elts[i]); }
+      else { v = __bfloat1622float2(in_vec.elts[i]); }
+      acc[2 * i] = v.x;
+      acc[2 * i + 1] = v.y;
+    }
+    // warp spans (32 / NUM_THREADS_PER_TOKEN) tokens: reduce them to the
+    // token-local-0 lanes (shfl_xor over the token bits keeps slice aligned).
+    #pragma unroll
+    for (int off = NUM_THREADS_PER_TOKEN; off < 32; off <<= 1) {
+      #pragma unroll
+      for (int j = 0; j < CVT_FP4_ELTS_PER_THREAD; j++) {
+        acc[j] += __shfl_xor_sync(0xffffffff, acc[j], off);
+      }
+    }
+    if ((threadIdx.x % 32) < NUM_THREADS_PER_TOKEN) {
+      float* dst = smem_part[threadIdx.x / 32];
+      #pragma unroll
+      for (int j = 0; j < CVT_FP4_ELTS_PER_THREAD; j++) {
+        dst[slice * CVT_FP4_ELTS_PER_THREAD + j] = acc[j];
+      }
+    }
+    __syncthreads();
+    // 128 features in parallel, serial over NUM_WARPS partials (bank-conflict
+    // free: consecutive features map to consecutive banks).
+    if (threadIdx.x < TOTAL_FEATURES) {
+      float s = 0.f;
+      #pragma unroll
+      for (uint32_t w = 0; w < NUM_WARPS; w++) { s += smem_part[w][threadIdx.x]; }
+      const float mean = s / float(BLOCK_SIZE);
+      smem_mean[threadIdx.x] = mean;
+    }
+    __syncthreads();
+    // Emit qm to gmem: warp 0, one float4 per thread (128 features = 32 threads
+    // x 16B). Strict 64-bit index math; layout (B, H, gridDim.x blocks, head_dim),
+    // hd256's second 128-feature half lands at dhalf*128. (An earlier debug
+    // iteration's stores landed at wrong addresses — fresh-page zeros at the
+    // destination plus L1 store-to-load forwarding on the writer made it look
+    // like a visibility issue. This version is verified by test_qm_emission.)
+    if (threadIdx.x < TOTAL_FEATURES / 4) {
+      const size_t qm_row = ((size_t)(batch_id * num_heads + head_id)) * gridDim.x + token_block_id;
+      float4* qm_dst = reinterpret_cast<float4*>(qmean + qm_row * head_dim + dhalf * 128);
+      qm_dst[threadIdx.x] = reinterpret_cast<const float4*>(smem_mean)[threadIdx.x];
+    }
+    // Subtract only for valid tokens: OOB rows of the tail block are written
+    // to the (128-padded) output as exact zeros (sf=0, packed=0), keeping the
+    // attention kernel's discarded pad rows clean.
+    if (load_token_id < num_tokens) {
+    #pragma unroll
+    for (int i = 0; i < CVT_FP4_ELTS_PER_THREAD / 2; i++) {
+      const int f0 = slice * CVT_FP4_ELTS_PER_THREAD + 2 * i;
+      const int f1 = f0 + 1;
+      if constexpr (std::is_same<T, half>::value) {
+        in_vec.elts[i].x = __float2half(__half2float(in_vec.elts[i].x) - smem_mean[f0]);
+        in_vec.elts[i].y = __float2half(__half2float(in_vec.elts[i].y) - smem_mean[f1]);
+      } else {
+        in_vec.elts[i].x = __float2bfloat16(__bfloat162float(in_vec.elts[i].x) - smem_mean[f0]);
+        in_vec.elts[i].y = __float2bfloat16(__bfloat162float(in_vec.elts[i].y) - smem_mean[f1]);
+      }
+    }
+    }
   }
 
   // calculate max of every consecutive 16 elements
@@ -398,7 +479,8 @@ __global__ void scaled_fp4_quant_trans_kernel(
 void scaled_fp4_quant(torch::Tensor const& input,
                             torch::Tensor const& output,
                             torch::Tensor const& output_sf,
-                            int tensor_layout) {
+                            int tensor_layout,
+                            c10::optional<torch::Tensor> qmean = c10::nullopt) {
   constexpr int BLOCK_SIZE = 128;
   
   CHECK_CUDA(input);
@@ -436,8 +518,12 @@ void scaled_fp4_quant(torch::Tensor const& input,
     stride_h_output = output.stride(2);
     stride_h_output_sf = output_sf.stride(2);
 
-    CHECK_SHAPE(output, batch_size, num_tokens, num_heads, head_dim / 2);
-    CHECK_SHAPE(output_sf, batch_size, num_tokens, num_heads, head_dim / 16);
+    // The kernel writes full 128-token blocks; the output token dim must be
+    // the 128-rounded token count (a smaller allocation is an OOB write).
+    TORCH_CHECK(output.size(0) == batch_size && output.size(1) == ((num_tokens + 127) / 128) * 128 &&
+                output.size(2) == num_heads && output.size(3) == head_dim / 2, "output shape mismatch (token dim must be 128-rounded)");
+    TORCH_CHECK(output_sf.size(0) == batch_size && output_sf.size(1) == ((num_tokens + 127) / 128) * 128 &&
+                output_sf.size(2) == num_heads && output_sf.size(3) == head_dim / 16, "output_sf shape mismatch (token dim must be 128-rounded)");
   } else {
     num_tokens = input.size(2);
     num_heads = input.size(1);
@@ -448,12 +534,18 @@ void scaled_fp4_quant(torch::Tensor const& input,
     stride_h_output = output.stride(1);
     stride_h_output_sf = output_sf.stride(1);
 
-    CHECK_SHAPE(output, batch_size, num_heads, num_tokens, head_dim / 2);
-    CHECK_SHAPE(output_sf, batch_size, num_heads, num_tokens, head_dim / 16);
+    // The kernel writes full 128-token blocks; the output token dim must be
+    // the 128-rounded token count (a smaller allocation is an OOB write that
+    // corrupts neighbouring tensors — this was the "unpadded-Q" corruption).
+    TORCH_CHECK(output.size(0) == batch_size && output.size(1) == num_heads &&
+                output.size(2) == ((num_tokens + 127) / 128) * 128 && output.size(3) == head_dim / 2, "output shape mismatch (token dim must be 128-rounded)");
+    TORCH_CHECK(output_sf.size(0) == batch_size && output_sf.size(1) == num_heads &&
+                output_sf.size(2) == ((num_tokens + 127) / 128) * 128 && output_sf.size(3) == head_dim / 16, "output_sf shape mismatch (token dim must be 128-rounded)");
   }
 
   auto input_dtype = input.scalar_type();
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device());
+  float* qmean_ptr = qmean.has_value() ? reinterpret_cast<float*>(qmean->data_ptr()) : nullptr;
 
   DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(input_dtype, c_type, {
     DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
@@ -468,7 +560,7 @@ void scaled_fp4_quant(torch::Tensor const& input,
               batch_size, num_heads, num_tokens,
               stride_bz_input, stride_h_input, stride_seq_input,
               stride_bz_output, stride_h_output, stride_seq_output,
-              stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf);
+              stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf, qmean_ptr);
     });
   });
 }
@@ -547,7 +639,7 @@ void scaled_fp4_quant_permute(torch::Tensor const& input,
               batch_size, num_heads, num_tokens,
               stride_bz_input, stride_h_input, stride_seq_input,
               stride_bz_output, stride_h_output, stride_seq_output,
-              stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf);
+              stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf, nullptr);
     });
   });
 }
