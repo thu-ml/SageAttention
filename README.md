@@ -95,6 +95,7 @@ python setup.py install
 To benchmark the speed against FlashAttention3, please compile FlashAttention3 from source:
 ```
 git clone https://github.com/Dao-AILab/flash-attention.git --recursive
+cd flash-attention
 git checkout b7d29fb3b79f0b78b1c369a52aaa6628dabfb0d7 # 2.7.2 release
 cd hopper
 python setup.py install
