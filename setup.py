@@ -34,7 +34,10 @@ cmdclass = {}
 
 if not SKIP_CUDA_BUILD:
     import torch
+    from torch.utils import cpp_extension
     from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
+
+    cpp_extension.min_supported_cpython = "0x030A0000"
 
     HAS_SM80 = False
     HAS_SM86 = False
@@ -189,8 +192,9 @@ if not SKIP_CUDA_BUILD:
         ext_modules.append(
             CUDAExtension(
                 name="sageattention._qattn_sm80",
+                py_limited_api=True,
                 sources=[
-                    "csrc/qattn/pybind_sm80.cpp",
+                    "csrc/qattn/ops_sm80.cpp",
                     "csrc/qattn/qk_int_sv_f16_cuda_sm80.cu",
                 ],
                 extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
@@ -201,8 +205,9 @@ if not SKIP_CUDA_BUILD:
         ext_modules.append(
             CUDAExtension(
                 name="sageattention._qattn_sm89",
+                py_limited_api=True,
                 sources=[
-                    "csrc/qattn/pybind_sm89.cpp",
+                    "csrc/qattn/ops_sm89.cpp",
                     "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_attn_inst_buf.cu",
                     "csrc/qattn/sm89_qk_int8_sv_f8_accum_f16_attn_inst_buf.cu",
                     "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_attn.cu",
@@ -225,8 +230,9 @@ if not SKIP_CUDA_BUILD:
         ext_modules.append(
             CUDAExtension(
                 name="sageattention._qattn_sm90",
+                py_limited_api=True,
                 sources=[
-                    "csrc/qattn/pybind_sm90.cpp",
+                    "csrc/qattn/ops_sm90.cpp",
                     "csrc/qattn/qk_int_sv_f8_cuda_sm90.cu",
                 ],
                 extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS_SM90},
@@ -237,7 +243,8 @@ if not SKIP_CUDA_BUILD:
     ext_modules.append(
         CUDAExtension(
             name="sageattention._fused",
-            sources=["csrc/fused/pybind.cpp", "csrc/fused/fused.cu"],
+            py_limited_api=True,
+            sources=["csrc/fused/ops.cpp", "csrc/fused/fused.cu"],
             extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
         )
     )
@@ -263,6 +270,10 @@ if not SKIP_CUDA_BUILD:
     class BuildExtensionSeparateDir(BuildExtension):
         build_extension_patch_lock = threading.Lock()
         thread_ext_name_map = {}
+
+        def get_export_symbols(self, ext):
+            # Dispatcher libraries have no PyInit symbol for MSVC to export.
+            return []
 
         def finalize_options(self):
             if parallel is not None:
@@ -299,7 +310,8 @@ setup(
     long_description_content_type='text/markdown',
     url='https://github.com/thu-ml/SageAttention',
     packages=find_packages(),
-    python_requires='>=3.9',
+    python_requires='>=3.10',
     ext_modules=ext_modules,
     cmdclass=cmdclass,
+    options={"bdist_wheel": {"py_limited_api": "cp310"}},
 )

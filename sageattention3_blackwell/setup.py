@@ -4,10 +4,10 @@ from pathlib import Path
 from packaging.version import parse, Version
 from setuptools import setup, find_packages
 import subprocess
-from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
 import torch
-from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension, CUDA_HOME
+from torch.utils import cpp_extension
+from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
 
 this_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -51,6 +51,7 @@ cmdclass = {}
 ext_modules = []
 
 if not SKIP_CUDA_BUILD:
+    cpp_extension.min_supported_cpython = "0x030A0000"
     print("\n\ntorch.__version__  = {}\n\n".format(torch.__version__))
     TORCH_MAJOR = int(torch.__version__.split(".")[0])
     TORCH_MINOR = int(torch.__version__.split(".")[1])
@@ -160,8 +161,9 @@ if not SKIP_CUDA_BUILD:
 
     ext_modules.append(
         CUDAExtension(
-            name="fp4attn_cuda",
+            name="sageattn3._fp4attn",
             sources=["sageattn3/blackwell/api.cu"],
+            py_limited_api=True,
             extra_compile_args={
                 "cxx": cxx_flags,
                 "nvcc": append_nvcc_threads(
@@ -175,8 +177,9 @@ if not SKIP_CUDA_BUILD:
     )
     ext_modules.append(
         CUDAExtension(
-            name="fp4quant_cuda",
+            name="sageattn3._fp4quant",
             sources=["sageattn3/quantization/fp4_quantization_4d.cu"],
+            py_limited_api=True,
             extra_compile_args={
                 "cxx": cxx_flags,
                 "nvcc": append_nvcc_threads(
@@ -191,9 +194,10 @@ if not SKIP_CUDA_BUILD:
 
 
 
-class CachedWheelsCommand(_bdist_wheel):
-    def run(self):
-        super().run()
+class BuildDispatcherLibrary(BuildExtension):
+    def get_export_symbols(self, ext):
+        # The loader runs dispatcher initializers without importing a Python module.
+        return []
 
 setup(
     name=PACKAGE_NAME,
@@ -216,12 +220,9 @@ setup(
         "Operating System :: Unix",
     ],
     ext_modules=ext_modules,
-    cmdclass={"bdist_wheel": CachedWheelsCommand, "build_ext": BuildExtension}
-    if ext_modules
-    else {
-        "bdist_wheel": CachedWheelsCommand,
-    },
-    python_requires=">=3.8",
+    cmdclass={"build_ext": BuildDispatcherLibrary} if ext_modules else {},
+    options={"bdist_wheel": {"py_limited_api": "cp310"}},
+    python_requires=">=3.10",
     install_requires=[
         "torch",
         "einops",

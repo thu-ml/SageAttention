@@ -23,6 +23,7 @@ This hybrid approach may achieve **lossless acceleration**.
 
 ## Installation
 ### Base environment
++ CPython 3.10 or newer. The `cp310-abi3` wheels require a compatible PyTorch and CUDA build.
 + CUDA 12.8 or newer and a supported Blackwell GPU.
 + See the [Windows build matrix](../README.md#what-this-fork-provides) for verified Python/PyTorch combinations, including Python 3.12 with PyTorch 2.7.1.
 

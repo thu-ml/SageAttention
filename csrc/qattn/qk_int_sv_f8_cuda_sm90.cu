@@ -18,7 +18,7 @@
 #include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_fp8.h>
-#include <torch/extension.h>
+#include <torch/types.h>
 
 #include "../wgmma.cuh"
 #include "../math.cuh"

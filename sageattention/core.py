@@ -29,19 +29,19 @@ from .triton.quant_per_thread import per_thread_int8 as per_thread_int8_triton
 try:
     from . import sm80_compile
     SM80_ENABLED = True
-except:
+except ImportError:
     SM80_ENABLED = False
 
 try:
     from . import sm89_compile
     SM89_ENABLED = True
-except:
+except ImportError:
     SM89_ENABLED = False
 
 try:
     from . import sm90_compile
     SM90_ENABLED = True
-except:
+except ImportError:
     SM90_ENABLED = False
 
 from .quant import per_block_int8 as per_block_int8_cuda

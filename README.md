@@ -25,6 +25,11 @@ The following Windows builds were verified with MSVC 19.44:
 | `cu130torch2121_cp313` | Build verified | Build verified |
 | `cu134torch2150_cp314` | Build verified | Build verified |
 
+Both packages build CPython Stable ABI wheels tagged `cp310-abi3`. A wheel
+can be reused across Python 3.10 and later with the same compatible PyTorch,
+CUDA and GPU architecture build. The PyTorch distribution must also support
+the target Python version.
+
 Both setup scripts let PyTorch's `BuildExtension` select the C++ standard for
 the host compiler and NVCC. For example, PyTorch 2.9.1 selects C++17, while
 2.12.1 selects C++20. Keep `/Zc:__cplusplus` enabled on MSVC so headers see the
@@ -168,7 +173,7 @@ Paper: https://arxiv.org/abs/2505.11594
 
 ## Installation
 ### Base environment
-+ `python>=3.9`   , `torch>=2.3.0`  , `triton>=3.0.0` 
++ `python>=3.10`, `torch>=2.3.0`, `triton>=3.0.0`
 - `CUDA`:
   + `>=12.8` for Blackwell or SageAttention2++
   + `>=12.4` for fp8 support on Ada

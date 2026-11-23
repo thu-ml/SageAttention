@@ -13,15 +13,21 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 """
+from pathlib import Path
+import sys
+from typing import Tuple
+
 import torch
 import triton
 import triton.language as tl
 import torch.nn.functional as F
-from typing import Tuple
 from torch.nn.attention.bias import causal_lower_right
 from torch.nn.functional import scaled_dot_product_attention as sdpa
-import fp4attn_cuda
-import fp4quant_cuda
+
+_extension_suffix = ".pyd" if sys.platform == "win32" else ".abi3.so"
+for _library in ("_fp4attn", "_fp4quant"):
+    torch.ops.load_library(str(Path(__file__).with_name(_library + _extension_suffix)))
+_ops = torch.ops.sageattn3
 
 
 # The fused kernels amortize their launch configuration at long sequence lengths;
@@ -288,7 +294,7 @@ def _quantize_q(x: torch.Tensor, mean=None) -> Tuple[torch.Tensor, torch.Tensor]
     N = triton.cdiv(N, _BLOCK_SIZE) * _BLOCK_SIZE
     packed_fp4 = torch.empty((B, H, N, D // 2), device=x.device, dtype=torch.uint8)
     fp8_scale = torch.empty((B, H, N, D // 16), device=x.device, dtype=torch.float8_e4m3fn)
-    fp4quant_cuda.scaled_fp4_quant(x, packed_fp4, fp8_scale, 1, mean)
+    _ops.scaled_fp4_quant(x, packed_fp4, fp8_scale, 1, mean)
     return packed_fp4, fp8_scale
 
 
@@ -308,7 +314,7 @@ def scale_and_quant_fp4_permute(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Te
     N = triton.cdiv(N, _BLOCK_SIZE) * _BLOCK_SIZE
     packed_fp4 = torch.empty((B, H, N, D // 2), device=x.device, dtype=torch.uint8)
     fp8_scale = torch.empty((B, H, N, D // 16), device=x.device, dtype=torch.float8_e4m3fn)
-    fp4quant_cuda.scaled_fp4_quant_permute(x, packed_fp4, fp8_scale, 1)
+    _ops.scaled_fp4_quant_permute(x, packed_fp4, fp8_scale, 1)
     return packed_fp4, fp8_scale
 
 def scale_and_quant_fp4_transpose(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -317,7 +323,7 @@ def scale_and_quant_fp4_transpose(x: torch.Tensor) -> Tuple[torch.Tensor, torch.
     N = triton.cdiv(N, _BLOCK_SIZE) * _BLOCK_SIZE
     packed_fp4 = torch.empty((B, H, D, N // 2), device=x.device, dtype=torch.uint8)
     fp8_scale = torch.empty((B, H, D, N // 16), device=x.device, dtype=torch.float8_e4m3fn)
-    fp4quant_cuda.scaled_fp4_quant_trans(x, packed_fp4, fp8_scale, 1)
+    _ops.scaled_fp4_quant_trans(x, packed_fp4, fp8_scale, 1)
     return packed_fp4, fp8_scale
 
 def blockscaled_fp4_attn(qlist: Tuple, 
@@ -332,7 +338,7 @@ def blockscaled_fp4_attn(qlist: Tuple,
                         ):
     if softmax_scale is None:
         softmax_scale = (qlist[0].shape[-1] * 2) ** (-0.5)
-    return fp4attn_cuda.fwd(qlist[0], klist[0], vlist[0], qlist[1], klist[1], vlist[1], delta_s, KL, None, softmax_scale, is_causal, per_block_mean, is_bf16)
+    return _ops.fwd(qlist[0], klist[0], vlist[0], qlist[1], klist[1], vlist[1], delta_s, KL, softmax_scale, is_causal, per_block_mean, is_bf16)
 
 
 def sageattn3_blackwell(

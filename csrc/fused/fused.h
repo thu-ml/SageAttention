@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <torch/extension.h>
+#include <torch/types.h>
 
 void quant_per_block_int8_cuda(
                 torch::Tensor input,

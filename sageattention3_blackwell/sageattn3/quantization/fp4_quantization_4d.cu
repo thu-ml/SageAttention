@@ -13,9 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <torch/all.h>
-#include <torch/python.h>
-#include <torch/nn/functional.h>
+#include <torch/library.h>
+#include <torch/types.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <cuda_runtime_api.h>
@@ -495,7 +494,7 @@ __global__ void scaled_fp4_quant_trans_kernel(
 void scaled_fp4_quant(torch::Tensor const& input,
                             torch::Tensor const& output,
                             torch::Tensor const& output_sf,
-                            int tensor_layout, c10::optional<torch::Tensor> qmean) {
+                            int64_t tensor_layout, c10::optional<torch::Tensor> qmean) {
   constexpr int BLOCK_SIZE = 128;
   
   CHECK_CUDA(input);
@@ -583,7 +582,7 @@ void scaled_fp4_quant(torch::Tensor const& input,
 void scaled_fp4_quant_permute(torch::Tensor const& input,
                             torch::Tensor const& output,
                             torch::Tensor const& output_sf,
-                            int tensor_layout) {
+                            int64_t tensor_layout) {
   constexpr int BLOCK_SIZE = 128;
 
   CHECK_CUDA(input);
@@ -663,7 +662,7 @@ void scaled_fp4_quant_permute(torch::Tensor const& input,
 void scaled_fp4_quant_trans(torch::Tensor const& input,
                             torch::Tensor const& output,
                             torch::Tensor const& output_sf,
-                            int tensor_layout) {
+                            int64_t tensor_layout) {
   constexpr int BLOCK_SIZE = 128;
   
   CHECK_CUDA(input);
@@ -739,10 +738,15 @@ void scaled_fp4_quant_trans(torch::Tensor const& input,
   });
 }
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("scaled_fp4_quant", &scaled_fp4_quant,
-        pybind11::arg("input"), pybind11::arg("output"), pybind11::arg("output_sf"),
-        pybind11::arg("tensor_layout"), pybind11::arg("qmean") = c10::nullopt);
-  m.def("scaled_fp4_quant_permute", &scaled_fp4_quant_permute);
-  m.def("scaled_fp4_quant_trans", &scaled_fp4_quant_trans);
+TORCH_LIBRARY_FRAGMENT(sageattn3, m) {
+  m.def("scaled_fp4_quant(Tensor input, Tensor(a!) output, Tensor(b!) output_sf, int tensor_layout, "
+        "Tensor(c!)? qmean=None) -> ()");
+  m.def("scaled_fp4_quant_permute(Tensor input, Tensor(a!) output, Tensor(b!) output_sf, int tensor_layout) -> ()");
+  m.def("scaled_fp4_quant_trans(Tensor input, Tensor(a!) output, Tensor(b!) output_sf, int tensor_layout) -> ()");
+}
+
+TORCH_LIBRARY_IMPL(sageattn3, CUDA, m) {
+  m.impl("scaled_fp4_quant", &scaled_fp4_quant);
+  m.impl("scaled_fp4_quant_permute", &scaled_fp4_quant_permute);
+  m.impl("scaled_fp4_quant_trans", &scaled_fp4_quant_trans);
 }

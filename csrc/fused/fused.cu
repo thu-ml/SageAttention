@@ -17,7 +17,7 @@
 #include "../cuda_compat.h"
 
 #include <ATen/cuda/CUDAContext.h>
-#include <torch/extension.h>
+#include <torch/types.h>
 
 #include "../dispatch_utils.h"
 #include "../utils.cuh"

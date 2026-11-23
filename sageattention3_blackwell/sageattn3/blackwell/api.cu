@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 
-// Include these 2 headers instead of torch/extension.h since we don't need all of the torch headers.
-#include <torch/python.h>
-#include <torch/nn/functional.h>
+#include <torch/library.h>
+#include <torch/types.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <limits>
@@ -202,16 +201,15 @@ void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split
 }
 
 std::vector<at::Tensor>
-mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size // 2)
+mha_fwd(const at::Tensor &q,   // batch_size x seqlen_q x num_heads x (head_size // 2)
         const at::Tensor &k,         // batch_size x seqlen_k x num_heads_k x (head_size // 2)
         const at::Tensor &v,         // batch_size x seqlen_k x num_heads_k x (head_size // 2)
         const at::Tensor &sfq,
         const at::Tensor &sfk,
         const at::Tensor &sfv,
         const at::Tensor &delta_s,
-        int unpadded_k,
-        c10::optional<at::Tensor> &out_,             // batch_size x seqlen_q x num_heads x head_size
-        const float softmax_scale,
+        int64_t unpadded_k,
+        double softmax_scale,
         bool is_causal, 
         bool per_block_mean,
         bool is_bf16
@@ -307,7 +305,7 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
                      nullptr,
                      softmax_lse.data_ptr(),
                      /*p_dropout=*/0.f,
-                     softmax_scale,
+                     static_cast<float>(softmax_scale),
                      /*window_size_left=*/-1,
                      /*window_size_right=*/is_causal ? 0 : -1,
                      per_block_mean,
@@ -326,12 +324,6 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
         softmax_lse.fill_(std::numeric_limits<float>::infinity());
     }
 
-    // at::Tensor out_padded = out;
-    // if (head_size_og % 8 != 0) {
-    //     out = out.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
-    //     if (out_.has_value()) { out_.value().copy_(out); }
-    // }
-
     // return {out, q_padded, k_padded, v_padded, out_padded, softmax_lse, p};
     // cudaDeviceSynchronize();
     // auto err = cudaGetLastError();
@@ -341,7 +333,11 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
 
 
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.doc() = "FlashAttention";
-    m.def("fwd", &mha_fwd, "Forward pass");
+TORCH_LIBRARY_FRAGMENT(sageattn3, m) {
+    m.def("fwd(Tensor q, Tensor k, Tensor v, Tensor sfq, Tensor sfk, Tensor sfv, Tensor delta_s, "
+          "int unpadded_k, float softmax_scale, bool is_causal, bool per_block_mean, bool is_bf16) -> Tensor[]");
+}
+
+TORCH_LIBRARY_IMPL(sageattn3, CUDA, m) {
+    m.impl("fwd", &mha_fwd);
 }

@@ -17,7 +17,29 @@ limitations under the License.
 import torch
 from typing import Any, List, Literal, Optional, Tuple, Union
 
-from . import _fused
+from ._ops import load_ops
+
+
+_fused = load_ops("_fused", "sageattention_fused")
+
+
+def _fake_fused_write(*args, **kwargs):
+    # The output tensors are allocated by the caller, so their metadata is already available.
+    return None
+
+
+for _op in (
+    _fused.quant_per_block_int8_cuda.default,
+    _fused.quant_per_block_int8_cuda.scaled,
+    _fused.quant_per_block_int8_fuse_sub_mean_cuda.default,
+    _fused.quant_per_warp_int8_cuda.default,
+    _fused.sub_mean_cuda.default,
+    _fused.transpose_pad_permute_cuda.default,
+    _fused.scale_fuse_quant_cuda.default,
+    _fused.mean_scale_fuse_quant_cuda.default,
+):
+    torch.library.register_fake(_op)(_fake_fused_write)
+
 
 def per_block_int8(
     q: torch.Tensor, 
@@ -93,7 +115,7 @@ def per_block_int8(
     
     sm_scale *= 1.44269504
 
-    _fused.quant_per_block_int8_cuda(q, q_int8, q_scale, sm_scale, BLKQ, _tensor_layout)
+    _fused.quant_per_block_int8_cuda.scaled(q, q_int8, q_scale, sm_scale, BLKQ, _tensor_layout)
     if km is not None:
         km = km.squeeze(1) if _tensor_layout == 0 else km.squeeze(2)
         _fused.quant_per_block_int8_fuse_sub_mean_cuda(k, km, k_int8, k_scale, BLKK, _tensor_layout)
