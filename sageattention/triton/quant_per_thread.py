@@ -24,10 +24,10 @@ def quant_query_per_thread_int8_kernel(Input, Output, Scale, L,
                                         stride_oz, stride_oh, stride_on,
                                         stride_sz, stride_sh,
                                         C: tl.constexpr, BLK: tl.constexpr):
-    off_blk = tl.program_id(0) // 8
+    off_blk = (tl.program_id(0) // 8).to(tl.int64)
     off_tld = tl.program_id(0) % 8
-    off_h = tl.program_id(1)
-    off_b = tl.program_id(2)
+    off_h = tl.program_id(1).to(tl.int64)
+    off_b = tl.program_id(2).to(tl.int64)
 
     offs_n = off_blk * BLK + tl.arange(0, BLK // 8) * 8 + off_tld
     offs_k = tl.arange(0, C)
@@ -51,10 +51,10 @@ def quant_key_per_thread_int8_kernel(Input, Output, Scale, L,
                                         stride_oz, stride_oh, stride_on,
                                         stride_sz, stride_sh,
                                         C: tl.constexpr, BLK: tl.constexpr):      
-    off_blk = tl.program_id(0) // 4
+    off_blk = (tl.program_id(0) // 4).to(tl.int64)
     off_tld = tl.program_id(0) % 4
-    off_h = tl.program_id(1)
-    off_b = tl.program_id(2)
+    off_h = tl.program_id(1).to(tl.int64)
+    off_b = tl.program_id(2).to(tl.int64)
 
     # offs_n = off_blk * BLK + tl.cat(tl.arange(0, BLK // 8) * 8, tl.arange(0, BLK // 8) * 8 + 1, True) + off_tld * 2
     # offs_k = tl.arange(0, C)
@@ -103,10 +103,10 @@ def quant_query_per_thread_int4_kernel(Input, Output, Scale, L,
                                         stride_oz, stride_oh, stride_on,
                                         stride_sz, stride_sh,
                                         C: tl.constexpr, BLK: tl.constexpr):
-    off_blk = tl.program_id(0) // 8
+    off_blk = (tl.program_id(0) // 8).to(tl.int64)
     off_tld = tl.program_id(0) % 8
-    off_h = tl.program_id(1)
-    off_b = tl.program_id(2)
+    off_h = tl.program_id(1).to(tl.int64)
+    off_b = tl.program_id(2).to(tl.int64)
 
     offs_n = off_blk * BLK + tl.arange(0, BLK // 8) * 8 + off_tld
     offs_k = tl.arange(0, C)
@@ -130,10 +130,10 @@ def quant_key_per_thread_int4_kernel(Input, Output, Scale, L,
                                         stride_oz, stride_oh, stride_on,
                                         stride_sz, stride_sh,
                                         C: tl.constexpr, BLK: tl.constexpr):      
-    off_blk = tl.program_id(0) // 4
+    off_blk = (tl.program_id(0) // 4).to(tl.int64)
     off_tld = tl.program_id(0) % 4
-    off_h = tl.program_id(1)
-    off_b = tl.program_id(2)
+    off_h = tl.program_id(1).to(tl.int64)
+    off_b = tl.program_id(2).to(tl.int64)
 
     offs_n = off_blk * BLK + tl.cat(tl.arange(0, BLK // 8) * 8, tl.arange(0, BLK // 8) * 8 + 1, True) + off_tld * 2
     offs_k = tl.arange(0, C)

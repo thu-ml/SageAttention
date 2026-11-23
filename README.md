@@ -39,11 +39,10 @@ before PyTorch while temporarily disabling the conflicting Windows SAL
 `__out` macro. Include it before other headers in affected CUDA sources.
 CUDA 12.x and non-Windows builds skip this workaround.
 
-The matrix describes compilation and extension imports. On RTX 5090,
-SageAttention 3 causal checks against PyTorch SDPA show cosine similarity
-of 0.68–0.74 for random FP16/BF16 inputs with head dimensions 64 and 128.
-Rebuilding the kernels from commit `821da7b` reproduces the same results. These build
-changes preserve the existing kernels; they do not fix that numerical issue.
+SageAttention 3 applies causal and padding masks in token order after the
+FP4 K/V layout permutation and accumulates the key block before the causal
+diagonal. These fixes are from [upstream #410](https://github.com/thu-ml/SageAttention/issues/410)
+and [#408](https://github.com/thu-ml/SageAttention/pull/408).
 
 ---
 
@@ -197,6 +196,7 @@ python setup.py install
 To benchmark the speed against FlashAttention3, please compile FlashAttention3 from source:
 ```
 git clone https://github.com/Dao-AILab/flash-attention.git --recursive
+cd flash-attention
 git checkout b7d29fb3b79f0b78b1c369a52aaa6628dabfb0d7 # 2.7.2 release
 cd hopper
 python setup.py install

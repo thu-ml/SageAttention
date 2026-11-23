@@ -42,7 +42,13 @@ from sageattn3 import sageattn3_blackwell
 attn_output = sageattn3_blackwell(q, k, v, is_causal=False)
 ```
 + `q, k, v` are **FP16/BF16** dtype with the shape `(batch_size, head_num, seq_len, head_dim)` 
-+ `is_causal` determines the use of a causal mask.
++ `is_causal` uses a right-aligned causal mask. Causal sequences require `q_len <= kv_len`.
++ Q may have more heads than K/V when its head count is a multiple of theirs (GQA/MQA).
++ Head widths up to 128 are padded to the next supported FP4 width (64 or 128). The default `sm_scale` uses the original width. `scale` is an alias for `sm_scale`.
++ Explicit `attn_mask` values are passed to PyTorch SDPA. Q and K with different amounts of causal sequence padding also use SDPA with a right-aligned mask.
++ Preprocessing leaves the caller's K tensor intact.
+
+For long non-causal attention with `per_block_mean=True`, the FP4 path automatically chunks Q when the full correction tensor exceeds the TMA stride limit. You can also set `q_chunk_size` to a positive multiple of 128 to bound the size of that tensor. The chunks reuse the quantized K and V tensors. See [#394](https://github.com/thu-ml/SageAttention/pull/394).
 
 ## Performance
 ### Speed of Kernels

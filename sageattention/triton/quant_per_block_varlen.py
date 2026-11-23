@@ -26,11 +26,11 @@ def quant_per_block_int8_kernel(Input, Output, Scale,
                                 sm_scale,
                                 H: tl.constexpr,
                                 C: tl.constexpr, BLK: tl.constexpr):
-    off_blk = tl.program_id(0)
-    off_h = tl.program_id(1)
-    off_b = tl.program_id(2)
+    off_blk = tl.program_id(0).to(tl.int64)
+    off_h = tl.program_id(1).to(tl.int64)
+    off_b = tl.program_id(2).to(tl.int64)
 
-    cu_seqlens_input_start = tl.load(cu_seqlens_input + off_b)
+    cu_seqlens_input_start = tl.load(cu_seqlens_input + off_b).to(tl.int64)
     cu_seqlens_input_end = tl.load(cu_seqlens_input + off_b + 1)
 
     L = cu_seqlens_input_end - cu_seqlens_input_start
@@ -38,7 +38,7 @@ def quant_per_block_int8_kernel(Input, Output, Scale,
     if (off_blk * BLK) >= L:
         return
     
-    cu_seqlens_scale_start = tl.load(cu_seqlens_scale + off_b)
+    cu_seqlens_scale_start = tl.load(cu_seqlens_scale + off_b).to(tl.int64)
 
     offs_n = off_blk * BLK + tl.arange(0, BLK)
     offs_k = tl.arange(0, C)
@@ -51,6 +51,7 @@ def quant_per_block_int8_kernel(Input, Output, Scale,
     x = x.to(tl.float32)
     x *= sm_scale
     scale = tl.max(tl.abs(x)) / 127.
+    scale = tl.where((scale > 0.0) & (scale == scale), scale, 1.0)
     x_int8 = x / scale
     x_int8 += 0.5 * tl.where(x_int8 >= 0, 1, -1)
     x_int8 = x_int8.to(tl.int8)

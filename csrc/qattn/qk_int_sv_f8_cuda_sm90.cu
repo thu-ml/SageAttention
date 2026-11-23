@@ -204,6 +204,7 @@ __global__ void qk_int8_sv_f8_attn_kernel(const DeviceTensorMaps* __restrict__ t
   constexpr uint32_t k_scale_advance_offset = (K_GRAN == QuantGranularity::kPerBlock || K_GRAN == QuantGranularity::kPerWarp) ? 1 : 4;
 
   uint32_t Q_idx_lane_base = bx * CTA_Q + warp_idx * 16 + lane_id / 4;
+  const int32_t causal_kv_offset = get_causal_kv_offset(qo_len, kv_len);
 
 #pragma unroll
   for (uint32_t fq = 0; fq < num_tiles_q; fq++)
@@ -259,7 +260,7 @@ __global__ void qk_int8_sv_f8_attn_kernel(const DeviceTensorMaps* __restrict__ t
 
   const uint32_t num_iterations = div_ceil(
       mask_mode == MaskMode::kCausal
-          ? min(kv_len, (bx + 1) * CTA_Q)
+          ? get_causal_kv_limit((bx + 1) * CTA_Q, qo_len, kv_len)
           : kv_len,
       CTA_K);
 
@@ -308,12 +309,38 @@ __global__ void qk_int8_sv_f8_attn_kernel(const DeviceTensorMaps* __restrict__ t
 #pragma unroll
         for (uint32_t k = 0; k < 8; k++)
         {
-          RS_f32[fq][fk][k] = __int2float_rz(RS[fq][fk][k]);
+          RS_f32[fq][fk][k] = __int2float_rz(RS[fq][fk][k]) * dequant_scale;
         }
       }
     }
 
-    update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, false, true, false>(RS_f32, RO, m, d, sm_scale);
+    if constexpr (mask_mode == MaskMode::kCausal)
+    {
+      const uint32_t fully_visible_kv_len = get_causal_kv_limit(bx * CTA_Q + 1, qo_len, kv_len);
+      if ((iter - 1) * CTA_K + CTA_K > fully_visible_kv_len)
+      {
+#pragma unroll
+        for (uint32_t fq = 0; fq < num_tiles_q; fq++)
+        {
+#pragma unroll
+          for (uint32_t fk = 0; fk < num_tiles_k; fk++)
+          {
+#pragma unroll
+            for (uint32_t k = 0; k < 8; k++)
+            {
+              const uint32_t q_idx = Q_idx_lane_base + fq * 64 + 8 * ((k % 4) / 2);
+              const uint32_t k_idx = (iter - 1) * CTA_K + fk * 16 + 2 * (lane_id % 4) + 8 * (k / 4) + k % 2;
+              if (static_cast<int32_t>(k_idx) > static_cast<int32_t>(q_idx) + causal_kv_offset)
+              {
+                RS_f32[fq][fk][k] = -5000000.0f;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, false, true, false>(RS_f32, RO, m, d, original_sm_scale);
 
     // accumulate d on thread basis
 #pragma unroll
@@ -429,7 +456,8 @@ __global__ void qk_int8_sv_f8_attn_kernel(const DeviceTensorMaps* __restrict__ t
 
           if constexpr (mask_mode == MaskMode::kCausal)
           {
-            is_out_of_bounds = (k_idx > q_idx) || (k_idx >= kv_len);
+            is_out_of_bounds = (static_cast<int32_t>(k_idx) > static_cast<int32_t>(q_idx) + causal_kv_offset) ||
+                               (k_idx >= kv_len);
           }
           else
           {
@@ -588,6 +616,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(
                   int return_lse)
 {
   CHECK_CUDA(query);
+  const at::cuda::OptionalCUDAGuard device_guard(at::device_of(query));
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   CHECK_CUDA(key);
   CHECK_CUDA(value);
   CHECK_CUDA(output);
@@ -697,7 +727,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(
 
             constexpr MaskMode mask_mode = IS_CAUSAL ? MaskMode::kCausal : MaskMode::kNone;
 
-            assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
+            TORCH_CHECK(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K,
+                        "Hopper FP8 attention requires V padded to a multiple of 128 tokens");
 
             if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp))
             {
@@ -737,7 +768,7 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(
                 cudaFuncAttributeMaxDynamicSharedMemorySize, sMemSize);
             
             dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
-            kernel<<<grid, NUM_THREADS, sMemSize>>>(
+            kernel<<<grid, NUM_THREADS, sMemSize, stream>>>(
               d_pack,
               reinterpret_cast<float*>(query_scale.data_ptr()),
               reinterpret_cast<float*>(key_scale.data_ptr()),
@@ -772,6 +803,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
                     int return_lse)
 {
   CHECK_CUDA(query);
+  const at::cuda::OptionalCUDAGuard device_guard(at::device_of(query));
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   CHECK_CUDA(key);
   CHECK_CUDA(value);
   CHECK_CUDA(output);
@@ -885,7 +918,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
 
             constexpr MaskMode mask_mode = IS_CAUSAL ? MaskMode::kCausal : MaskMode::kNone;
 
-            assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
+            TORCH_CHECK(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K,
+                        "Hopper FP8 attention requires V padded to a multiple of 128 tokens");
 
             if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp))
             {
@@ -927,7 +961,7 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
                 cudaFuncAttributeMaxDynamicSharedMemorySize, sMemSize);
             
             dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
-            kernel<<<grid, NUM_THREADS, sMemSize>>>(
+            kernel<<<grid, NUM_THREADS, sMemSize, stream>>>(
               d_pack,
               reinterpret_cast<float*>(query_scale.data_ptr()),
               reinterpret_cast<float*>(key_scale.data_ptr()),
