@@ -375,10 +375,13 @@ __device__ __forceinline__ void apply_out_of_bound_mask(const uint32_t &K_idx_la
 }
 
 // for DTypeQKAccum float
-template <uint32_t num_tiles_q, uint32_t num_tiles_k, uint32_t num_tiles_v, bool use_half_o_scale, bool exp_offset, bool fuse_scale=false, typename DTypeSVAccum>
+template <uint32_t num_tiles_q, uint32_t num_tiles_k, uint32_t num_tiles_v, bool use_half_o_scale, bool exp_offset,
+          bool fuse_scale=false, bool fp8_row_sum=false, typename DTypeSVAccum>
 __device__ __forceinline__ void update_mdo(float RS[][num_tiles_k][8], DTypeSVAccum RO[][num_tiles_v][8], float m[][2], float d[][2], const float &sm_scale)
 {
   static_assert(std::is_same<DTypeSVAccum, half>::value || (!use_half_o_scale));
+  // A peak of 256 is exactly representable in E4M3.
+  constexpr float probability_offset = fp8_row_sum ? 8.f : S_FP8_OFFSET;
 #pragma unroll
   for (uint32_t fq = 0; fq < num_tiles_q; fq++)
   {
@@ -400,7 +403,7 @@ __device__ __forceinline__ void update_mdo(float RS[][num_tiles_k][8], DTypeSVAc
       {
         if constexpr (exp_offset)
         {
-          m_temp = fmaf(m_temp, sm_scale, -S_FP8_OFFSET);
+          m_temp = fmaf(m_temp, sm_scale, -probability_offset);
         }
         else
         {
@@ -409,7 +412,7 @@ __device__ __forceinline__ void update_mdo(float RS[][num_tiles_k][8], DTypeSVAc
       }
       else if constexpr (exp_offset)
       {        
-        m_temp += (-S_FP8_OFFSET);        
+        m_temp -= probability_offset;
       }
 
       // exchange element with the 4 threads in the row
@@ -590,6 +593,24 @@ __device__ __forceinline__ void accumulate_d_f8(uint32_t RS[][num_tiles_k / 2][4
     {
       mma::rowsum_f8f8f32(d[fq], RS[fq][fk]);
     }
+  }
+}
+
+template <uint32_t Rows, uint32_t Columns, uint32_t Values, ComputeUnit Denominator, typename Accumulator>
+__device__ __forceinline__ void prepare_fp8_probabilities(float scores[][Columns][8], uint32_t packed[][Columns / 2][4],
+    Accumulator output[][Values][8], float row_max[][2], float row_sum[][2], float scale)
+{
+  update_mdo<Rows, Columns, Values, std::is_same<Accumulator, half>::value, true, false,
+             Denominator == ComputeUnit::kTensorCore>(
+      scores, output, row_max, row_sum, scale);
+  if constexpr (Denominator == ComputeUnit::kCudaCore)
+  {
+    accumulate_d<Rows, Columns, ComputeUnit::kCudaCore>(scores, row_sum);
+  }
+  RS_32_to_8<Rows, Columns>(scores, packed);
+  if constexpr (Denominator == ComputeUnit::kTensorCore)
+  {
+    accumulate_d_f8<Rows, Columns>(packed, row_sum);
   }
 }
 

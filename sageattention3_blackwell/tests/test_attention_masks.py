@@ -118,6 +118,37 @@ class AttentionMaskTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "query length <= key length"):
             self.api.sageattn3_blackwell(k, q, q, is_causal=True)
 
+    @torch.inference_mode()
+    def test_qk_quantization_minimizes_error_over_five_scales(self):
+        torch.manual_seed(21)
+        x = torch.randn(1, 2, 128, 64, device="cuda", dtype=torch.float16)
+        x[..., :16] = 0
+        levels = torch.tensor([0, .5, 1, 1.5, 2, 3, 4, 6], device=x.device)
+        signed_levels = torch.cat((levels, -levels))
+        targets = torch.tensor([6, 5.5, 5, 4.5, 4], device=x.device)
+        token = torch.arange(128, device=x.device)[:, None]
+        block = torch.arange(4, device=x.device)[None, :]
+        sf_index = token // 64 * 256 + token % 16 * 16 + token % 64 // 16 * 4 + block
+        seq = token.squeeze(1)
+        local = seq % 32
+        permuted = x.index_select(2, seq - local + (local // 8) * 2 + (local % 8 // 2) * 8 + local % 2)
+
+        for pack, src in ((self.api.scale_and_quant_fp4, x), (self.api.scale_and_quant_fp4_permute, permuted)):
+            with self.subTest(pack=pack.__name__):
+                packed, sf = pack(x)
+                codes = torch.stack((packed & 15, packed >> 4), dim=-1).flatten(-2).long()
+                scales = sf.float().flatten(-2)[..., sf_index].unsqueeze(-1)
+                values = src.float().unflatten(-1, (4, 16))
+                restored = signed_levels[codes].unflatten(-1, (4, 16)) * scales
+                actual_error = (restored - values).square().sum(-1)
+
+                candidates = values.abs().amax(-1, keepdim=True) / targets
+                candidates = candidates.to(sf.dtype).float()
+                distances = values.abs()[..., None, :, None] - candidates[..., None, None] * levels
+                candidate_error = distances.square().amin(-1).sum(-1)
+                torch.testing.assert_close(actual_error, candidate_error.amin(-1), atol=1e-6, rtol=1e-5)
+                self.assertLess(actual_error.sum().item(), candidate_error[..., 0].sum().item())
+
 
 if __name__ == "__main__":
     unittest.main()

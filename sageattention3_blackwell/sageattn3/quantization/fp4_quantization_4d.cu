@@ -21,6 +21,7 @@
 #include <cuda_runtime_api.h>
 #include <cuda_runtime.h>
 
+#include <cuda_fp4.h>
 #include <cuda_fp8.h>
 
 #include "cuda_utils.h"
@@ -126,6 +127,63 @@ template <class Type>
 struct PackedVec {
   typename TypeConverter<Type>::Type elts[8];
 };
+
+inline __device__ void pack_scaled_fp4(const float2* values, float scale, uint32_t* packed) {
+  const float reciprocal = scale == 0.f ? 0.f : 1.f / scale;
+  #pragma unroll
+  for (int group = 0; group < CVT_FP4_ELTS_PER_THREAD / 8; ++group) {
+    float2 scaled[4];
+    #pragma unroll
+    for (int pair = 0; pair < 4; ++pair) {
+      const float2 value = values[group * 4 + pair];
+      scaled[pair] = make_float2(value.x * reciprocal, value.y * reciprocal);
+    }
+    packed[group] = fp32_vec_to_e2m1(scaled);
+  }
+}
+
+inline __device__ float fp4_squared_error(const float2* values, float scale, const uint32_t* packed) {
+  float error = 0.f;
+  #pragma unroll
+  for (int pair = 0; pair < CVT_FP4_ELTS_PER_THREAD / 2; ++pair) {
+    const auto codes = static_cast<uint8_t>(packed[pair / 4] >> (8 * (pair % 4)));
+    const auto restored = __half22float2(static_cast<half2>(__nv_cvt_fp4x2_to_halfraw2(codes, __NV_E2M1)));
+    const float dx = fmaf(restored.x, scale, -values[pair].x);
+    const float dy = fmaf(restored.y, scale, -values[pair].y);
+    error += dx * dx + dy * dy;
+  }
+  return error;
+}
+
+inline __device__ __nv_fp8_e4m3 quantize_fp4(const float2* values, float amax, uint32_t* packed) {
+  static_assert(CVT_FP4_ELTS_PER_THREAD == 16, "Each thread must own a complete NVFP4 block");
+  __nv_fp8_e4m3 best_scale(amax / 6.f);
+  pack_scaled_fp4(values, float(best_scale), packed);
+  float best_error = fp4_squared_error(values, float(best_scale), packed);
+  uint8_t last_scale = best_scale.__x;
+  // Score the actual stored E4M3 scales and keep the first candidate on ties.
+  #pragma unroll
+  for (int i = 1; i < 5; ++i) {
+    const __nv_fp8_e4m3 candidate_scale(amax / (6.f - 0.5f * i));
+    if (candidate_scale.__x == last_scale) {
+      continue;
+    }
+    last_scale = candidate_scale.__x;
+    uint32_t candidate[CVT_FP4_ELTS_PER_THREAD / 8];
+    const float scale = float(candidate_scale);
+    pack_scaled_fp4(values, scale, candidate);
+    const float error = fp4_squared_error(values, scale, candidate);
+    if (error < best_error) {
+      best_error = error;
+      best_scale = candidate_scale;
+      #pragma unroll
+      for (int group = 0; group < CVT_FP4_ELTS_PER_THREAD / 8; ++group) {
+        packed[group] = candidate[group];
+      }
+    }
+  }
+  return best_scale;
+}
 
 template <uint32_t head_dim, uint32_t BLOCK_SIZE, bool permute, typename T, bool fold_q = false>
 __global__ void scaled_fp4_quant_kernel(
@@ -259,15 +317,6 @@ __global__ void scaled_fp4_quant_kernel(
 
   float vecMax = float(__hmax(localMax.x, localMax.y));
 
-  // scaling factor
-  float SFValue = vecMax / 6.0f;
-  uint8_t SFValueFP8;
-  reinterpret_cast<__nv_fp8_e4m3&>(SFValueFP8) = __nv_fp8_e4m3(SFValue);
-  SFValue = float(reinterpret_cast<__nv_fp8_e4m3&>(SFValueFP8));
-
-  float SFValueInv = (SFValue == 0.0f) ? 0.0f : 1.0f / SFValue;
-
-  // convert input to float2 and apply scale
   float2 fp2Vals[CVT_FP4_ELTS_PER_THREAD / 2];
 
   #pragma unroll
@@ -277,16 +326,10 @@ __global__ void scaled_fp4_quant_kernel(
     } else {
       fp2Vals[i] = __bfloat1622float2(in_vec.elts[i]);
     }
-    fp2Vals[i].x = fp2Vals[i].x * SFValueInv;
-    fp2Vals[i].y = fp2Vals[i].y * SFValueInv;
   }
 
-  // convert to e2m1
   uint32_t e2m1Vals[CVT_FP4_ELTS_PER_THREAD / 8];
-  #pragma unroll
-  for (int i = 0; i < CVT_FP4_ELTS_PER_THREAD / 8; i++) {
-    e2m1Vals[i] = fp32_vec_to_e2m1(fp2Vals + i * 4);
-  }
+  const uint8_t SFValueFP8 = quantize_fp4(fp2Vals, vecMax, e2m1Vals).__x;
 
   // save, do not check range
   if constexpr (CVT_FP4_ELTS_PER_THREAD == 8) {
@@ -523,27 +566,16 @@ void scaled_fp4_quant(torch::Tensor const& input,
       dim3 block(BLOCK_SIZE * HEAD_DIM / CVT_FP4_ELTS_PER_THREAD, 1, 1);
       dim3 grid((num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE, batch_size, num_heads);
 
-      if (qmean.has_value()) {
-        scaled_fp4_quant_kernel<HEAD_DIM, BLOCK_SIZE, false, c_type, true>
-            <<<grid, block, 0, stream>>>(
-                reinterpret_cast<c_type*>(input.data_ptr()),
-                reinterpret_cast<uint8_t*>(output.data_ptr()),
-                reinterpret_cast<uint8_t*>(output_sf.data_ptr()),
-                batch_size, num_heads, num_tokens,
-                stride_bz_input, stride_h_input, stride_seq_input,
-                stride_bz_output, stride_h_output, stride_seq_output,
-                stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf, qmean->data_ptr<float>());
-      } else {
-        scaled_fp4_quant_kernel<HEAD_DIM, BLOCK_SIZE, false, c_type>
-            <<<grid, block, 0, stream>>>(
-                reinterpret_cast<c_type*>(input.data_ptr()),
-                reinterpret_cast<uint8_t*>(output.data_ptr()),
-                reinterpret_cast<uint8_t*>(output_sf.data_ptr()),
-                batch_size, num_heads, num_tokens,
-                stride_bz_input, stride_h_input, stride_seq_input,
-                stride_bz_output, stride_h_output, stride_seq_output,
-                stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf, nullptr);
-      }
+      const auto kernel = qmean.has_value()
+          ? scaled_fp4_quant_kernel<HEAD_DIM, BLOCK_SIZE, false, c_type, true>
+          : scaled_fp4_quant_kernel<HEAD_DIM, BLOCK_SIZE, false, c_type, false>;
+      kernel<<<grid, block, 0, stream>>>(
+          reinterpret_cast<c_type*>(input.data_ptr()), output.data_ptr<uint8_t>(),
+          reinterpret_cast<uint8_t*>(output_sf.data_ptr()), batch_size, num_heads, num_tokens,
+          stride_bz_input, stride_h_input, stride_seq_input,
+          stride_bz_output, stride_h_output, stride_seq_output,
+          stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf,
+          qmean.has_value() ? qmean->data_ptr<float>() : nullptr);
     });
   });
 }
@@ -605,6 +637,7 @@ void scaled_fp4_quant_permute(torch::Tensor const& input,
     CHECK_SHAPE(output_sf, batch_size, num_heads, ((num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE, head_dim / 16);
   }
 
+  const at::cuda::CUDAGuard device_guard(input.device());
   auto input_dtype = input.scalar_type();
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device());
 
@@ -615,14 +648,14 @@ void scaled_fp4_quant_permute(torch::Tensor const& input,
       dim3 grid((num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE, batch_size, num_heads);
 
       scaled_fp4_quant_kernel<HEAD_DIM, BLOCK_SIZE, true, c_type>
-          <<<grid, block, 0, stream>>>(
-              reinterpret_cast<c_type*>(input.data_ptr()),
-              reinterpret_cast<uint8_t*>(output.data_ptr()),
-              reinterpret_cast<uint8_t*>(output_sf.data_ptr()),
-              batch_size, num_heads, num_tokens,
-              stride_bz_input, stride_h_input, stride_seq_input,
-              stride_bz_output, stride_h_output, stride_seq_output,
-              stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf, nullptr);
+        <<<grid, block, 0, stream>>>(
+            reinterpret_cast<c_type*>(input.data_ptr()),
+            reinterpret_cast<uint8_t*>(output.data_ptr()),
+            reinterpret_cast<uint8_t*>(output_sf.data_ptr()),
+            batch_size, num_heads, num_tokens,
+            stride_bz_input, stride_h_input, stride_seq_input,
+            stride_bz_output, stride_h_output, stride_seq_output,
+            stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf, nullptr);
     });
   });
 }

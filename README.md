@@ -210,6 +210,10 @@ attn_output = sageattn(q, k, v, tensor_layout="HND", is_causal=False)
 + `q, k, v` are **FP16/BF16** dtype with the shape `(batch_size, head_num, seq_len, head_dim)` using default `tensor_layout="HND"`. For shape `(batch_size, seq_len, head_num, head_dim)`, set `tensor_layout="NHD"`. 
 + `is_causal` determines the use of a causal mask.
 
+On SM89, SM120 and SM121, the `fp32+fp16` FP8 CUDA path normalizes the output
+using the same rounded E4M3 probabilities as the value multiplication. Calls
+with `return_lse=True` use the FP32 probability sum for log-sum-exp.
+
 ### Available APIs:
 + `sageattn`: Automatically selects the optimal kernel based on the GPU to achieve a good performance-accuracy trade-off.
 + `sageattn_qk_int8_pv_fp16_triton`: INT8 quantization for $QK^\top$ and FP16 for $PV$ using Triton backend.

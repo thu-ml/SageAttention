@@ -50,6 +50,10 @@ attn_output = sageattn3_blackwell(q, k, v, is_causal=False)
 
 For long non-causal attention with `per_block_mean=True`, the FP4 path automatically chunks Q when the full correction tensor exceeds the TMA stride limit. You can also set `q_chunk_size` to a positive multiple of 128 to bound the size of that tensor. The chunks reuse the quantized K and V tensors. See [#394](https://github.com/thu-ml/SageAttention/pull/394).
 
+For each 16-element Q and K block, the CUDA quantizer tries `amax / t` with
+`t` in `{6, 5.5, 5, 4.5, 4}`. It selects the E4M3 scale with the lowest NVFP4
+reconstruction error. The approach extends [Four Over Six](https://arxiv.org/abs/2512.02010).
+
 ## Performance
 ### Speed of Kernels
 ![Speed on RTX5090](../assets/sage3_speed.png)

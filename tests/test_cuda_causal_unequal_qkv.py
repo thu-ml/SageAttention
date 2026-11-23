@@ -3,7 +3,7 @@ import os
 import pytest
 import torch
 
-from sageattention import sageattn_qk_int8_pv_fp8_cuda, sageattn_varlen
+from sageattention import sageattn, sageattn_qk_int8_pv_fp8_cuda, sageattn_varlen
 
 
 def _require_sm89_or_newer():
@@ -39,7 +39,8 @@ def _index_value_tensors_varlen(qo_len, kv_len, *, dtype=torch.bfloat16):
 
 
 @pytest.mark.parametrize("qo_len,kv_len", [(5, 9), (128, 129), (33, 129)])
-def test_fp8_cuda_causal_uses_right_aligned_mask_for_unequal_qkv(qo_len, kv_len):
+@pytest.mark.parametrize("return_lse", [False, True])
+def test_fp8_cuda_causal_uses_right_aligned_mask_for_unequal_qkv(qo_len, kv_len, return_lse):
     _require_sm89_or_newer()
     q, k, v = _index_value_tensors(qo_len, kv_len)
 
@@ -52,15 +53,32 @@ def test_fp8_cuda_causal_uses_right_aligned_mask_for_unequal_qkv(qo_len, kv_len)
         qk_quant_gran="per_warp",
         pv_accum_dtype="fp32+fp16",
         smooth_k=False,
+        return_lse=return_lse,
     )
     torch.cuda.synchronize()
 
     allowed_counts = torch.arange(kv_len - qo_len + 1, kv_len + 1, device="cuda", dtype=torch.float32)
+    if return_lse:
+        out, lse = out
+        expected_lse = allowed_counts.log() + q.size(-1) ** 0.5
+        torch.testing.assert_close(lse[0, 0], expected_lse, rtol=0.0, atol=0.003)
     expected = (allowed_counts - 1.0) / (2.0 * (kv_len - 1))
     observed = out[0, :, 0, 0].float()
 
     assert torch.isfinite(out).all()
     torch.testing.assert_close(observed, expected, rtol=0.0, atol=0.02)
+
+
+@pytest.mark.parametrize("dtype,dim", [(torch.float16, 64), (torch.bfloat16, 128)])
+def test_fp8_softmax_normalizes_its_packed_probabilities(dtype, dim):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() not in {(8, 9), (12, 0), (12, 1)}:
+        pytest.skip("FP8 probability normalization requires SM89/120/121")
+    torch.manual_seed(9)
+    q = torch.randn(1, 4, 257, dim, device="cuda", dtype=dtype)
+    k = torch.randn(1, 2, 259, dim, device="cuda", dtype=dtype)
+    v = torch.full_like(k, 3)
+    out = sageattn(q, k, v)
+    torch.testing.assert_close(out, torch.full_like(out, 3), atol=0.016, rtol=0)
 
 
 def test_fp8_cuda_causal_rejects_more_queries_than_keys():

@@ -311,27 +311,9 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
     }
     K_idx_lane_base += CTA_K;
 
-    if constexpr (std::is_same<DTypeSVAccum, float>::value)
-    {
-      update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, false, true, false>(RS_f32, RO, m, d, original_sm_scale);
-    }
-    else if constexpr (std::is_same<DTypeSVAccum, half>::value)
-    {
-      update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, true, true, false>(RS_f32, RO, m, d, original_sm_scale);
-    }
-
-    if constexpr (DenominatorAccumUnit == ComputeUnit::kCudaCore)
-    {
-      accumulate_d<num_tiles_q, num_tiles_k, ComputeUnit::kCudaCore>(RS_f32, d);
-    }
-
     uint32_t RS_f8[num_tiles_q][num_tiles_k / 2][4];
-    RS_32_to_8<num_tiles_q, num_tiles_k>(RS_f32, RS_f8);
-
-    if constexpr (DenominatorAccumUnit == ComputeUnit::kTensorCore)
-    {
-      accumulate_d_f8<num_tiles_q, num_tiles_k>(RS_f8, d);
-    }
+    prepare_fp8_probabilities<num_tiles_q, num_tiles_k, num_tiles_v, DenominatorAccumUnit>(
+        RS_f32, RS_f8, RO, m, d, original_sm_scale);
 
     __syncthreads();
 
@@ -419,27 +401,9 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
     // apply_out_of_bound_mask<num_tiles_q, num_tiles_k>(K_idx_lane_base, RS_f32, kv_len);
     K_idx_lane_base += CTA_K;
 
-    if constexpr (std::is_same<DTypeSVAccum, float>::value)
-    {
-      update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, false, true, false>(RS_f32, RO, m, d, original_sm_scale);
-    }
-    else if constexpr (std::is_same<DTypeSVAccum, half>::value)
-    {
-      update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, true, true, false>(RS_f32, RO, m, d, original_sm_scale);
-    }
-
-    if constexpr (DenominatorAccumUnit == ComputeUnit::kCudaCore)
-    {
-      accumulate_d<num_tiles_q, num_tiles_k, ComputeUnit::kCudaCore>(RS_f32, d);
-    }
-
     uint32_t RS_f8[num_tiles_q][num_tiles_k / 2][4];
-    RS_32_to_8<num_tiles_q, num_tiles_k>(RS_f32, RS_f8);
-
-    if constexpr (DenominatorAccumUnit == ComputeUnit::kTensorCore)
-    {
-      accumulate_d_f8<num_tiles_q, num_tiles_k>(RS_f8, d);
-    }
+    prepare_fp8_probabilities<num_tiles_q, num_tiles_k, num_tiles_v, DenominatorAccumUnit>(
+        RS_f32, RS_f8, RO, m, d, original_sm_scale);
 
     __syncthreads();
 
@@ -526,27 +490,9 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
     apply_out_of_bound_mask<num_tiles_q, num_tiles_k>(K_idx_lane_base, RS_f32, kv_len);
     K_idx_lane_base += CTA_K;
 
-    if constexpr (std::is_same<DTypeSVAccum, float>::value)
-    {
-      update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, false, true, false>(RS_f32, RO, m, d, original_sm_scale);
-    }
-    else if constexpr (std::is_same<DTypeSVAccum, half>::value)
-    {
-      update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, true, true, false>(RS_f32, RO, m, d, original_sm_scale);
-    }
-
-    if constexpr (DenominatorAccumUnit == ComputeUnit::kCudaCore)
-    {
-      accumulate_d<num_tiles_q, num_tiles_k, ComputeUnit::kCudaCore>(RS_f32, d);
-    }
-
     uint32_t RS_f8[num_tiles_q][num_tiles_k / 2][4];
-    RS_32_to_8<num_tiles_q, num_tiles_k>(RS_f32, RS_f8);
-
-    if constexpr (DenominatorAccumUnit == ComputeUnit::kTensorCore)
-    {
-      accumulate_d_f8<num_tiles_q, num_tiles_k>(RS_f8, d);
-    }
+    prepare_fp8_probabilities<num_tiles_q, num_tiles_k, num_tiles_v, DenominatorAccumUnit>(
+        RS_f32, RS_f8, RO, m, d, original_sm_scale);
 
     // ensure V is ready
     cp_async::wait_group<0>();
@@ -578,7 +524,7 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
 
   // TODO: thread block sync mdo state for num_warps_k > 0. Then only one thread block needs to do the final saving.
 
-  normalize_d<num_tiles_q, num_tiles_v, ComputeUnit::kCudaCore>(RO, m, d);
+  normalize_d<num_tiles_q, num_tiles_v, DenominatorAccumUnit>(RO, m, d);
 
   // ! here we just implement the case for fp32 acumulation
   if constexpr (fuse_v_scale)
