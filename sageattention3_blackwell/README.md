@@ -23,7 +23,8 @@ This hybrid approach may achieve **lossless acceleration**.
 
 ## Installation
 ### Base environment
-+ `python>=3.13`   , `torch>=2.8.0`, `CUDA >=12.8`
++ CUDA 12.8 or newer and a supported Blackwell GPU.
++ See the [Windows build matrix](../README.md#what-this-fork-provides) for verified Python/PyTorch combinations, including Python 3.12 with PyTorch 2.7.1.
 
 ### Install Package
 

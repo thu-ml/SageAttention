@@ -63,7 +63,7 @@
   TORCH_CHECK(x.dim() == true_dim, \
               "Tensor " #x " must have dimension number (" #true_dim ")")
 #define CHECK_SHAPE(x, ...)                                   \
-  TORCH_CHECK(x.sizes() == torch::IntArrayRef({__VA_ARGS__}), \
+  TORCH_CHECK(x.sizes().equals(torch::IntArrayRef({__VA_ARGS__})), \
               "Tensor " #x " must have shape (" #__VA_ARGS__ ")")
 #define CHECK_CONTIGUOUS(x) \
   TORCH_CHECK(x.is_contiguous(), "Tensor " #x " must be contiguous")

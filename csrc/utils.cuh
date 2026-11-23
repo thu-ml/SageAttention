@@ -29,7 +29,7 @@
   TORCH_CHECK(x.numel() >= minimum, \
               "Tensor " #x " must have at last " #minimum " elements")
 #define CHECK_SHAPE(x, ...)                                   \
-  TORCH_CHECK(x.sizes() == torch::IntArrayRef({__VA_ARGS__}), \
+  TORCH_CHECK(x.sizes().equals(torch::IntArrayRef({__VA_ARGS__})), \
               "Tensor " #x " must have shape (" #__VA_ARGS__ ")")
 #define CHECK_CONTIGUOUS(x) \
   TORCH_CHECK(x.is_contiguous(), "Tensor " #x " must be contiguous")

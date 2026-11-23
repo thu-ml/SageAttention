@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "../cuda_compat.h"
+
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/extension.h>
 

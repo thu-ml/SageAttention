@@ -120,8 +120,6 @@ if not SKIP_CUDA_BUILD:
         )
     nvcc_flags = [
         "-O3",
-        # "-O0",
-        "-std=c++17",
         "-U__CUDA_NO_HALF_OPERATORS__",
         "-U__CUDA_NO_HALF_CONVERSIONS__",
         "-U__CUDA_NO_BFLOAT16_OPERATORS__",
@@ -131,8 +129,6 @@ if not SKIP_CUDA_BUILD:
         "--expt-relaxed-constexpr",
         "--expt-extended-lambda",
         "--use_fast_math",
-        # "--ptxas-options=-v",  # printing out number of registers
-        "--ptxas-options=--verbose,--warn-on-local-memory-usage",  # printing out number of registers
         "-diag-suppress=177",
         "-lineinfo",
         "-DCUTLASS_DEBUG_TRACE_LEVEL=0",  # Can toggle for debugging
@@ -148,13 +144,19 @@ if not SKIP_CUDA_BUILD:
         cutlass_dir / "tools" / "util" / "include",
     ]
 
+    # Let PyTorch's BuildExtension select the matching C++ standard for CXX/NVCC.
     if os.name == "nt":
         nvcc_flags += ["-D_WIN32=1", "-DUSE_CUDA=1"]
-        cxx_flags = ["/std:c++17", "/Zc:__cplusplus", "/bigobj", "/MD", "/permissive-"]
+        cxx_flags = ["/Zc:__cplusplus", "/bigobj", "/MD", "/permissive-"]
+        # CUDA 13.2+ CCCL headers require MSVC's conforming preprocessor.
+        if bare_metal_version >= Version("13.2"):
+            cxx_flags.append("/Zc:preprocessor")
+            # Work around CuTe's MSVC template lookup bug (NVIDIA/cutlass#3065).
+            cxx_flags.append("/Zc:twoPhase-")
         nvcc_flags += [f"-Xcompiler={flag}" for flag in cxx_flags]
         cxx_flags += ["/O2"]
     else:
-        cxx_flags = ["-O3", "-std=c++17"]        
+        cxx_flags = ["-O3"]
 
     ext_modules.append(
         CUDAExtension(

@@ -14,10 +14,36 @@ It is based on the official Sage Attention repository, with **minimal changes**:
   - Packaging / wheel generation
 - No new features are added on top of upstream; the functionality should be **identical** to the official project, just **buildable and usable on Windows**.
 
-Due to limitations of my local environment, I can currently only provide wheels for:
+The following Windows builds were verified with MSVC 19.44:
 
-- **PyTorch:** 2.6.0 – 2.9.1  
-- **Python:** 3.11 – 3.13  
+| Environment | SageAttention 2.2 | SageAttention 3 |
+| --- | --- | --- |
+| `cu124torch260_cp311` | Build verified | Requires CUDA 12.8 or newer |
+| `cu128torch271_cp312` | Build verified | Build verified |
+| `cu128torch280_cp313` | Build verified | Build verified |
+| `cu130torch291_cp313` | Build verified | Build verified |
+| `cu130torch2121_cp313` | Build verified | Build verified |
+| `cu134torch2150_cp314` | Build verified | Build verified |
+
+Both setup scripts let PyTorch's `BuildExtension` select the C++ standard for
+the host compiler and NVCC. For example, PyTorch 2.9.1 selects C++17, while
+2.12.1 selects C++20. Keep `/Zc:__cplusplus` enabled on MSVC so headers see the
+selected standard. CUDA 13 alone does not determine the required C++ standard.
+For CUDA 13.2+, both scripts also enable `/Zc:preprocessor`, as required by
+the bundled CCCL headers.
+SageAttention 3 also uses `/Zc:twoPhase-` in these builds to work around the
+[CuTe/MSVC template lookup issue](https://github.com/NVIDIA/cutlass/issues/3065).
+
+For Windows CUDA 13+ builds, `csrc/cuda_compat.h` loads the CCCL PTX headers
+before PyTorch while temporarily disabling the conflicting Windows SAL
+`__out` macro. Include it before other headers in affected CUDA sources.
+CUDA 12.x and non-Windows builds skip this workaround.
+
+The matrix describes compilation and extension imports. On RTX 5090,
+SageAttention 3 causal checks against PyTorch SDPA show cosine similarity
+of 0.68–0.74 for random FP16/BF16 inputs with head dimensions 64 and 128.
+Rebuilding the kernels from commit `821da7b` reproduces the same results. These build
+changes preserve the existing kernels; they do not fix that numerical issue.
 
 ---
 
@@ -37,7 +63,7 @@ CUDA architectures are kept **aligned with the official Windows PyTorch builds**
 However, the **upstream constraints still apply** and are **not** bypassed in this fork:
 
 - **Sage 2++** does **not** support architectures **below 8.0**.
-- **Sage 3** only supports architectures **below 10.0**.
+- **Sage 3** targets Blackwell architectures **10.0, 12.0 and 12.1**, with CUDA **12.8 or newer** (12.1 requires CUDA 12.9 or newer).
 - This fork does **not** extend or change those architecture limits.
 
 ---

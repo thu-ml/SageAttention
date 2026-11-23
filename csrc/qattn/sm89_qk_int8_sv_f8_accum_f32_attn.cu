@@ -1,3 +1,5 @@
+#include "../cuda_compat.h"
+
 #include "attn_cuda_sm89.h"
 #include "qk_int_sv_f8_cuda_sm89.cuh"
 

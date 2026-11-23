@@ -47,34 +47,30 @@ if not SKIP_CUDA_BUILD:
     # Supported NVIDIA GPU architectures.
     SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "10.0", "12.0", "12.1"}
 
-    # Compiler flags.
+    # Let PyTorch's BuildExtension select the matching C++ standard for CXX/NVCC.
     if os.name == "nt":
-        CXX_FLAGS = ["/Zi", "/openmp", "/std:c++17", "/Zc:__cplusplus", "/DENABLE_BF16", "/MD", "/permissive-"]
+        CXX_FLAGS = ["/Zi", "/openmp", "/Zc:__cplusplus", "/DENABLE_BF16", "/MD", "/permissive-"]
         NVCC_FLAGS = [
             "-O3",
-            "-std=c++17",
             "-U__CUDA_NO_HALF_OPERATORS__",
             "-U__CUDA_NO_HALF_CONVERSIONS__",
             "--use_fast_math",
             "--threads=8",
-            "-Xptxas=-v",
-            "-diag-suppress=174",            
+            "-diag-suppress=174,3189",
             "-D_WIN32=1",
             "-DUSE_CUDA=1",
         ]
         NVCC_FLAGS += [f"-Xcompiler={flag}" for flag in CXX_FLAGS]
         CXX_FLAGS += ["/O2"]
     else:
-        CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
+        CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-DENABLE_BF16"]
         NVCC_FLAGS = [
             "-O3",
-            "-std=c++17",
             "-U__CUDA_NO_HALF_OPERATORS__",
             "-U__CUDA_NO_HALF_CONVERSIONS__",
             "--use_fast_math",
             "--threads=8",
-            "-Xptxas=-v",
-            "-diag-suppress=174",
+            "-diag-suppress=174,3189",
         ]
 
     ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI and os.name != "nt" else 0
@@ -128,6 +124,11 @@ if not SKIP_CUDA_BUILD:
             compute_capabilities.add(f"{major}.{minor}")
 
     nvcc_cuda_version = get_nvcc_cuda_version(CUDA_HOME)
+
+    # CUDA 13.2+ CCCL headers require MSVC's conforming preprocessor.
+    if os.name == "nt" and nvcc_cuda_version >= Version("13.2"):
+        CXX_FLAGS.append("/Zc:preprocessor")
+        NVCC_FLAGS.append("-Xcompiler=/Zc:preprocessor")
 
     if not compute_capabilities:
         raise RuntimeError(

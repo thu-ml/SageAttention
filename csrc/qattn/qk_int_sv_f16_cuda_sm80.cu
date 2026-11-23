@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "../cuda_compat.h"
+
 #include "../utils.cuh"
 #include <cuda_fp16.h>
 #include <cuda_pipeline_primitives.h>
