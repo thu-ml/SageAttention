@@ -1,108 +1,112 @@
-# Another Sage Attention Windows Fork (Sage Attention 3)
+# SageAttention for Windows
 
-This is **another Sage Attention Windows fork**, adding support for **Sage Attention 3**.
+This fork began as a small set of Windows build and packaging patches for [SageAttention](https://github.com/thu-ml/SageAttention). We kept the patch set minimal while following upstream. Upstream `main` has stayed at its [January 17, 2026 commit](https://github.com/thu-ml/SageAttention/commit/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5) through November 23, 2026. With kernel fixes still pending and new Windows CUDA and PyTorch builds to support, we now maintain SageAttention 2.2 and SageAttention 3 in this fork.
 
-It is based on the official Sage Attention repository, with **minimal changes**: the goal is only to fix Windows-specific build issues and provide a Windows build with **feature parity** to upstream Sage Attention.
+## Fixes brought over from upstream
+
+- **SageAttention 2.2** uses the current CUDA stream for CUDA Graph replay, applies right-aligned causal masks to unequal Q and K lengths, and zero-fills tail tiles and zero-scale FP8 V channels. We also brought over 64-bit Triton addressing and reduced peak memory by allocating the output after V quantization. [#380](https://github.com/thu-ml/SageAttention/pull/380) · [#372](https://github.com/thu-ml/SageAttention/pull/372) · [#377](https://github.com/thu-ml/SageAttention/pull/377) · [#387](https://github.com/thu-ml/SageAttention/pull/387) · [#384](https://github.com/thu-ml/SageAttention/issues/384)
+- **SageAttention 3** applies causal and padding masks in token order after FP4 interleaving, restores the omitted causal key block, and initializes the softmax and output accumulators. It supports native GQA/MQA, pads head widths up to 128, preserves the caller’s K, and chunks long non-causal queries when the correction tensor would exceed the TMA stride limit. Explicit masks and ragged causal lengths with different Q and K padding use SDPA. [#408](https://github.com/thu-ml/SageAttention/pull/408) · [#410](https://github.com/thu-ml/SageAttention/issues/410) · [#406](https://github.com/thu-ml/SageAttention/pull/406) · [#401](https://github.com/thu-ml/SageAttention/pull/401) · [#409](https://github.com/thu-ml/SageAttention/pull/409) · [#394](https://github.com/thu-ml/SageAttention/pull/394) · [#407](https://github.com/thu-ml/SageAttention/pull/407)
+
+## Optimizations in this fork
+
+- **SageAttention 2.2** uses standard E4M3 conversion and, where supported, normalizes attention with row sums from the rounded FP8 probabilities. Paths that return log-sum-exp retain FP32 row sums. [VC-Attention](https://arxiv.org/abs/2609.15810)
+- **SageAttention 3** fuses 128-token Q block centering with FP4 quantization for aligned inputs. Each 16-element Q and K block evaluates five E4M3 scales derived from `amax / {6, 5.5, 5, 4.5, 4}`. Each V channel evaluates `amax / 6` and its neighboring finite E4M3 encodings over 16 consecutive tokens. The quantizers pick the candidates with the lowest reconstruction error. [#411](https://github.com/thu-ml/SageAttention/pull/411) · [Four Over Six](https://arxiv.org/abs/2512.02010) · [ScaleSweep](https://arxiv.org/abs/2606.07618)
+- **Windows builds** use the PyTorch dispatcher and the CPython stable ABI, with FakeTensor support for `torch.compile`. CUDA 13.x builds handle the Windows SAL and CCCL header conflict. CUDA 13.2 and later use MSVC’s conforming preprocessor.
+
+## Windows wheels
+
+Download `sageattention` for SageAttention 2.2 or `sageattn3` for SageAttention 3. Match the `cu…torch…` tag to your installed PyTorch build. Both packages use `cp310-abi3-win_amd64`, so the same wheel can load on CPython 3.10 and later if the matching PyTorch build supports that Python version. [Windows releases](https://github.com/mengqin/SageAttention/releases)
+
+The current wheel matrix includes CUDA 13.0, 13.2, and 13.4 with PyTorch releases through 2.15.0.
+
+| CUDA | PyTorch | SageAttention 2.2 | SageAttention 3 |
+| --- | --- | --- | --- |
+| 12.4 | 2.6.0 | ✓ | |
+| 12.6 | 2.7.1 | ✓ | |
+| 12.8 | 2.8.0, 2.9.1, 2.10.0 | ✓ | ✓ |
+| 13.0 | 2.11.0, 2.12.1, 2.13.0, 2.14.1 | ✓ | ✓ |
+| 13.2 | 2.14.1, 2.15.0 | ✓ | ✓ |
+| 13.4 | 2.15.0 | ✓ | ✓ |
+
+The SageAttention 2.2 wheels cover Ampere, Ada, Hopper, and Blackwell where the matching CUDA toolkit supports the architecture. The SageAttention 3 wheels target Blackwell `sm_120` on CUDA 12.8 and `sm_120`/`sm_121` on CUDA 13.x.
+
+The [20261123 wheels](https://github.com/mengqin/SageAttention/releases/tag/20261123) were built from `52c3115`. The V three-candidate change is part of the newer `main` commit used in the comparison below.
+
+Install the selected wheel with `python -m pip install <wheel-file.whl>` in the environment that runs your application. The [SageAttention 3 README](sageattention3_blackwell/README.md) and [upstream documentation](https://github.com/thu-ml/SageAttention/tree/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5#installation) cover source builds and additional API options.
+
+```python
+from sageattention import sageattn
+from sageattn3 import sageattn3_blackwell
+
+# q, k, v have shape [batch, heads, tokens, head_dim] and use FP16 or BF16.
+out2 = sageattn(q, k, v, is_causal=False)
+out3 = sageattn3_blackwell(q, k, v, is_causal=False)
+```
+
+## Upstream comparison
+
+We compared upstream [`d1a57a5`](https://github.com/thu-ml/SageAttention/commit/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5) with this fork at [`e497847`](https://github.com/mengqin/SageAttention/commit/e497847fbb5f68f46d75ddbaf6ae3aba1f1807a0) on Windows, using the same RTX 5090, PyTorch `2.12.1+cu130`, CUDA 13.0 and BF16 inputs. The upstream build uses the Windows compiler and kernel launch compatibility changes from [`06f8d49`](https://github.com/mengqin/SageAttention/commit/06f8d49ebdb26006700487194ee2526a7f336569) with upstream attention, masking, and quantization logic.
+
+On the four H3 workloads, SageAttention 3’s full API took **4.5–14.3% less time** and its mean relative L1 fell by **0.55–1.02 percentage points**. SageAttention 2.2’s error fell by about **0.03 percentage points**, with latency ranging from **1.2% lower to 3.1% higher** across the same workloads.
+
+![Latency and attention output error for upstream and this fork, for both SageAttention 2.2 and SageAttention 3](assets/windows-comparison/attention-benchmark.png)
+
+Values show **upstream → fork**.
+
+| Workload | Sage2.2 latency | Sage2.2 relative L1 | Sage3 latency | Sage3 relative L1 |
+| --- | ---: | ---: | ---: | ---: |
+| H3 Image 2048² | 4.79 ms → 4.73 ms | 2.29% → 2.26% | 4.67 ms → 4.00 ms | 8.93% → 7.90% |
+| H3 Video 768×448 | 9.30 ms → 9.47 ms | 1.30% → 1.27% | 8.73 ms → 7.53 ms | 6.88% → 6.24% |
+| H3 Image 4096² | 22.42 ms → 22.89 ms | 2.28% → 2.25% | 19.85 ms → 18.15 ms | 9.20% → 8.43% |
+| H3 Video 1344×768 | 75.07 ms → 77.38 ms | 1.04% → 1.01% | 61.63 ms → 58.85 ms | 6.21% → 5.66% |
+| Gaussian, 1,024 tokens | 0.17 ms → 0.15 ms | 3.75% → 3.74% | 0.73 ms → 0.75 ms | 18.85% → 17.38% |
+| Gaussian, 4,096 tokens | 0.46 ms → 0.48 ms | 3.84% → 3.83% | 0.96 ms → 0.99 ms | 19.00% → 17.44% |
+| Gaussian, 16,384 tokens | 4.18 ms → 4.43 ms | 3.90% → 3.89% | 3.44 ms → 3.41 ms | 19.02% → 17.48% |
+
+We replayed Q/K/V from MiniMax H3 Image and H3 video at layers 0, 25, and 49, using all 56 heads. The image replay uses tensors captured with our in-house WaveCut-style INT8 ConvRot checkpoint. The Gaussian tests use 16 heads and seeds 42 and 1234. All inputs use head width 128 and non-causal attention. We average the per-sample CUDA-event medians from 15 full API calls after three warmups. We restore K outside the timer on both builds because the upstream SageAttention 3 API centers it in place. Output error is relative L1 against FP32 attention at 256 query positions using the full K/V sequence. Peak process shared GPU memory was 88 MiB on WDDM. [Per-sample measurements](assets/windows-comparison/attention-benchmark.csv)
+
+## MiniMax H3 Image examples
+
+We compared the *Skin and hair*, *Fine textiles*, and *Architecture and geometry* prompts and seeds. All five columns use the Comfy-Org INT8 ConvRot checkpoint and share the same text encoder, black reference image, and tiled VAE decoding. Only the attention backend in the 50 diffusion transformer blocks varies. We ran the same 4096 × 4096 Euler workflow with CFG 1 and six sampling steps for each column. The previews show the full frame. [RGB error against cuDNN SDPA](assets/windows-comparison/image-metrics.csv)
+
+| Scene | cuDNN SDPA | Upstream Sage2.2 | Our Sage2.2 | Upstream Sage3 | Our Sage3 |
+| --- | --- | --- | --- | --- | --- |
+| Skin and hair, seed 42 | ![SDPA portrait](assets/windows-comparison/skin-hair-sdpa.webp) | ![Upstream Sage2.2 portrait](assets/windows-comparison/skin-hair-upstream-sage2.webp) | ![Our Sage2.2 portrait](assets/windows-comparison/skin-hair-fork-sage2.webp) | ![Upstream Sage3 portrait](assets/windows-comparison/skin-hair-upstream-sage3.webp) | ![Our Sage3 portrait](assets/windows-comparison/skin-hair-fork-sage3.webp) |
+| Fine textiles, seed 1234 | ![SDPA textiles](assets/windows-comparison/textiles-sdpa.webp) | ![Upstream Sage2.2 textiles](assets/windows-comparison/textiles-upstream-sage2.webp) | ![Our Sage2.2 textiles](assets/windows-comparison/textiles-fork-sage2.webp) | ![Upstream Sage3 textiles](assets/windows-comparison/textiles-upstream-sage3.webp) | ![Our Sage3 textiles](assets/windows-comparison/textiles-fork-sage3.webp) |
+| Architecture and geometry, seed 42 | ![SDPA architecture](assets/windows-comparison/architecture-sdpa.webp) | ![Upstream Sage2.2 architecture](assets/windows-comparison/architecture-upstream-sage2.webp) | ![Our Sage2.2 architecture](assets/windows-comparison/architecture-fork-sage2.webp) | ![Upstream Sage3 architecture](assets/windows-comparison/architecture-upstream-sage3.webp) | ![Our Sage3 architecture](assets/windows-comparison/architecture-fork-sage3.webp) |
+
+Against the cuDNN SDPA reference, our Sage3 lowers RGB MAE and raises PSNR in all three scenes compared with upstream Sage3. The largest MAE drop is in the architecture scene, from 20.98 to 15.92 on the 0–255 RGB scale. Our Sage2.2 lowers MAE for the portrait and raises it for the textiles and architecture scenes.
+
+<details>
+<summary>Prompts and sampling settings</summary>
+
+We used `minimax_h3_image_pruned_int8_convrot.safetensors` in ComfyUI 0.45.0 with `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` and `minimax_h3_image_vae_fp16.safetensors`. All variants used `--reserve-vram 13 --disable-pinned-memory --disable-async-offload`.  The sigma schedule was `1.0, 0.9675236940383911, 0.8875485062599182, 0.75, 0.5327739119529724, 0.23200887441635132, 0.0`. [Comfy-Org checkpoint](https://huggingface.co/Comfy-Org/MiniMax-H3-Image/blob/0f41fb1c0aa51c560109139537e53ad0dae8ce5e/diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors)
+
+**Skin and hair**
+
+> A natural-light editorial portrait photograph of an adult woman, age 35, wearing a plain white cotton shirt. Close framing of her face and shoulders, realistic fine pores, subtle freckles, individual loose strands of dark wavy hair, gentle side lighting from a large window, neutral gray background, unretouched photographic texture, accurate anatomy, no text.
+
+**Fine textiles**
+
+> A carefully lit macro product photograph of fine woven linen, knitted wool and a folded silk scarf on a wooden table. Tiny crossing warp and weft threads, dense stitches, subtle fibers, physically plausible folds and soft shadows. Neutral daylight, natural colors, precise textile texture, no text.
+
+**Architecture and geometry**
+
+> A high-resolution architectural photograph of a modern stone library facade, straight vertical columns, evenly spaced rectangular windows, fine brick courses and a regular metal railing. Frontal perspective, crisp geometric alignment, overcast daylight, realistic stone grain, no people, no signs or text.
+
+</details>
+
+## Credits
+
+SageAttention is developed by the original [SageAttention team](https://github.com/thu-ml/SageAttention). Please cite the relevant work if you use these kernels. [SageAttention](https://arxiv.org/abs/2410.02367) · [SageAttention 2](https://arxiv.org/abs/2411.10958) · [SageAttention 2++](https://arxiv.org/abs/2505.21136) · [SageAttention 3](https://arxiv.org/abs/2505.11594)
+
+We thank [woct0rdho](https://github.com/woct0rdho/SageAttention) and [pamparamm](https://github.com/pamparamm) for the Windows build work that helped this fork get started. The examples use the [MiniMax H3 Image model](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) in [ComfyUI](https://github.com/Comfy-Org/ComfyUI). [Apache 2.0 license](LICENSE)
 
 ---
 
-## What This Fork Provides
+## Original SageAttention README
 
-- Based on **official Sage Attention** with the smallest possible patch set.
-- Only changes related to:
-  - Windows build fixes
-  - Packaging / wheel generation
-- No new features are added on top of upstream; the functionality should be **identical** to the official project, just **buildable and usable on Windows**.
-
-The following Windows builds were verified with MSVC 19.44:
-
-| Environment | SageAttention 2.2 | SageAttention 3 |
-| --- | --- | --- |
-| `cu124torch260_cp311` | Build verified | Requires CUDA 12.8 or newer |
-| `cu128torch271_cp312` | Build verified | Build verified |
-| `cu128torch280_cp313` | Build verified | Build verified |
-| `cu130torch291_cp313` | Build verified | Build verified |
-| `cu130torch2121_cp313` | Build verified | Build verified |
-| `cu134torch2150_cp314` | Build verified | Build verified |
-
-Both packages build CPython Stable ABI wheels tagged `cp310-abi3`. A wheel
-can be reused across Python 3.10 and later with the same compatible PyTorch,
-CUDA and GPU architecture build. The PyTorch distribution must also support
-the target Python version.
-
-Both setup scripts let PyTorch's `BuildExtension` select the C++ standard for
-the host compiler and NVCC. For example, PyTorch 2.9.1 selects C++17, while
-2.12.1 selects C++20. Keep `/Zc:__cplusplus` enabled on MSVC so headers see the
-selected standard. CUDA 13 alone does not determine the required C++ standard.
-For CUDA 13.2+, both scripts also enable `/Zc:preprocessor`, as required by
-the bundled CCCL headers.
-SageAttention 3 also uses `/Zc:twoPhase-` in these builds to work around the
-[CuTe/MSVC template lookup issue](https://github.com/NVIDIA/cutlass/issues/3065).
-
-For Windows CUDA 13+ builds, `csrc/cuda_compat.h` loads the CCCL PTX headers
-before PyTorch while temporarily disabling the conflicting Windows SAL
-`__out` macro. Include it before other headers in affected CUDA sources.
-CUDA 12.x and non-Windows builds skip this workaround.
-
-SageAttention 3 applies causal and padding masks in token order after the
-FP4 K/V layout permutation and accumulates the key block before the causal
-diagonal. These fixes are from [upstream #410](https://github.com/thu-ml/SageAttention/issues/410)
-and [#408](https://github.com/thu-ml/SageAttention/pull/408).
-
----
-
-## CUDA Architectures
-
-CUDA architectures are kept **aligned with the official Windows PyTorch builds**:
-
-- During build, the script calls:
-
-  ```python
-  torch.cuda.get_arch_list()
-  ```
-
-- The result is used to populate the `TORCH_CUDA_ARCH_LIST` environment variable.
-- This keeps Sage Attention’s supported architectures **as close as possible** to those of the installed PyTorch wheel.
-
-However, the **upstream constraints still apply** and are **not** bypassed in this fork:
-
-- **Sage 2++** does **not** support architectures **below 8.0**.
-- **Sage 3** targets Blackwell architectures **10.0, 12.0 and 12.1**, with CUDA **12.8 or newer** (12.1 requires CUDA 12.9 or newer).
-- This fork does **not** extend or change those architecture limits.
-
----
-
-## Why Does This Fork Exist?
-
-Sage Attention is a great project: it uses **quantized attention** to achieve significant speedups while keeping the CUDA kernels relatively straightforward (especially compared to something like FlashAttention). For me, it’s a **must-have attention implementation for ComfyUI**.
-
-Unfortunately, I am a **Windows user**, and Sage Attention’s Windows support is, as many people know, quite poor.
-
-Thankfully, there are some excellent forks out there, especially **woct0rdho**’s Windows fork. That fork:
-
-- Ships Windows wheels
-- Fixes multiple platform-specific issues
-- In my experience, is sometimes even **more stable** than the original upstream
-
-I have been using their wheels for a long time and absolutely love that branch.
-
-Then **Sage Attention 3** arrived — and that’s where the problems started.
-
-woct0rdho used **Python abi3** wheels to avoid version hell, which is a brilliant idea. However, Sage Attention 3 seems to rely on some new pieces that make it impossible (or at least very difficult) to keep using abi3 for building the wheels.
-
-That was pretty frustrating.
-
-Fortunately, I managed to get Sage Attention 3 building locally on Windows after some not-too-complicated fixes (huge thanks to:
-
-- woct0rdho’s fork, and  
-- relevant PRs from **pamparamm**  
-
-which were very helpful).
-
-Given the current level of Windows support in the main Sage Attention project, I felt it would be a shame to keep this to myself — so I decided to publish this fork and share the Windows builds.
-
-The following is the original Readme
----
+[Upstream `d1a57a5`](https://github.com/thu-ml/SageAttention/blob/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5/README.md)
 
 # SageAttention
 <!-- We are continuously updating more features. You could **Star** and **Watch** our repository to stay updated.
@@ -173,7 +177,7 @@ Paper: https://arxiv.org/abs/2505.11594
 
 ## Installation
 ### Base environment
-+ `python>=3.10`, `torch>=2.3.0`, `triton>=3.0.0`
++ `python>=3.9`   , `torch>=2.3.0`  , `triton>=3.0.0`
 - `CUDA`:
   + `>=12.8` for Blackwell or SageAttention2++
   + `>=12.4` for fp8 support on Ada
@@ -201,7 +205,6 @@ python setup.py install
 To benchmark the speed against FlashAttention3, please compile FlashAttention3 from source:
 ```
 git clone https://github.com/Dao-AILab/flash-attention.git --recursive
-cd flash-attention
 git checkout b7d29fb3b79f0b78b1c369a52aaa6628dabfb0d7 # 2.7.2 release
 cd hopper
 python setup.py install
@@ -214,10 +217,6 @@ attn_output = sageattn(q, k, v, tensor_layout="HND", is_causal=False)
 ```
 + `q, k, v` are **FP16/BF16** dtype with the shape `(batch_size, head_num, seq_len, head_dim)` using default `tensor_layout="HND"`. For shape `(batch_size, seq_len, head_num, head_dim)`, set `tensor_layout="NHD"`. 
 + `is_causal` determines the use of a causal mask.
-
-On SM89, SM120 and SM121, the `fp32+fp16` FP8 CUDA path normalizes the output
-using the same rounded E4M3 probabilities as the value multiplication. Calls
-with `return_lse=True` use the FP32 probability sum for log-sum-exp.
 
 ### Available APIs:
 + `sageattn`: Automatically selects the optimal kernel based on the GPU to achieve a good performance-accuracy trade-off.
