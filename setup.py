@@ -41,11 +41,12 @@ if not SKIP_CUDA_BUILD:
     HAS_SM89 = False
     HAS_SM90 = False
     HAS_SM100 = False
+    HAS_SM110 = False
     HAS_SM120 = False
     HAS_SM121 = False
 
     # Supported NVIDIA GPU architectures.
-    SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "10.0", "12.0", "12.1"}
+    SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "10.0", "11.0", "12.0", "12.1"}
 
     # Compiler flags.
     CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
@@ -138,6 +139,9 @@ if not SKIP_CUDA_BUILD:
     if nvcc_cuda_version < Version("12.8") and any(cc.startswith("12.0") for cc in compute_capabilities):
         raise RuntimeError(
             "CUDA 12.8 or higher is required for compute capability 12.0.")
+    if nvcc_cuda_version < Version("13.0") and any(cc.startswith("11.0") for cc in compute_capabilities):
+        raise RuntimeError(
+            "CUDA 13.0 or higher is required for compute capability 11.0.")
 
     # Add target compute capabilities to NVCC flags.
     for capability in compute_capabilities:
@@ -156,6 +160,9 @@ if not SKIP_CUDA_BUILD:
         elif capability.startswith("10.0"):
             HAS_SM100 = True
             num = "100a"
+        elif capability.startswith("11.0"):
+            HAS_SM110 = True
+            num = "110"
         elif capability.startswith("12.0"):
             HAS_SM120 = True
             num = "120a"
@@ -171,7 +178,7 @@ if not SKIP_CUDA_BUILD:
     # Fused kernels and QAttn variants
     from torch.utils.cpp_extension import CUDAExtension
 
-    if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM100 or HAS_SM120 or HAS_SM121:
+    if HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM100 or HAS_SM110 or HAS_SM120 or HAS_SM121:
         ext_modules.append(
             CUDAExtension(
                 name="sageattention._qattn_sm80",
@@ -183,7 +190,7 @@ if not SKIP_CUDA_BUILD:
             )
         )
 
-    if HAS_SM89 or HAS_SM90 or HAS_SM100 or HAS_SM120 or HAS_SM121:
+    if HAS_SM89 or HAS_SM90 or HAS_SM100 or HAS_SM110 or HAS_SM120 or HAS_SM121:
         ext_modules.append(
             CUDAExtension(
                 name="sageattention._qattn_sm89",
