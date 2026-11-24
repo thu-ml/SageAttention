@@ -49,6 +49,8 @@ attn_output = sageattn3_blackwell(q, k, v, is_causal=False)
 + Explicit `attn_mask` values are passed to PyTorch SDPA. Q and K with different amounts of causal sequence padding also use SDPA with a right-aligned mask.
 + Preprocessing leaves the caller's K tensor intact.
 
+On Windows with RTX 5090 and PyTorch 2.12.1+cu130, eager calls can use the compatible SageAttention 2.2 wheel from this fork for calibrated BF16 self-attention shapes. The cutoff depends on head count, head width and tensor strides. This applies to batch size 1 with per-block means, equal Q/K/V shapes and no mask or explicit chunking. Other shapes and environments use the original SageAttention 3 dispatch.
+
 For long non-causal attention with `per_block_mean=True`, the FP4 path automatically chunks Q when the full correction tensor exceeds the TMA stride limit. You can also set `q_chunk_size` to a positive multiple of 128 to bound the size of that tensor. The chunks reuse the quantized K and V tensors. See [#394](https://github.com/thu-ml/SageAttention/pull/394).
 
 For each 16-element Q and K block, the CUDA quantizer tries `amax / t` with

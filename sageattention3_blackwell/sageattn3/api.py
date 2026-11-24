@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 """
+from functools import lru_cache
 from pathlib import Path
 import sys
 from typing import Tuple
@@ -35,6 +36,63 @@ _ops = torch.ops.sageattn3
 _FUSED_PREPROCESS_MIN_SEQLEN = 4096
 _BLOCK_SIZE = 128
 _INT32_MAX = 2**31 - 1
+
+# P50 margin and P95 checks on Windows, RTX 5090 and PyTorch 2.12.1+cu130.
+_SAGE2_CUTOFFS = {
+    # (head dim, heads): (HND contiguous, NHD view, fused QKV view)
+    (64, 8): (32256, 28160, 28160),
+    (64, 16): (21760, 21760, 20736),
+    (64, 24): (17920, 16640, 17920),
+    (64, 32): (15104, 15360, 15104),
+    (64, 48): (12544, 12032, 12544),
+    (64, 56): (10880, 11520, 11008),
+    (128, 8): (14848, 14592, 14592),
+    (128, 16): (9984, 10112, 10240),
+    (128, 24): (7680, 7808, 7680),
+    (128, 32): (6784, 6912, 6784),
+    (128, 48): (5120, 5248, 5120),
+    (128, 56): (4480, 4608, 4736),
+}
+_SAGE2_ROUTING_SUPPORTED = (
+    sys.platform == "win32"
+    and torch.version.cuda == "13.0"
+    and torch.__version__.split("+", 1)[0] == "2.12.1"
+)
+
+
+def _sage2_shape_matches(q, k, v):
+    if q.ndim != 4 or q.size(0) != 1 or q.shape != k.shape or q.shape != v.shape:
+        return False
+    _, heads, tokens, dim = q.shape
+    cutoffs = _SAGE2_CUTOFFS.get((dim, heads))
+    if cutoffs is None or tokens < 255 or tokens > max(cutoffs):
+        return False
+    if not q.is_cuda or any(
+        x.device != q.device or x.dtype != torch.bfloat16 or x.storage_offset() % 16
+        for x in (q, k, v)
+    ):
+        return False
+    strides = q.stride()[1:]
+    if strides != k.stride()[1:] or strides != v.stride()[1:]:
+        return False
+    if q.is_contiguous():
+        return tokens <= cutoffs[0]
+    if strides == (dim, heads * dim, 1):
+        return tokens <= cutoffs[1]
+    if strides == (dim, 3 * heads * dim, 1):
+        return tokens <= cutoffs[2]
+    return False
+
+
+@lru_cache(maxsize=None)
+def _sage2_for_device(device):
+    if torch.cuda.get_device_name(device) != "NVIDIA GeForce RTX 5090":
+        return None
+    try:
+        from sageattention.core import SM89_ENABLED, sageattn
+    except (ImportError, OSError, RuntimeError):
+        return None
+    return sageattn if SM89_ENABLED else None
 
 
 @triton.jit
@@ -345,9 +403,22 @@ def sageattn3_blackwell(
     q, k, v, attn_mask=None, is_causal=False, per_block_mean=True, *,
     sm_scale=None, scale=None, q_chunk_size=None, **kwargs,
 ):
-    """Run FP4 attention, with a right-aligned mask for unequal causal lengths."""
+    """Run SageAttention 3, routing calibrated eager shapes to SageAttention 2.2."""
     if sm_scale is None:
         sm_scale = scale
+    if (
+        _SAGE2_ROUTING_SUPPORTED and attn_mask is None and not is_causal
+        and per_block_mean and q_chunk_size is None and not torch.compiler.is_compiling()
+        and _sage2_shape_matches(q, k, v)
+    ):
+        sage2 = _sage2_for_device(q.device)
+        if sage2 is not None:
+            with torch.cuda.device(q.device):
+                return sage2(q, k, v, sm_scale=sm_scale)
+    return _sageattn3_blackwell(q, k, v, attn_mask, is_causal, per_block_mean, sm_scale, q_chunk_size)
+
+
+def _sageattn3_blackwell(q, k, v, attn_mask, is_causal, per_block_mean, sm_scale, q_chunk_size):
     q_len, k_len, dim = q.size(2), k.size(2), q.size(-1)
     heads, kv_heads = q.size(1), k.size(1)
     if not kv_heads or not heads or heads % kv_heads or v.size(1) != kv_heads:

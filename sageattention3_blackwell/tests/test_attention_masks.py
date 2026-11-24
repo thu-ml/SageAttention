@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import torch
 
@@ -22,6 +23,25 @@ class AttentionMaskTest(unittest.TestCase):
             values = torch.zeros((1, 1, length, dim), device="cuda", dtype=dtype)
             values[0, 0, start : start + width, :width] = eye[:width, :width]
             yield values, width
+
+    @torch.inference_mode()
+    def test_shape_routing_forwards_scale_and_keeps_explicit_modes(self):
+        q = torch.zeros((1, 8, 255, 64), device="cuda", dtype=torch.bfloat16)
+        with (
+            patch.object(self.api, "_SAGE2_ROUTING_SUPPORTED", True),
+            patch.object(self.api, "_sage2_for_device") as get_sage2,
+            patch.object(self.api, "_sageattn3_blackwell") as direct,
+        ):
+            route = self.api.sageattn3_blackwell
+            self.assertIs(route(q, q, q, sm_scale=0.2, scale=0.3), get_sage2.return_value.return_value)
+            get_sage2.return_value.assert_called_once_with(q, q, q, sm_scale=0.2)
+            for kwargs in ({"is_causal": True}, {"attn_mask": True}, {"per_block_mean": False},
+                           {"q_chunk_size": 128}):
+                self.assertIs(route(q, q, q, **kwargs), direct.return_value)
+            self.assertIs(route(q[:, :7], q[:, :7], q[:, :7]), direct.return_value)
+            self.assertEqual(get_sage2.call_count, 1)
+            get_sage2.return_value = None
+            self.assertIs(route(q, q, q), direct.return_value)
 
     @torch.inference_mode()
     def test_causal_mask_keeps_the_previous_block(self):
