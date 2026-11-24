@@ -149,6 +149,38 @@ class AttentionMaskTest(unittest.TestCase):
                 torch.testing.assert_close(actual_error, candidate_error.amin(-1), atol=1e-6, rtol=1e-5)
                 self.assertLess(actual_error.sum().item(), candidate_error[..., 0].sum().item())
 
+    @torch.inference_mode()
+    def test_v_quantization_minimizes_error_over_adjacent_scales(self):
+        for dtype in (torch.float16, torch.bfloat16):
+            for dim in (64, 128):
+                with self.subTest(dtype=dtype, dim=dim):
+                    torch.manual_seed(22)
+                    v = torch.randn(1, 2, 257, dim, device="cuda", dtype=dtype)
+                    v[..., 0] = 0
+                    v[..., 1] *= 0.002
+                    v[..., 2] *= 4096
+                    packed, sf = self.api.scale_and_quant_fp4_transpose(v)
+
+                    groups = sf.size(-1)
+                    feature = torch.arange(dim, device=v.device)[:, None]
+                    group = torch.arange(groups, device=v.device)[None, :]
+                    index = (feature // 64 * (64 * groups) + group // 4 * 256 + group % 4
+                             + feature % 64 // 16 * 4 + feature % 16 * 16)
+                    scale = sf.float().flatten(-2)[..., index].unsqueeze(-1)
+                    values = self.api.pad_128(v).transpose(-2, -1).float().unflatten(-1, (groups, 16))
+                    levels = torch.tensor([0, .5, 1, 1.5, 2, 3, 4, 6], device=v.device)
+                    codes = torch.stack((packed & 15, packed >> 4), dim=-1).unflatten(-2, (groups, 8))
+                    restored = torch.cat((levels, -levels))[codes.flatten(-2).long()] * scale
+                    actual_error = (restored - values).square().sum(-1)
+
+                    base = (values.abs().amax(-1) / 6).clamp_max(448).to(sf.dtype).view(torch.uint8).short()
+                    offsets = torch.tensor([0, -1, 1], device=v.device)
+                    candidates = (base.unsqueeze(-1) + offsets).clamp(0, 126).byte().view(sf.dtype).float()
+                    distances = values.abs()[..., None, :, None] - candidates[..., None, None] * levels
+                    candidate_error = distances.square().amin(-1).sum(-1)
+                    torch.testing.assert_close(actual_error, candidate_error.amin(-1), atol=1e-6, rtol=1e-5)
+                    self.assertTrue((actual_error < candidate_error[..., 0]).any().item())
+
 
 if __name__ == "__main__":
     unittest.main()

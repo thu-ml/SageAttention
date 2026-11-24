@@ -55,6 +55,11 @@ For each 16-element Q and K block, the CUDA quantizer tries `amax / t` with
 `t` in `{6, 5.5, 5, 4.5, 4}`. It selects the E4M3 scale with the lowest NVFP4
 reconstruction error. The approach extends [Four Over Six](https://arxiv.org/abs/2512.02010).
 
+For each channel of V, the quantizer scores the E4M3 representation of `amax / 6`
+and its two adjacent finite encodings over 16 consecutive tokens. It stores the
+scale with the lowest NVFP4 reconstruction error. This search is inspired by
+[ScaleSweep](https://arxiv.org/abs/2606.07618).
+
 ## Performance
 ### Speed of Kernels
 ![Speed on RTX5090](../assets/sage3_speed.png)

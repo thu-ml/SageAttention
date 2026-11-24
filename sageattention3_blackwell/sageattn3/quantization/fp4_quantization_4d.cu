@@ -184,6 +184,38 @@ inline __device__ __nv_fp8_e4m3 quantize_fp4(const float2* values, float amax, u
   return best_scale;
 }
 
+inline __device__ __nv_fp8_e4m3 quantize_v_fp4(const float2* values, float amax, uint32_t* packed) {
+  static_assert(CVT_FP4_ELTS_PER_THREAD == 16, "Each thread must own a complete NVFP4 block");
+  const __nv_fp8_e4m3 base_scale(amax / 6.f);
+  __nv_fp8_e4m3 best_scale = base_scale;
+  pack_scaled_fp4(values, float(base_scale), packed);
+  float best_error = fp4_squared_error(values, float(base_scale), packed);
+
+  // Check the two adjacent finite E4M3 scales in the stored format.
+  #pragma unroll
+  for (int offset = -1; offset <= 1; offset += 2) {
+    const int bits = int(base_scale.__x) + offset;
+    if (bits < 0 || bits > 0x7e) {
+      continue;
+    }
+    __nv_fp8_e4m3 candidate_scale;
+    candidate_scale.__x = static_cast<uint8_t>(bits);
+    uint32_t candidate[CVT_FP4_ELTS_PER_THREAD / 8];
+    const float scale = float(candidate_scale);
+    pack_scaled_fp4(values, scale, candidate);
+    const float error = fp4_squared_error(values, scale, candidate);
+    if (error < best_error) {
+      best_error = error;
+      best_scale = candidate_scale;
+      #pragma unroll
+      for (int group = 0; group < CVT_FP4_ELTS_PER_THREAD / 8; ++group) {
+        packed[group] = candidate[group];
+      }
+    }
+  }
+  return best_scale;
+}
+
 template <uint32_t head_dim, uint32_t BLOCK_SIZE, bool permute, typename T, bool fold_q = false>
 __global__ void scaled_fp4_quant_kernel(
     const T* input, uint8_t* output, uint8_t* output_sf,
@@ -426,15 +458,6 @@ __global__ void scaled_fp4_quant_trans_kernel(
 
   float vecMax = float(__hmax(localMax.x, localMax.y));
 
-  // scaling factor
-  float SFValue = vecMax / 6.0f;
-  uint8_t SFValueFP8;
-  reinterpret_cast<__nv_fp8_e4m3&>(SFValueFP8) = __nv_fp8_e4m3(SFValue);
-  SFValue = float(reinterpret_cast<__nv_fp8_e4m3&>(SFValueFP8));
-
-  float SFValueInv = (SFValue == 0.0f) ? 0.0f : 1.0f / SFValue;
-
-  // convert input to float2 and apply scale
   float2 fp2Vals[CVT_FP4_ELTS_PER_THREAD / 2];
 
   #pragma unroll
@@ -444,16 +467,10 @@ __global__ void scaled_fp4_quant_trans_kernel(
     } else {
       fp2Vals[i] = __bfloat1622float2(in_vec.elts[i]);
     }
-    fp2Vals[i].x = fp2Vals[i].x * SFValueInv;
-    fp2Vals[i].y = fp2Vals[i].y * SFValueInv;
   }
 
-  // convert to e2m1
   uint32_t e2m1Vals[CVT_FP4_ELTS_PER_THREAD / 8];
-  #pragma unroll
-  for (int i = 0; i < CVT_FP4_ELTS_PER_THREAD / 8; i++) {
-    e2m1Vals[i] = fp32_vec_to_e2m1(fp2Vals + i * 4);
-  }
+  const uint8_t SFValueFP8 = quantize_v_fp4(fp2Vals, vecMax, e2m1Vals).__x;
 
   // save
   if constexpr (CVT_FP4_ELTS_PER_THREAD == 8) {
