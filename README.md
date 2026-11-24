@@ -11,6 +11,7 @@ This fork began as a small set of Windows build and packaging patches for [SageA
 
 - **SageAttention 2.2** uses standard E4M3 conversion and, where supported, normalizes attention with row sums from the rounded FP8 probabilities. Paths that return log-sum-exp retain FP32 row sums. [VC-Attention](https://arxiv.org/abs/2609.15810)
 - **SageAttention 3** fuses 128-token Q block centering with FP4 quantization for aligned inputs. Each 16-element Q and K block evaluates five E4M3 scales derived from `amax / {6, 5.5, 5, 4.5, 4}`. Each V channel evaluates `amax / 6` and its neighboring finite E4M3 encodings over 16 consecutive tokens. The quantizers pick the candidates with the lowest reconstruction error. [#411](https://github.com/thu-ml/SageAttention/pull/411) · [Four Over Six](https://arxiv.org/abs/2512.02010) · [ScaleSweep](https://arxiv.org/abs/2606.07618)
+- **Shape routing** lets the Sage3 entry point choose Sage 2.2 on Windows RTX 5090 with PyTorch 2.12.1+cu130 and a compatible Sage 2.2 installation. The cutoff covers every sequence length from 255 through the inclusive limit for the head count, head width, and Q/K/V strides. Eligible calls use eager, non-causal BF16 self-attention with batch size 1, equal Q/K/V shapes, per-block means, and no mask or explicit chunk size.
 - **Windows builds** use the PyTorch dispatcher and the CPython stable ABI, with FakeTensor support for `torch.compile`. CUDA 13.x builds handle the Windows SAL and CCCL header conflict. CUDA 13.2 and later use MSVC’s conforming preprocessor.
 
 ## Windows wheels
@@ -30,7 +31,7 @@ The current wheel matrix includes CUDA 13.0, 13.2, and 13.4 with PyTorch release
 
 The SageAttention 2.2 wheels cover Ampere, Ada, Hopper, and Blackwell where the matching CUDA toolkit supports the architecture. The SageAttention 3 wheels target Blackwell `sm_120` on CUDA 12.8 and `sm_120`/`sm_121` on CUDA 13.x.
 
-The [20261123 wheels](https://github.com/mengqin/SageAttention/releases/tag/20261123) were built from `52c3115`. The V three-candidate change is part of the newer `main` commit used in the comparison below.
+The published [20261123 wheels](https://github.com/mengqin/SageAttention/releases/tag/20261123) were built from `52c3115`. The V three-candidate quantizer and shape routing are on newer `main`. The current measurements below use the routing build from `9c8bd90`.
 
 Install the selected wheel with `python -m pip install <wheel-file.whl>` in the environment that runs your application. The [SageAttention 3 README](sageattention3_blackwell/README.md) and [upstream documentation](https://github.com/thu-ml/SageAttention/tree/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5#installation) cover source builds and additional API options.
 
@@ -43,39 +44,52 @@ out2 = sageattn(q, k, v, is_causal=False)
 out3 = sageattn3_blackwell(q, k, v, is_causal=False)
 ```
 
-## Upstream comparison
+## Windows performance and accuracy
 
-We compared upstream [`d1a57a5`](https://github.com/thu-ml/SageAttention/commit/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5) with this fork at [`e497847`](https://github.com/mengqin/SageAttention/commit/e497847fbb5f68f46d75ddbaf6ae3aba1f1807a0) on Windows, using the same RTX 5090, PyTorch `2.12.1+cu130`, CUDA 13.0 and BF16 inputs. The upstream build uses the Windows compiler and kernel launch compatibility changes from [`06f8d49`](https://github.com/mengqin/SageAttention/commit/06f8d49ebdb26006700487194ee2526a7f336569) with upstream attention, masking, and quantization logic.
+The comparison uses the same BF16 Q/K/V for all three runs. Sage 2.2 and Sage3 call their backends directly. Sage3 shape routing calls the public Sage3 entry point and uses the backend shown after the arrow. The left column replays MiniMax H3 Image and H3 Video with all 56 heads. The right column uses Gaussian inputs with 24 heads and head widths of 64 and 128.
 
-On the four H3 workloads, SageAttention 3’s full API took **4.5–14.3% less time** and its mean relative L1 fell by **0.55–1.02 percentage points**. SageAttention 2.2’s error fell by about **0.03 percentage points**, with latency ranging from **1.2% lower to 3.1% higher** across the same workloads.
+![Sage 2.2, Sage3, and Sage3 shape routing latency and output error on RTX 5090](assets/windows-comparison/shape-routing-benchmark.png)
 
-![Latency and attention output error for upstream and this fork, for both SageAttention 2.2 and SageAttention 3](assets/windows-comparison/attention-benchmark.png)
+Each cell reports attention P50 and relative L1 error.
 
-Values show **upstream → fork**.
+| H3 replay | Tokens | Routed backend | Our Sage 2.2 | Our Sage3 | Our Sage3 shape routing |
+| --- | ---: | --- | ---: | ---: | ---: |
+| Image 1024² | 3,097 | Sage 2.2 | 0.806 ms / 1.06% | 1.218 ms / 6.06% | 0.820 ms / 1.06% |
+| Video 768 × 448, 39 frames | 4,862 | Sage3 | 1.546 ms / 1.17% | 1.719 ms / 6.73% | 1.754 ms / 6.73% |
+| Image 2048² | 9,241 | Sage3 | 5.012 ms / 0.86% | 4.344 ms / 5.21% | 4.365 ms / 5.21% |
+| Video 768 × 448, 124 frames | 13,546 | Sage3 | 10.115 ms / 1.09% | 8.197 ms / 6.63% | 8.213 ms / 6.63% |
 
-| Workload | Sage2.2 latency | Sage2.2 relative L1 | Sage3 latency | Sage3 relative L1 |
-| --- | ---: | ---: | ---: | ---: |
-| H3 Image 2048² | 4.79 ms → 4.73 ms | 2.29% → 2.26% | 4.67 ms → 4.00 ms | 8.93% → 7.90% |
-| H3 Video 768×448 | 9.30 ms → 9.47 ms | 1.30% → 1.27% | 8.73 ms → 7.53 ms | 6.88% → 6.24% |
-| H3 Image 4096² | 22.42 ms → 22.89 ms | 2.28% → 2.25% | 19.85 ms → 18.15 ms | 9.20% → 8.43% |
-| H3 Video 1344×768 | 75.07 ms → 77.38 ms | 1.04% → 1.01% | 61.63 ms → 58.85 ms | 6.21% → 5.66% |
-| Gaussian, 1,024 tokens | 0.17 ms → 0.15 ms | 3.75% → 3.74% | 0.73 ms → 0.75 ms | 18.85% → 17.38% |
-| Gaussian, 4,096 tokens | 0.46 ms → 0.48 ms | 3.84% → 3.83% | 0.96 ms → 0.99 ms | 19.00% → 17.44% |
-| Gaussian, 16,384 tokens | 4.18 ms → 4.43 ms | 3.90% → 3.89% | 3.44 ms → 3.41 ms | 19.02% → 17.48% |
+At 3,097 tokens, shape routing lowers P50 by **32.7%** and relative L1 from **6.06% to 1.06%** versus direct Sage3. The two longest H3 replays route to Sage3 and cut P50 by **12.9% and 18.8%** versus direct Sage 2.2. The 4,862-token video falls above the calibrated 4,736-token cutoff for fused Q/K/V with 56 heads and head width 128. Direct Sage 2.2 was faster on that replay. For the four Gaussian workloads routed to Sage 2.2, shape routing lowers P50 by **9.5%–23.3%** and relative L1 from about **17.5%–17.7% to 3.9%** versus direct Sage3.
 
-We replayed Q/K/V from MiniMax H3 Image and H3 video at layers 0, 25, and 49, using all 56 heads. The image replay uses tensors captured with our in-house WaveCut-style INT8 ConvRot checkpoint. The Gaussian tests use 16 heads and seeds 42 and 1234. All inputs use head width 128 and non-causal attention. We average the per-sample CUDA-event medians from 15 full API calls after three warmups. We restore K outside the timer on both builds because the upstream SageAttention 3 API centers it in place. Output error is relative L1 against FP32 attention at 256 query positions using the full K/V sequence. Peak process shared GPU memory was 88 MiB on WDDM. [Per-sample measurements](assets/windows-comparison/attention-benchmark.csv)
+The tests use CUDA events to time the full attention call, including online preprocessing, on Windows with RTX 5090 and PyTorch 2.12.1+cu130. Each arm has 18 warmups and 60 timed calls per sample. H3 uses three layer captures per workload, with Image captures from the public Comfy-Org checkpoint. Gaussian workloads use two seeds. The chart and table report medians across samples. Error uses 96 query positions against FP32 attention with the full K/V sequence and TF32 disabled. All 24 routed outputs matched the outputs of their selected backends bitwise. The process used at most **88 MiB of shared GPU memory** in WDDM sampling. [Per-sample P50, P95, L1, L2, and peak allocation](assets/windows-comparison/shape-routing-benchmark.csv)
 
 ## MiniMax H3 Image examples
 
-We compared the *Skin and hair*, *Fine textiles*, and *Architecture and geometry* prompts and seeds. All five columns use the Comfy-Org INT8 ConvRot checkpoint and share the same text encoder, black reference image, and tiled VAE decoding. Only the attention backend in the 50 diffusion transformer blocks varies. We ran the same 4096 × 4096 Euler workflow with CFG 1 and six sampling steps for each column. The previews show the full frame. [RGB error against cuDNN SDPA](assets/windows-comparison/image-metrics.csv)
+Both resolutions use the same three prompts and seeds, the public Comfy-Org INT8 ConvRot checkpoint, a black reference image, six-step Euler sampling with CFG 1, and tiled VAE decoding. Within each resolution, the comparison varies the attention backend in the 50 diffusion transformer blocks. The upstream columns use attention logic from `d1a57a5` with the Windows build and launch compatibility changes from `06f8d49`.
 
-| Scene | cuDNN SDPA | Upstream Sage2.2 | Our Sage2.2 | Upstream Sage3 | Our Sage3 |
-| --- | --- | --- | --- | --- | --- |
-| Skin and hair, seed 42 | ![SDPA portrait](assets/windows-comparison/skin-hair-sdpa.webp) | ![Upstream Sage2.2 portrait](assets/windows-comparison/skin-hair-upstream-sage2.webp) | ![Our Sage2.2 portrait](assets/windows-comparison/skin-hair-fork-sage2.webp) | ![Upstream Sage3 portrait](assets/windows-comparison/skin-hair-upstream-sage3.webp) | ![Our Sage3 portrait](assets/windows-comparison/skin-hair-fork-sage3.webp) |
-| Fine textiles, seed 1234 | ![SDPA textiles](assets/windows-comparison/textiles-sdpa.webp) | ![Upstream Sage2.2 textiles](assets/windows-comparison/textiles-upstream-sage2.webp) | ![Our Sage2.2 textiles](assets/windows-comparison/textiles-fork-sage2.webp) | ![Upstream Sage3 textiles](assets/windows-comparison/textiles-upstream-sage3.webp) | ![Our Sage3 textiles](assets/windows-comparison/textiles-fork-sage3.webp) |
-| Architecture and geometry, seed 42 | ![SDPA architecture](assets/windows-comparison/architecture-sdpa.webp) | ![Upstream Sage2.2 architecture](assets/windows-comparison/architecture-upstream-sage2.webp) | ![Our Sage2.2 architecture](assets/windows-comparison/architecture-fork-sage2.webp) | ![Upstream Sage3 architecture](assets/windows-comparison/architecture-upstream-sage3.webp) | ![Our Sage3 architecture](assets/windows-comparison/architecture-fork-sage3.webp) |
+### 1024 × 1024
+
+| Scene | cuDNN SDPA | Upstream Sage 2.2 | Our Sage 2.2 | Upstream Sage3 | Our Sage3 | Our Sage3 Shape Routing |
+| --- | --- | --- | --- | --- | --- | --- |
+| Skin and hair, seed 42 | ![SDPA portrait](assets/windows-comparison/skin-hair-sdpa-1024.webp) | ![Upstream Sage 2.2 portrait](assets/windows-comparison/skin-hair-upstream-sage2-1024.webp) | ![Our Sage 2.2 portrait](assets/windows-comparison/skin-hair-sage2-1024.webp) | ![Upstream Sage3 portrait](assets/windows-comparison/skin-hair-upstream-sage3-1024.webp) | ![Our Sage3 portrait](assets/windows-comparison/skin-hair-sage3-fp4-1024.webp) | ![Our Sage3 Shape Routing portrait](assets/windows-comparison/skin-hair-sage2-1024.webp) |
+| Fine textiles, seed 1234 | ![SDPA textiles](assets/windows-comparison/textiles-sdpa-1024.webp) | ![Upstream Sage 2.2 textiles](assets/windows-comparison/textiles-upstream-sage2-1024.webp) | ![Our Sage 2.2 textiles](assets/windows-comparison/textiles-sage2-1024.webp) | ![Upstream Sage3 textiles](assets/windows-comparison/textiles-upstream-sage3-1024.webp) | ![Our Sage3 textiles](assets/windows-comparison/textiles-sage3-fp4-1024.webp) | ![Our Sage3 Shape Routing textiles](assets/windows-comparison/textiles-sage2-1024.webp) |
+| Architecture and geometry, seed 42 | ![SDPA architecture](assets/windows-comparison/architecture-sdpa-1024.webp) | ![Upstream Sage 2.2 architecture](assets/windows-comparison/architecture-upstream-sage2-1024.webp) | ![Our Sage 2.2 architecture](assets/windows-comparison/architecture-sage2-1024.webp) | ![Upstream Sage3 architecture](assets/windows-comparison/architecture-upstream-sage3-1024.webp) | ![Our Sage3 architecture](assets/windows-comparison/architecture-sage3-fp4-1024.webp) | ![Our Sage3 Shape Routing architecture](assets/windows-comparison/architecture-sage2-1024.webp) |
+
+Sage3 shape routing selected Sage 2.2 for all 300 attention calls per scene at 3,133–3,152 tokens. The routed renders matched the direct Sage 2.2 renders pixel for pixel, so the two columns share their previews. Relative to direct Sage3, shape routing reduced RGB MAE against cuDNN SDPA from **5.97 to 5.12**, **34.77 to 20.56**, and **25.06 to 13.65** on the 0–255 scale. [Per-image MAE, PSNR, and backend counts](assets/windows-comparison/shape-routing-image-metrics.csv)
+
+### 4096 × 4096
+
+The first five columns use the original full-frame renders from the upstream comparison. [RGB error for those renders](assets/windows-comparison/image-metrics.csv)
+
+| Scene | cuDNN SDPA | Upstream Sage 2.2 | Our Sage 2.2 | Upstream Sage3 | Our Sage3 | Our Sage3 Shape Routing |
+| --- | --- | --- | --- | --- | --- | --- |
+| Skin and hair, seed 42 | ![SDPA portrait](assets/windows-comparison/skin-hair-sdpa.webp) | ![Upstream Sage 2.2 portrait](assets/windows-comparison/skin-hair-upstream-sage2.webp) | ![Our Sage 2.2 portrait](assets/windows-comparison/skin-hair-fork-sage2.webp) | ![Upstream Sage3 portrait](assets/windows-comparison/skin-hair-upstream-sage3.webp) | ![Our Sage3 portrait](assets/windows-comparison/skin-hair-fork-sage3.webp) | ![Our Sage3 Shape Routing portrait](assets/windows-comparison/skin-hair-shape-routing-4096.webp) |
+| Fine textiles, seed 1234 | ![SDPA textiles](assets/windows-comparison/textiles-sdpa.webp) | ![Upstream Sage 2.2 textiles](assets/windows-comparison/textiles-upstream-sage2.webp) | ![Our Sage 2.2 textiles](assets/windows-comparison/textiles-fork-sage2.webp) | ![Upstream Sage3 textiles](assets/windows-comparison/textiles-upstream-sage3.webp) | ![Our Sage3 textiles](assets/windows-comparison/textiles-fork-sage3.webp) | ![Our Sage3 Shape Routing textiles](assets/windows-comparison/textiles-shape-routing-4096.webp) |
+| Architecture and geometry, seed 42 | ![SDPA architecture](assets/windows-comparison/architecture-sdpa.webp) | ![Upstream Sage 2.2 architecture](assets/windows-comparison/architecture-upstream-sage2.webp) | ![Our Sage 2.2 architecture](assets/windows-comparison/architecture-fork-sage2.webp) | ![Upstream Sage3 architecture](assets/windows-comparison/architecture-upstream-sage3.webp) | ![Our Sage3 architecture](assets/windows-comparison/architecture-fork-sage3.webp) | ![Our Sage3 Shape Routing architecture](assets/windows-comparison/architecture-shape-routing-4096.webp) |
 
 Against the cuDNN SDPA reference, our Sage3 lowers RGB MAE and raises PSNR in all three scenes compared with upstream Sage3. The largest MAE drop is in the architecture scene, from 20.98 to 15.92 on the 0–255 RGB scale. Our Sage2.2 lowers MAE for the portrait and raises it for the textiles and architecture scenes.
+
+The new shape routing runs selected Sage3 for all 300 attention calls per scene at 21,565–21,584 tokens. Each routed PNG was byte-identical to a direct Sage3 PNG rendered in the same run.
 
 <details>
 <summary>Prompts and sampling settings</summary>

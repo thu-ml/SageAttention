@@ -25,7 +25,7 @@ This hybrid approach may achieve **lossless acceleration**.
 ### Base environment
 + CPython 3.10 or newer. The `cp310-abi3` wheels require a compatible PyTorch and CUDA build.
 + CUDA 12.8 or newer and a supported Blackwell GPU.
-+ See the [Windows build matrix](../README.md#what-this-fork-provides) for verified Python/PyTorch combinations, including Python 3.12 with PyTorch 2.7.1.
++ See the [Windows build matrix](../README.md#windows-wheels) for the supported CUDA and PyTorch combinations.
 
 ### Install Package
 
@@ -49,7 +49,7 @@ attn_output = sageattn3_blackwell(q, k, v, is_causal=False)
 + Explicit `attn_mask` values are passed to PyTorch SDPA. Q and K with different amounts of causal sequence padding also use SDPA with a right-aligned mask.
 + Preprocessing leaves the caller's K tensor intact.
 
-On Windows with RTX 5090 and PyTorch 2.12.1+cu130, eager calls can use the compatible SageAttention 2.2 wheel from this fork for calibrated BF16 self-attention shapes. The cutoff depends on head count, head width and tensor strides. This applies to batch size 1 with per-block means, equal Q/K/V shapes and no mask or explicit chunking. Other shapes and environments use the original SageAttention 3 dispatch.
+On Windows with RTX 5090 and PyTorch 2.12.1+cu130, eligible eager calls use the compatible SageAttention 2.2 wheel from this fork. The calibrated range includes all token lengths from 255 through the cutoff for the head count, head width, and tensor strides. Eligible calls use non-causal BF16 self-attention with batch size 1, per-block means, equal Q/K/V shapes, and no mask or explicit chunk size.
 
 For long non-causal attention with `per_block_mean=True`, the FP4 path automatically chunks Q when the full correction tensor exceeds the TMA stride limit. You can also set `q_chunk_size` to a positive multiple of 128 to bound the size of that tensor. The chunks reuse the quantized K and V tensors. See [#394](https://github.com/thu-ml/SageAttention/pull/394).
 
@@ -63,11 +63,17 @@ scale with the lowest NVFP4 reconstruction error. This search is inspired by
 [ScaleSweep](https://arxiv.org/abs/2606.07618).
 
 ## Performance
-### Speed of Kernels
-![Speed on RTX5090](../assets/sage3_speed.png)
 
-### Video and Image Generation Examples
-![Image Examples](../assets/sage3_result.png)
+See the [Windows latency and accuracy comparison](../README.md#windows-performance-and-accuracy) and the [MiniMax H3 Image examples](../README.md#minimax-h3-image-examples) for measurements and generated images from the routing build.
+
+<details>
+<summary>Upstream SageAttention 3 figures</summary>
+
+![Upstream Sage3 speed on RTX 5090](../assets/sage3_speed.png)
+
+![Upstream Sage3 image and video examples](../assets/sage3_result.png)
+
+</details>
 
 
 
