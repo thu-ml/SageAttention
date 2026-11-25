@@ -29,19 +29,19 @@ from .triton.quant_per_thread import per_thread_int8 as per_thread_int8_triton
 try:
     from . import sm80_compile
     SM80_ENABLED = True
-except:
+except ImportError:
     SM80_ENABLED = False
 
 try:
     from . import sm89_compile
     SM89_ENABLED = True
-except:
+except ImportError:
     SM89_ENABLED = False
 
 try:
     from . import sm90_compile
     SM90_ENABLED = True
-except:
+except ImportError:
     SM90_ENABLED = False
 
 from .quant import per_block_int8 as per_block_int8_cuda
@@ -76,6 +76,26 @@ def get_cuda_arch_versions():
     return cuda_archs
 
 
+def _validate_cuda_causal_lengths(q: torch.Tensor, k: torch.Tensor, tensor_layout: str, kernel_name: str) -> None:
+    seq_dim = 1 if tensor_layout == "NHD" else 2
+    qo_len = q.size(seq_dim)
+    kv_len = k.size(seq_dim)
+    if qo_len > kv_len:
+        raise ValueError(
+            f"{kernel_name} supports causal attention with qo_len <= kv_len; "
+            f"got qo_len={qo_len}, kv_len={kv_len}."
+        )
+
+
+def _validate_varlen_causal_lengths(cu_seqlens_q: torch.Tensor, cu_seqlens_k: torch.Tensor) -> None:
+    q_lens = cu_seqlens_q[1:] - cu_seqlens_q[:-1]
+    k_lens = cu_seqlens_k[1:] - cu_seqlens_k[:-1]
+    if torch.any(q_lens > k_lens).item():
+        raise ValueError("sageattn_varlen supports causal attention with qo_len <= kv_len for every sequence.")
+    if torch.any(k_lens <= 0).item():
+        raise ValueError("sageattn_varlen causal attention requires every kv sequence to be non-empty.")
+
+
 def sageattn(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -84,6 +104,9 @@ def sageattn(
     is_causal: bool = False,
     sm_scale: Optional[float] = None,
     return_lse: bool = False,
+    *,
+    smooth_k: bool = True,
+    scale: Optional[float] = None,
     **kwargs: Any,
 ):
     """
@@ -111,7 +134,7 @@ def sageattn(
         Default: "HND".
 
     is_causal : bool
-        Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len.
+        Whether to apply causal mask to the attention matrix.
         Default: False.
 
     sm_scale : Optional[float]
@@ -120,6 +143,13 @@ def sageattn(
     return_lse : bool
         Whether to return the log sum of the exponentiated attention weights. Used for cases like Ring Attention.
         Default: False.
+
+    smooth_k : bool
+        Whether to subtract the sequence mean from K before quantization.
+        Default: True.
+
+    scale : Optional[float]
+        PyTorch SDPA alias for ``sm_scale``. An explicit ``sm_scale`` takes priority.
 
     Returns
     -------
@@ -139,20 +169,22 @@ def sageattn(
     - The tensors `q`, `k`, and `v` must have the dtype ``torch.float16`` or ``torch.bfloat16``
     - All tensors must be on the same cuda device.
     """
-        
+    if sm_scale is None:
+        sm_scale = scale
+
     arch = get_cuda_arch_versions()[q.device.index]
     if arch == "sm80":
-        return sageattn_qk_int8_pv_fp16_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32")
+        return sageattn_qk_int8_pv_fp16_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, smooth_k=smooth_k, pv_accum_dtype="fp32")
     elif arch == "sm86":
-        return sageattn_qk_int8_pv_fp16_triton(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse)
+        return sageattn_qk_int8_pv_fp16_triton(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, smooth_k=smooth_k)
     elif arch == "sm89":
-        return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32+fp16")
+        return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, smooth_k=smooth_k, pv_accum_dtype="fp32+fp16")
     elif arch == "sm90":
-        return sageattn_qk_int8_pv_fp8_cuda_sm90(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32+fp32")
+        return sageattn_qk_int8_pv_fp8_cuda_sm90(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, sm_scale=sm_scale, return_lse=return_lse, smooth_k=smooth_k, pv_accum_dtype="fp32+fp32")
     elif arch == "sm120":
-        return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, qk_quant_gran="per_warp", sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32+fp16") # sm120 has accurate fp32 accumulator for fp8 mma and triton kernel is currently not usable on sm120.
+        return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, qk_quant_gran="per_warp", sm_scale=sm_scale, return_lse=return_lse, smooth_k=smooth_k, pv_accum_dtype="fp32+fp16") # sm120 has accurate fp32 accumulator for fp8 mma and triton kernel is currently not usable on sm120.
     elif arch == "sm121":
-        return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, qk_quant_gran="per_warp", sm_scale=sm_scale, return_lse=return_lse, pv_accum_dtype="fp32+fp16") # sm121 has accurate fp32 accumulator for fp8 mma and triton kernel is currently not usable on sm121.
+        return sageattn_qk_int8_pv_fp8_cuda(q, k, v, tensor_layout=tensor_layout, is_causal=is_causal, qk_quant_gran="per_warp", sm_scale=sm_scale, return_lse=return_lse, smooth_k=smooth_k, pv_accum_dtype="fp32+fp16") # sm121 has accurate fp32 accumulator for fp8 mma and triton kernel is currently not usable on sm121.
     else:
         raise ValueError(f"Unsupported CUDA architecture: {arch}")
 
@@ -342,6 +374,8 @@ def sageattn_varlen(
     is_causal: bool = False,
     sm_scale: Optional[float] = None, 
     smooth_k: bool = True,
+    *,
+    scale: Optional[float] = None,
     **kwargs: Any,
 ) -> torch.Tensor:
     """
@@ -372,7 +406,8 @@ def sageattn_varlen(
         The maximum sequence length for the key and value tensors in the batch.
 
     is_causal : bool
-        Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len for each sequence.
+        Whether to apply causal mask to the attention matrix. Uses a right-aligned causal mask and supports
+        qo_len <= kv_len for each sequence.
         Default: False.
     
     sm_scale : Optional[float]
@@ -381,6 +416,9 @@ def sageattn_varlen(
     smooth_k : bool
         Whether to smooth the key tensor by subtracting the mean along the sequence dimension.
         Default: True.
+
+    scale : Optional[float]
+        PyTorch SDPA alias for ``sm_scale``. An explicit ``sm_scale`` takes priority.
 
     Returns
     -------
@@ -395,7 +433,9 @@ def sageattn_varlen(
     - All tensors must be on the same cuda device.
     - `smooth_k` will introduce slight overhead but will improve the accuracy under most circumstances.
     """
-    
+    if sm_scale is None:
+        sm_scale = scale
+
     dtype = q.dtype
     assert q.is_cuda, "Input tensors must be on cuda."
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
@@ -425,6 +465,8 @@ def sageattn_varlen(
 
     assert q.stride(-1) == 1 and k.stride(-1) == 1 and v.stride(-1) == 1, "Last dim of qkv must be contiguous."
     assert cu_seqlens_q.is_contiguous() and cu_seqlens_k.is_contiguous(), "cu_seqlens_q and cu_seqlens_k must be contiguous."
+    if is_causal:
+        _validate_varlen_causal_lengths(cu_seqlens_q, cu_seqlens_k)
 
     if dtype == torch.bfloat16 or dtype == torch.float32:
         v = v.to(torch.float16)
@@ -487,7 +529,8 @@ def sageattn_qk_int8_pv_fp16_cuda(
         Default: "HND".
 
     is_causal : bool
-        Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len.
+        Whether to apply causal mask to the attention matrix. CUDA kernels use a right-aligned causal mask and support
+        qo_len <= kv_len.
         Default: False.
 
     qk_quant_gran : str
@@ -544,6 +587,8 @@ def sageattn_qk_int8_pv_fp16_cuda(
     assert qk_quant_gran in ["per_warp", "per_thread"], "qk_quant_gran must be either 'per_warp' or 'per_thread'."
     assert q.device == k.device == v.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
+    if is_causal:
+        _validate_cuda_causal_lengths(q, k, tensor_layout, "sageattn_qk_int8_pv_fp16_cuda")
 
     # FIXME(DefTruth): make sage attention work compatible with distributed 
     # env, for example, xDiT which launch by torchrun. Without this workaround, 
@@ -672,7 +717,8 @@ def sageattn_qk_int8_pv_fp8_cuda(
         Default: "HND".
 
     is_causal : bool
-        Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len.
+        Whether to apply causal mask to the attention matrix. CUDA kernels use a right-aligned causal mask and support
+        qo_len <= kv_len.
         Default: False.
 
     qk_quant_gran : str
@@ -728,6 +774,8 @@ def sageattn_qk_int8_pv_fp8_cuda(
     assert qk_quant_gran in ["per_warp", "per_thread"], "qk_quant_gran must be either 'per_warp' or 'per_thread'."
     assert q.device == k.device == v.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
+    if is_causal:
+        _validate_cuda_causal_lengths(q, k, tensor_layout, "sageattn_qk_int8_pv_fp8_cuda")
 
     # cuda_major_version, cuda_minor_version = get_cuda_version()
     # if(cuda_major_version, cuda_minor_version) < (12, 8) and pv_accum_dtype == 'fp32+fp16':
@@ -792,8 +840,6 @@ def sageattn_qk_int8_pv_fp8_cuda(
     elif qk_quant_gran == "per_thread":
         q_int8, q_scale, k_int8, k_scale = per_thread_int8_triton(q, k, km, tensor_layout=tensor_layout, BLKQ=128, WARPQ=32, BLKK=64, WARPK=64)
 
-    o = torch.empty(q.size(), dtype=dtype, device=q.device)
-
     if pv_accum_dtype == 'fp32+fp32' and smooth_v:
         warnings.warn("pv_accum_dtype is 'fp32+fp32', smooth_v will be ignored.")
         smooth_v = False
@@ -807,6 +853,8 @@ def sageattn_qk_int8_pv_fp8_cuda(
         quant_v_scale_max = 2.25
 
     v_fp8, v_scale, vm = per_channel_fp8(v, tensor_layout=tensor_layout, scale_max=quant_v_scale_max, smooth_v=smooth_v)
+    # The source-dtype V transpose has been released before allocating O.
+    o = torch.empty(q.size(), dtype=dtype, device=q.device)
 
     if pv_accum_dtype == "fp32":
         if smooth_v:
@@ -864,7 +912,8 @@ def sageattn_qk_int8_pv_fp8_cuda_sm90(
         Default: "HND".
 
     is_causal : bool
-        Whether to apply causal mask to the attention matrix. Only applicable when qo_len == kv_len.
+        Whether to apply causal mask to the attention matrix. CUDA kernels use a right-aligned causal mask and support
+        qo_len <= kv_len.
         Default: False.
 
     qk_quant_gran : str
@@ -915,6 +964,8 @@ def sageattn_qk_int8_pv_fp8_cuda_sm90(
     assert qk_quant_gran in ["per_warp", "per_thread"], "qk_quant_gran must be either 'per_warp' or 'per_thread'."
     assert q.device == k.device == v.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
+    if is_causal:
+        _validate_cuda_causal_lengths(q, k, tensor_layout, "sageattn_qk_int8_pv_fp8_cuda_sm90")
 
     torch.cuda.set_device(v.device)
 

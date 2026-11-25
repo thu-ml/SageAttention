@@ -18,7 +18,7 @@
 #include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_fp8.h>
-#include <torch/extension.h>
+#include <torch/types.h>
 
 #include "../wgmma.cuh"
 #include "../math.cuh"
@@ -123,10 +123,14 @@ __device__ __forceinline__ void arrive(uint64_t* bar) {
     );
 }
 
+struct alignas(128) DeviceTensorMaps {
+  CUtensorMap q;
+  CUtensorMap k;
+  CUtensorMap v;
+};
+
 template<uint32_t CTA_Q, uint32_t CTA_K, uint32_t NUM_THREADS, uint32_t head_dim, QuantGranularity Q_GRAN, QuantGranularity K_GRAN, typename DTypeOut, MaskMode mask_mode = MaskMode::kNone, bool return_lse = false, bool fuse_v_scale=false>
-__global__ void qk_int8_sv_f8_attn_kernel(const __grid_constant__ CUtensorMap tensorMapQ, 
-                                        const __grid_constant__ CUtensorMap tensorMapK,
-                                        const __grid_constant__ CUtensorMap tensorMapV,
+__global__ void qk_int8_sv_f8_attn_kernel(const DeviceTensorMaps* __restrict__ tma_maps,
                                         float *__restrict__ Q_scale, float *__restrict__ K_scale, float *__restrict__ V_scale,
                                         DTypeOut* O, float *__restrict__ Lse, uint32_t stride_bz_o, uint32_t stride_h_o, uint32_t stride_seq_o,
                                         const uint32_t qo_len, const uint32_t kv_len, const uint32_t num_kv_groups,
@@ -134,6 +138,10 @@ __global__ void qk_int8_sv_f8_attn_kernel(const __grid_constant__ CUtensorMap te
 {
   static_assert(NUM_THREADS == 128);
   static_assert(CTA_Q <= CTA_K);
+
+  const CUtensorMap* tensorMapQ = &tma_maps->q;
+  const CUtensorMap* tensorMapK = &tma_maps->k;
+  const CUtensorMap* tensorMapV = &tma_maps->v;
   
   const uint32_t warp_idx = (threadIdx.x % 128) / 32;
   const uint32_t lane_id = threadIdx.x % 32;
@@ -196,6 +204,7 @@ __global__ void qk_int8_sv_f8_attn_kernel(const __grid_constant__ CUtensorMap te
   constexpr uint32_t k_scale_advance_offset = (K_GRAN == QuantGranularity::kPerBlock || K_GRAN == QuantGranularity::kPerWarp) ? 1 : 4;
 
   uint32_t Q_idx_lane_base = bx * CTA_Q + warp_idx * 16 + lane_id / 4;
+  const int32_t causal_kv_offset = get_causal_kv_offset(qo_len, kv_len);
 
 #pragma unroll
   for (uint32_t fq = 0; fq < num_tiles_q; fq++)
@@ -238,9 +247,9 @@ __global__ void qk_int8_sv_f8_attn_kernel(const __grid_constant__ CUtensorMap te
     expect_bytes<(CTA_Q * head_dim) * sizeof(int8_t)>(&barrier_Q);
     expect_bytes<(CTA_K * head_dim) * sizeof(int8_t)>(&barrier_K);
     expect_bytes<(CTA_K * head_dim) * sizeof(int8_t)>(&barrier_V);
-    load_async_4D(sQ, &tensorMapQ, &barrier_Q, 0, bx * CTA_Q, head_id, batch_id);
-    load_async_4D(sK, &tensorMapK, &barrier_K, 0, 0, kv_head_id, batch_id);
-    load_async_4D(sV, &tensorMapV, &barrier_V, 0, 0, kv_head_id, batch_id);
+    load_async_4D(sQ, tensorMapQ, &barrier_Q, 0, bx * CTA_Q, head_id, batch_id);
+    load_async_4D(sK, tensorMapK, &barrier_K, 0, 0, kv_head_id, batch_id);
+    load_async_4D(sV, tensorMapV, &barrier_V, 0, 0, kv_head_id, batch_id);
   }
 
   float q_scale = Q_scale[q_scale_idx];
@@ -251,7 +260,7 @@ __global__ void qk_int8_sv_f8_attn_kernel(const __grid_constant__ CUtensorMap te
 
   const uint32_t num_iterations = div_ceil(
       mask_mode == MaskMode::kCausal
-          ? min(kv_len, (bx + 1) * CTA_Q)
+          ? get_causal_kv_limit((bx + 1) * CTA_Q, qo_len, kv_len)
           : kv_len,
       CTA_K);
 
@@ -286,7 +295,7 @@ __global__ void qk_int8_sv_f8_attn_kernel(const __grid_constant__ CUtensorMap te
     if (threadIdx.x == 0)
     {
       expect_bytes<(CTA_K * head_dim) * sizeof(int8_t)>(&barrier_K);
-      load_async_4D(sK, &tensorMapK, &barrier_K, 0, iter * CTA_K, kv_head_id, batch_id);
+      load_async_4D(sK, tensorMapK, &barrier_K, 0, iter * CTA_K, kv_head_id, batch_id);
     }
 
     // convert RS to float
@@ -300,12 +309,38 @@ __global__ void qk_int8_sv_f8_attn_kernel(const __grid_constant__ CUtensorMap te
 #pragma unroll
         for (uint32_t k = 0; k < 8; k++)
         {
-          RS_f32[fq][fk][k] = __int2float_rz(RS[fq][fk][k]);
+          RS_f32[fq][fk][k] = __int2float_rz(RS[fq][fk][k]) * dequant_scale;
         }
       }
     }
 
-    update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, false, true, false>(RS_f32, RO, m, d, sm_scale);
+    if constexpr (mask_mode == MaskMode::kCausal)
+    {
+      const uint32_t fully_visible_kv_len = get_causal_kv_limit(bx * CTA_Q + 1, qo_len, kv_len);
+      if ((iter - 1) * CTA_K + CTA_K > fully_visible_kv_len)
+      {
+#pragma unroll
+        for (uint32_t fq = 0; fq < num_tiles_q; fq++)
+        {
+#pragma unroll
+          for (uint32_t fk = 0; fk < num_tiles_k; fk++)
+          {
+#pragma unroll
+            for (uint32_t k = 0; k < 8; k++)
+            {
+              const uint32_t q_idx = Q_idx_lane_base + fq * 64 + 8 * ((k % 4) / 2);
+              const uint32_t k_idx = (iter - 1) * CTA_K + fk * 16 + 2 * (lane_id % 4) + 8 * (k / 4) + k % 2;
+              if (static_cast<int32_t>(k_idx) > static_cast<int32_t>(q_idx) + causal_kv_offset)
+              {
+                RS_f32[fq][fk][k] = -5000000.0f;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, false, true, false>(RS_f32, RO, m, d, original_sm_scale);
 
     // accumulate d on thread basis
 #pragma unroll
@@ -359,7 +394,7 @@ __global__ void qk_int8_sv_f8_attn_kernel(const __grid_constant__ CUtensorMap te
     if (threadIdx.x == 0)
     {
       expect_bytes<(CTA_K * head_dim) * sizeof(int8_t)>(&barrier_V);
-      load_async_4D(sV, &tensorMapV, &barrier_V, iter * CTA_K, 0, kv_head_id, batch_id);
+      load_async_4D(sV, tensorMapV, &barrier_V, iter * CTA_K, 0, kv_head_id, batch_id);
     }
   }
 
@@ -421,7 +456,8 @@ __global__ void qk_int8_sv_f8_attn_kernel(const __grid_constant__ CUtensorMap te
 
           if constexpr (mask_mode == MaskMode::kCausal)
           {
-            is_out_of_bounds = (k_idx > q_idx) || (k_idx >= kv_len);
+            is_out_of_bounds = (static_cast<int32_t>(k_idx) > static_cast<int32_t>(q_idx) + causal_kv_offset) ||
+                               (k_idx >= kv_len);
           }
           else
           {
@@ -580,6 +616,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(
                   int return_lse)
 {
   CHECK_CUDA(query);
+  const at::cuda::OptionalCUDAGuard device_guard(at::device_of(query));
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   CHECK_CUDA(key);
   CHECK_CUDA(value);
   CHECK_CUDA(output);
@@ -689,7 +727,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(
 
             constexpr MaskMode mask_mode = IS_CAUSAL ? MaskMode::kCausal : MaskMode::kNone;
 
-            assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
+            TORCH_CHECK(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K,
+                        "Hopper FP8 attention requires V padded to a multiple of 128 tokens");
 
             if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp))
             {
@@ -710,6 +749,18 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(
             CUtensorMap tma_map_K = create_tensor_map_4D<CTA_K, HEAD_DIM>(reinterpret_cast<int8_t*>(key.data_ptr()), batch_size, num_kv_heads, kv_len, HEAD_DIM, stride_bz_k, stride_h_k, stride_seq_k);
             CUtensorMap tma_map_V = create_tensor_map_4D<HEAD_DIM, CTA_K>(reinterpret_cast<int8_t*>(value.data_ptr()), batch_size, num_kv_heads, HEAD_DIM, value.size(3), stride_bz_v, stride_h_v, stride_d_v);
 
+            DeviceTensorMaps h_pack;
+            h_pack.q = tma_map_Q;
+            h_pack.k = tma_map_K;
+            h_pack.v = tma_map_V;
+
+            DeviceTensorMaps* d_pack = nullptr;
+            cudaError_t err = cudaMalloc(&d_pack, sizeof(DeviceTensorMaps));
+            TORCH_CHECK(err == cudaSuccess, "cudaMalloc failed for DeviceTensorMaps");
+
+            err = cudaMemcpy(d_pack, &h_pack, sizeof(DeviceTensorMaps), cudaMemcpyHostToDevice);
+            TORCH_CHECK(err == cudaSuccess, "cudaMemcpy failed for DeviceTensorMaps");
+
             auto* kernel = qk_int8_sv_f8_attn_kernel<CTA_Q, CTA_K, NUM_THREADS, HEAD_DIM, static_cast<QuantGranularity>(QK_QUANT_GRAN), static_cast<QuantGranularity>(QK_QUANT_GRAN), DTypeOut, mask_mode, RETURN_LSE, false>;
             size_t sMemSize = CTA_Q * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t);
             cudaFuncSetAttribute(
@@ -717,10 +768,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(
                 cudaFuncAttributeMaxDynamicSharedMemorySize, sMemSize);
             
             dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
-            kernel<<<grid, NUM_THREADS, sMemSize>>>(
-              tma_map_Q,
-              tma_map_K,
-              tma_map_V,
+            kernel<<<grid, NUM_THREADS, sMemSize, stream>>>(
+              d_pack,
               reinterpret_cast<float*>(query_scale.data_ptr()),
               reinterpret_cast<float*>(key_scale.data_ptr()),
               nullptr,
@@ -728,6 +777,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_attn_inst_buf(
               (RETURN_LSE) ? reinterpret_cast<float*>(lse.data_ptr()) : nullptr,
               stride_bz_o, stride_h_o, stride_seq_o,
               qo_len, kv_len, num_kv_groups, sm_scale);
+
+            cudaFree(d_pack);
           });
         });
       });
@@ -752,6 +803,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
                     int return_lse)
 {
   CHECK_CUDA(query);
+  const at::cuda::OptionalCUDAGuard device_guard(at::device_of(query));
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   CHECK_CUDA(key);
   CHECK_CUDA(value);
   CHECK_CUDA(output);
@@ -865,7 +918,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
 
             constexpr MaskMode mask_mode = IS_CAUSAL ? MaskMode::kCausal : MaskMode::kNone;
 
-            assert(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K);
+            TORCH_CHECK(value.size(3) >= div_ceil(kv_len, CTA_K) * CTA_K,
+                        "Hopper FP8 attention requires V padded to a multiple of 128 tokens");
 
             if constexpr (QK_QUANT_GRAN == static_cast<int>(QuantGranularity::kPerWarp))
             {
@@ -888,6 +942,18 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
             CUtensorMap tma_map_K = create_tensor_map_4D<CTA_K, HEAD_DIM>(reinterpret_cast<int8_t*>(key.data_ptr()), batch_size, num_kv_heads, kv_len, HEAD_DIM, stride_bz_k, stride_h_k, stride_seq_k);
             CUtensorMap tma_map_V = create_tensor_map_4D<HEAD_DIM, CTA_K>(reinterpret_cast<int8_t*>(value.data_ptr()), batch_size, num_kv_heads, HEAD_DIM, value.size(3), stride_bz_v, stride_h_v, stride_d_v);
 
+            DeviceTensorMaps h_pack;
+            h_pack.q = tma_map_Q;
+            h_pack.k = tma_map_K;
+            h_pack.v = tma_map_V;
+
+            DeviceTensorMaps* d_pack = nullptr;
+            cudaError_t err = cudaMalloc(&d_pack, sizeof(DeviceTensorMaps));
+            TORCH_CHECK(err == cudaSuccess, "cudaMalloc failed for DeviceTensorMaps");
+
+            err = cudaMemcpy(d_pack, &h_pack, sizeof(DeviceTensorMaps), cudaMemcpyHostToDevice);
+            TORCH_CHECK(err == cudaSuccess, "cudaMemcpy failed for DeviceTensorMaps");
+
             auto* kernel = qk_int8_sv_f8_attn_kernel<CTA_Q, CTA_K, NUM_THREADS, HEAD_DIM,  static_cast<QuantGranularity>(QK_QUANT_GRAN), static_cast<QuantGranularity>(QK_QUANT_GRAN), DTypeOut, mask_mode, RETURN_LSE, true>;
             size_t sMemSize = CTA_Q * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t);
             cudaFuncSetAttribute(
@@ -895,10 +961,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
                 cudaFuncAttributeMaxDynamicSharedMemorySize, sMemSize);
             
             dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
-            kernel<<<grid, NUM_THREADS, sMemSize>>>(
-              tma_map_Q,
-              tma_map_K,
-              tma_map_V,
+            kernel<<<grid, NUM_THREADS, sMemSize, stream>>>(
+              d_pack,
               reinterpret_cast<float*>(query_scale.data_ptr()),
               reinterpret_cast<float*>(key_scale.data_ptr()),
               reinterpret_cast<float*>(value_scale.data_ptr()),
@@ -906,6 +970,8 @@ torch::Tensor qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(
               (RETURN_LSE) ? reinterpret_cast<float*>(lse.data_ptr()) : nullptr,
               stride_bz_o, stride_h_o, stride_seq_o,
               qo_len, kv_len, num_kv_groups, sm_scale);
+
+            cudaFree(d_pack);
           });
         });
       });

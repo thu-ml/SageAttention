@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-// Include these 2 headers instead of torch/extension.h since we don't need all of the torch headers.
-#include <torch/python.h>
-#include <torch/nn/functional.h>
+#include <torch/library.h>
+#include <torch/types.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <limits>
 
 #include <cutlass/numeric_types.h>
 
@@ -27,7 +27,7 @@
 #include "static_switch.h"
 
 #define CHECK_DEVICE(x) TORCH_CHECK(x.is_cuda(), #x " must be on CUDA")
-#define CHECK_SHAPE(x, ...) TORCH_CHECK(x.sizes() == torch::IntArrayRef({__VA_ARGS__}), #x " must have shape (" #__VA_ARGS__ ")")
+#define CHECK_SHAPE(x, ...) TORCH_CHECK(x.sizes().equals(torch::IntArrayRef({__VA_ARGS__})), #x " must have shape (" #__VA_ARGS__ ")")
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 
 
@@ -201,21 +201,22 @@ void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split
 }
 
 std::vector<at::Tensor>
-mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size // 2)
+mha_fwd(const at::Tensor &q,   // batch_size x seqlen_q x num_heads x (head_size // 2)
         const at::Tensor &k,         // batch_size x seqlen_k x num_heads_k x (head_size // 2)
         const at::Tensor &v,         // batch_size x seqlen_k x num_heads_k x (head_size // 2)
         const at::Tensor &sfq,
         const at::Tensor &sfk,
         const at::Tensor &sfv,
         const at::Tensor &delta_s,
-        int unpadded_k,
-        c10::optional<at::Tensor> &out_,             // batch_size x seqlen_q x num_heads x head_size
-        const float softmax_scale,
+        int64_t unpadded_k,
+        double softmax_scale,
         bool is_causal, 
         bool per_block_mean,
         bool is_bf16
     ) {
 
+    CHECK_DEVICE(q); CHECK_DEVICE(k); CHECK_DEVICE(v);
+    const at::cuda::CUDAGuard device_guard(q.device());
     auto dprops = at::cuda::getCurrentDeviceProperties();
     bool is_sm120 = dprops->major == 12 && dprops->minor == 0;
     bool is_sm121 = dprops->major == 12 && dprops->minor == 1;
@@ -226,7 +227,6 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
     TORCH_CHECK(q_dtype == torch::kUInt8, "q dtype must be uint8");
     TORCH_CHECK(k.dtype() == q_dtype, "query and key must have the same dtype");
     TORCH_CHECK(v.dtype() == q_dtype, "query and value must have the same dtype");
-    CHECK_DEVICE(q); CHECK_DEVICE(k); CHECK_DEVICE(v);
 
     TORCH_CHECK(sfq_dtype == torch::kFloat8_e4m3fn, "q dtype must be uint8");
     TORCH_CHECK(sfk.dtype() == sfq_dtype, "query and key must have the same dtype");
@@ -253,19 +253,27 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
     const int num_heads_k = k.size(1);
     
     TORCH_CHECK(batch_size > 0, "batch size must be postive");
-    TORCH_CHECK(unpacked_head_size <= 256, "FlashAttention forward only supports head dimension at most 256");
-    TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide number of heads in query");
-    TORCH_CHECK(num_heads == num_heads_k, "We do not support MQA/GQA yet");
-
-    TORCH_CHECK(unpacked_head_size == 64 || unpacked_head_size == 128 || unpacked_head_size == 256, "Only support head size 64, 128, and 256 for now");
+    TORCH_CHECK(num_heads_k > 0 && num_heads > 0 && num_heads % num_heads_k == 0,
+                "Number of heads in key/value must divide number of heads in query");
+    TORCH_CHECK(unpacked_head_size == 64 || unpacked_head_size == 128, "Expected head size 64 or 128");
+    TORCH_CHECK(!is_causal || seqlen_q <= seqlen_k, "Causal attention requires query length <= key length");
+    TORCH_CHECK(seqlen_q % 128 == 0 && seqlen_k % 128 == 0 && unpadded_k >= 0 && unpadded_k <= seqlen_k,
+                "Packed sequences must be padded to 128 tokens");
 
     CHECK_SHAPE(q, batch_size, num_heads, seqlen_q, head_size_og);
     CHECK_SHAPE(k, batch_size, num_heads_k, seqlen_k, head_size_og);
     CHECK_SHAPE(v, batch_size, num_heads_k, unpacked_head_size, seqlen_k/2);
-    // CHECK_SHAPE(delta_s, batch_size, num_heads, seqlen_q / 128, seqlen_k);
-    // CHECK_SHAPE(sfq, batch_size, seqlen_q, num_heads, unpacked_head_size);
-    // CHECK_SHAPE(sfk, batch_size, seqlen_k, num_heads_k, unpacked_head_size);
-    // CHECK_SHAPE(sfv, batch_size, unpacked_head_size, num_heads_k, seqlen_k);
+    CHECK_SHAPE(delta_s, batch_size, num_heads, per_block_mean ? seqlen_q / 128 : 1, seqlen_k);
+    CHECK_SHAPE(sfq, batch_size, num_heads, seqlen_q, unpacked_head_size / 16);
+    CHECK_SHAPE(sfk, batch_size, num_heads_k, seqlen_k, unpacked_head_size / 16);
+    CHECK_SHAPE(sfv, batch_size, num_heads_k, unpacked_head_size, seqlen_k / 16);
+    TORCH_CHECK(delta_s.device() == q.device() && delta_s.scalar_type() == at::kFloat && delta_s.is_contiguous(),
+                "Expected a contiguous FP32 correction on the query device");
+    TORCH_CHECK(k.device() == q.device() && v.device() == q.device() &&
+                sfq.device() == q.device() && sfk.device() == q.device() && sfv.device() == q.device(),
+                "Q, K, V and scales must be on the same device");
+    TORCH_CHECK(delta_s.stride(0) <= std::numeric_limits<int32_t>::max(),
+                "FP4 correction exceeds the TMA stride limit");
     TORCH_CHECK(unpacked_head_size % 8 == 0, "head_size must be a multiple of 8");
     
     auto dtype = is_bf16 ? at::ScalarType::BFloat16 : at::ScalarType::Half;
@@ -276,10 +284,6 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
     // const int head_size_rounded = round_multiple(head_size, 32);
     const int seqlen_q_rounded = round_multiple(seqlen_q, 128);
     const int seqlen_k_rounded = round_multiple(seqlen_k, 128);
-
-    // Otherwise the kernel will be launched from cuda:0 device
-    // Cast to char to avoid compiler warning about narrowing
-    at::cuda::CUDAGuard device_guard{(char)q.get_device()};
 
     
 
@@ -301,7 +305,7 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
                      nullptr,
                      softmax_lse.data_ptr(),
                      /*p_dropout=*/0.f,
-                     softmax_scale,
+                     static_cast<float>(softmax_scale),
                      /*window_size_left=*/-1,
                      /*window_size_right=*/is_causal ? 0 : -1,
                      per_block_mean,
@@ -320,12 +324,6 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
         softmax_lse.fill_(std::numeric_limits<float>::infinity());
     }
 
-    // at::Tensor out_padded = out;
-    // if (head_size_og % 8 != 0) {
-    //     out = out.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
-    //     if (out_.has_value()) { out_.value().copy_(out); }
-    // }
-
     // return {out, q_padded, k_padded, v_padded, out_padded, softmax_lse, p};
     // cudaDeviceSynchronize();
     // auto err = cudaGetLastError();
@@ -335,7 +333,11 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x (head_size
 
 
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.doc() = "FlashAttention";
-    m.def("fwd", &mha_fwd, "Forward pass");
+TORCH_LIBRARY_FRAGMENT(sageattn3, m) {
+    m.def("fwd(Tensor q, Tensor k, Tensor v, Tensor sfq, Tensor sfk, Tensor sfv, Tensor delta_s, "
+          "int unpadded_k, float softmax_scale, bool is_causal, bool per_block_mean, bool is_bf16) -> Tensor[]");
+}
+
+TORCH_LIBRARY_IMPL(sageattn3, CUDA, m) {
+    m.impl("fwd", &mha_fwd);
 }

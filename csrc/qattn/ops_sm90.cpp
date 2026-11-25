@@ -14,12 +14,15 @@
  * limitations under the License.
  */
 
-#include <pybind11/pybind11.h>
-#include <torch/extension.h>
+#include "../cuda_ops.h"
 #include "attn_cuda_sm90.h"
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+using sageattention::cuda_kernel;
+
+TORCH_LIBRARY(sageattention_sm90, m)
 {
-  m.def("qk_int8_sv_f8_accum_f32_attn_inst_buf", &qk_int8_sv_f8_accum_f32_attn_inst_buf);
-  m.def("qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf", &qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf);
+  m.def(SAGEATTN_QK_SCHEMA(qk_int8_sv_f8_accum_f32_attn_inst_buf, ""),
+        cuda_kernel<&qk_int8_sv_f8_accum_f32_attn_inst_buf>());
+  m.def(SAGEATTN_QK_SCHEMA(qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf, "Tensor value_scale, "),
+        cuda_kernel<&qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf>());
 }

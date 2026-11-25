@@ -17,7 +17,7 @@
 #include "../utils.cuh"
 #include <cuda_fp16.h>
 #include <cuda_pipeline_primitives.h>
-#include <torch/extension.h>
+#include <torch/types.h>
 
 #include "../cp_async.cuh"
 #include "../mma.cuh"
@@ -214,6 +214,7 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
   // for causal masking
   uint32_t Q_idx_lane_base = bx * CTA_Q + get_warp_idx_q<num_warps_q, num_warps_k>() * WARP_Q + lane_id / 4;
   uint32_t K_idx_lane_base = get_warp_idx_k<num_warps_q, num_warps_k>() * WARP_K + 2 * (lane_id % 4);
+  const int32_t causal_kv_offset = get_causal_kv_offset(qo_len, kv_len);
 
   // for loading
   uint32_t Q_load_idx_lane_base = bx * CTA_Q + CTA_Q / num_warps * warp_id + lane_id / global_to_shared_line_lanes_QK;
@@ -221,7 +222,7 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
 
   const uint32_t num_iterations = div_ceil(
       mask_mode == MaskMode::kCausal
-          ? min(kv_len, (bx + 1) * CTA_Q)
+          ? get_causal_kv_limit((bx + 1) * CTA_Q, qo_len, kv_len)
           : kv_len,
       CTA_K);
 
@@ -295,34 +296,24 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
 #pragma unroll
         for (uint32_t k = 0; k < 8; k++)
         {
-          RS_f32[fq][fk][k] = __int2float_rz(RS[fq][fk][k]);
+          RS_f32[fq][fk][k] = __int2float_rz(RS[fq][fk][k]) * dequant_scale;
         }
       }
     }
 
+    if constexpr (mask_mode == MaskMode::kCausal)
+    {
+      const uint32_t fully_visible_kv_len = get_causal_kv_limit(bx * CTA_Q + 1, qo_len, kv_len);
+      if ((iter - 1) * CTA_K + CTA_K > fully_visible_kv_len)
+      {
+        apply_causal_mask<num_tiles_q, num_tiles_k>(Q_idx_lane_base, K_idx_lane_base, causal_kv_offset, RS_f32);
+      }
+    }
     K_idx_lane_base += CTA_K;
 
-    if constexpr (std::is_same<DTypeSVAccum, float>::value)
-    {
-      update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, false, true, false>(RS_f32, RO, m, d, sm_scale);
-    }
-    else if constexpr (std::is_same<DTypeSVAccum, half>::value)
-    {
-      update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, true, true, false>(RS_f32, RO, m, d, sm_scale);
-    }
-
-    if constexpr (DenominatorAccumUnit == ComputeUnit::kCudaCore)
-    {
-      accumulate_d<num_tiles_q, num_tiles_k, ComputeUnit::kCudaCore>(RS_f32, d);
-    }
-
     uint32_t RS_f8[num_tiles_q][num_tiles_k / 2][4];
-    RS_32_to_8<num_tiles_q, num_tiles_k>(RS_f32, RS_f8);
-
-    if constexpr (DenominatorAccumUnit == ComputeUnit::kTensorCore)
-    {
-      accumulate_d_f8<num_tiles_q, num_tiles_k>(RS_f8, d);
-    }
+    prepare_fp8_probabilities<num_tiles_q, num_tiles_k, num_tiles_v, DenominatorAccumUnit>(
+        RS_f32, RS_f8, RO, m, d, original_sm_scale);
 
     __syncthreads();
 
@@ -405,32 +396,14 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
 
     if constexpr (mask_mode == MaskMode::kCausal)
     {
-      apply_causal_mask<num_tiles_q, num_tiles_k>(Q_idx_lane_base, K_idx_lane_base, RS_f32);
+      apply_causal_mask<num_tiles_q, num_tiles_k>(Q_idx_lane_base, K_idx_lane_base, causal_kv_offset, RS_f32);
     }
     // apply_out_of_bound_mask<num_tiles_q, num_tiles_k>(K_idx_lane_base, RS_f32, kv_len);
     K_idx_lane_base += CTA_K;
 
-    if constexpr (std::is_same<DTypeSVAccum, float>::value)
-    {
-      update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, false, true, false>(RS_f32, RO, m, d, original_sm_scale);
-    }
-    else if constexpr (std::is_same<DTypeSVAccum, half>::value)
-    {
-      update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, true, true, false>(RS_f32, RO, m, d, original_sm_scale);
-    }
-
-    if constexpr (DenominatorAccumUnit == ComputeUnit::kCudaCore)
-    {
-      accumulate_d<num_tiles_q, num_tiles_k, ComputeUnit::kCudaCore>(RS_f32, d);
-    }
-
     uint32_t RS_f8[num_tiles_q][num_tiles_k / 2][4];
-    RS_32_to_8<num_tiles_q, num_tiles_k>(RS_f32, RS_f8);
-
-    if constexpr (DenominatorAccumUnit == ComputeUnit::kTensorCore)
-    {
-      accumulate_d_f8<num_tiles_q, num_tiles_k>(RS_f8, d);
-    }
+    prepare_fp8_probabilities<num_tiles_q, num_tiles_k, num_tiles_v, DenominatorAccumUnit>(
+        RS_f32, RS_f8, RO, m, d, original_sm_scale);
 
     __syncthreads();
 
@@ -512,32 +485,14 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
 
     if constexpr (mask_mode == MaskMode::kCausal)
     {
-      apply_causal_mask<num_tiles_q, num_tiles_k>(Q_idx_lane_base, K_idx_lane_base, RS_f32);
+      apply_causal_mask<num_tiles_q, num_tiles_k>(Q_idx_lane_base, K_idx_lane_base, causal_kv_offset, RS_f32);
     }
     apply_out_of_bound_mask<num_tiles_q, num_tiles_k>(K_idx_lane_base, RS_f32, kv_len);
     K_idx_lane_base += CTA_K;
 
-    if constexpr (std::is_same<DTypeSVAccum, float>::value)
-    {
-      update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, false, true, false>(RS_f32, RO, m, d, original_sm_scale);
-    }
-    else if constexpr (std::is_same<DTypeSVAccum, half>::value)
-    {
-      update_mdo<num_tiles_q, num_tiles_k, num_tiles_v, true, true, false>(RS_f32, RO, m, d, original_sm_scale);
-    }
-
-    if constexpr (DenominatorAccumUnit == ComputeUnit::kCudaCore)
-    {
-      accumulate_d<num_tiles_q, num_tiles_k, ComputeUnit::kCudaCore>(RS_f32, d);
-    }
-
     uint32_t RS_f8[num_tiles_q][num_tiles_k / 2][4];
-    RS_32_to_8<num_tiles_q, num_tiles_k>(RS_f32, RS_f8);
-
-    if constexpr (DenominatorAccumUnit == ComputeUnit::kTensorCore)
-    {
-      accumulate_d_f8<num_tiles_q, num_tiles_k>(RS_f8, d);
-    }
+    prepare_fp8_probabilities<num_tiles_q, num_tiles_k, num_tiles_v, DenominatorAccumUnit>(
+        RS_f32, RS_f8, RO, m, d, original_sm_scale);
 
     // ensure V is ready
     cp_async::wait_group<0>();
@@ -569,7 +524,7 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
 
   // TODO: thread block sync mdo state for num_warps_k > 0. Then only one thread block needs to do the final saving.
 
-  normalize_d<num_tiles_q, num_tiles_v, ComputeUnit::kCudaCore>(RO, m, d);
+  normalize_d<num_tiles_q, num_tiles_v, DenominatorAccumUnit>(RO, m, d);
 
   // ! here we just implement the case for fp32 acumulation
   if constexpr (fuse_v_scale)
@@ -702,8 +657,6 @@ __global__ void qk_int_sv_f8_attn_kernel(int8_t *__restrict__ Q, int8_t *__restr
     }
   }
 }
-
-
 
 
 

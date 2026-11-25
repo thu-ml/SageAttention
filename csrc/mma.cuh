@@ -705,12 +705,16 @@ __device__ __forceinline__ void rowsum_f16f16f32(float* d, uint32_t* s) {
  */
 __device__ __forceinline__ void rowsum_f8f8f32(float* d, uint32_t* s) {
 #ifdef MMA_F8F8F32_M16N8K16_ENABLED
+  // Hopper can lower this MMA to instructions that need real destination registers.
   asm volatile(
+      "{\n"
+      ".reg .f32 unused0, unused1;\n"
       "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32 "
-      "{%0,  _,  %1,  _},"
+      "{%0,  unused0,  %1,  unused1},"
       "{%2,  %3,  %4,  %5},"
       "{%6,  %7},"
       "{%8,  0.,  %9,  0.};\n"
+      "}\n"
       : "=f"(d[0]), "=f"(d[1])
       : "r"(s[0]), "r"(s[1]), "r"(s[2]), "r"(s[3]), "r"(943208504), "r"(943208504), // 943208504 packs four 1.0f in e4m3
         "f"(d[0]), "f"(d[1]));

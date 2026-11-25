@@ -1,3 +1,5 @@
+#include "../cuda_compat.h"
+
 #include "attn_cuda_sm89.h"
 #include "qk_int_sv_f8_cuda_sm89.cuh"
 torch::Tensor qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf(torch::Tensor query,
@@ -20,6 +22,9 @@ torch::Tensor qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf(torch::Tensor q
   CHECK_CUDA(query_scale);
   CHECK_CUDA(key_scale);
   CHECK_CUDA(value_scale);
+
+  const at::cuda::OptionalCUDAGuard device_guard(at::device_of(query));
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
   CHECK_LASTDIM_CONTIGUOUS(query);
   CHECK_LASTDIM_CONTIGUOUS(key);
@@ -151,15 +156,17 @@ torch::Tensor qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf(torch::Tensor q
             //                                     smem_Q                                     smem_K                            smem_V                     smem_O
             size_t smem_max = std::max(CTA_Q * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t) + CTA_K * HEAD_DIM * sizeof(int8_t), CTA_Q * HEAD_DIM * sizeof(half));
             
+            // LSE uses the sum before probability rounding.
+            constexpr auto denominator = RETURN_LSE ? ComputeUnit::kCudaCore : ComputeUnit::kTensorCore;
             auto kernel_func = qk_int_sv_f8_attn_kernel<CTA_Q, CTA_K, WARP_Q, WARP_K, HEAD_DIM, DataType::kInt8, static_cast<QuantGranularity>(QK_QUANT_GRAN), static_cast<QuantGranularity>(QK_QUANT_GRAN),
-                                                        float, true, DTypeOut, ComputeUnit::kCudaCore, mask_mode, RETURN_LSE, true, false, true>;
+                                                        float, true, DTypeOut, denominator, mask_mode, RETURN_LSE, true, false, true>;
 
             cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_max);
 
             dim3 grid(div_ceil(qo_len, CTA_Q), num_qo_heads, batch_size);
             dim3 block(32, (CTA_Q / WARP_Q) * (CTA_K / WARP_K));
 
-            kernel_func<<<grid, block, smem_max>>>(
+            kernel_func<<<grid, block, smem_max, stream>>>(
               query.data_ptr<int8_t>(), 
               key.data_ptr<int8_t>(),
               reinterpret_cast<int8_t*>(value.data_ptr()),

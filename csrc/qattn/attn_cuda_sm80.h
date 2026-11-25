@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <torch/extension.h>
+#include <torch/types.h>
 
 torch::Tensor qk_int8_sv_f16_accum_f32_attn(torch::Tensor query,
                     torch::Tensor key,

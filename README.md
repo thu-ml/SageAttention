@@ -1,3 +1,130 @@
+# SageAttention for Windows
+
+This fork began as a small set of Windows build and packaging patches for [SageAttention](https://github.com/thu-ml/SageAttention). We kept the patch set minimal while following upstream. Upstream `main` has stayed at its [January 17, 2026 commit](https://github.com/thu-ml/SageAttention/commit/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5) through November 23, 2026. With kernel fixes still pending and new Windows CUDA and PyTorch builds to support, we now maintain SageAttention 2.2 and SageAttention 3 in this fork.
+
+## Fixes brought over from upstream
+
+- **SageAttention 2.2** uses the current CUDA stream for CUDA Graph replay, applies right-aligned causal masks to unequal Q and K lengths, and zero-fills tail tiles and zero-scale FP8 V channels. We also brought over 64-bit Triton addressing and reduced peak memory by allocating the output after V quantization. [#380](https://github.com/thu-ml/SageAttention/pull/380) · [#372](https://github.com/thu-ml/SageAttention/pull/372) · [#377](https://github.com/thu-ml/SageAttention/pull/377) · [#387](https://github.com/thu-ml/SageAttention/pull/387) · [#384](https://github.com/thu-ml/SageAttention/issues/384)
+- **SageAttention 3** applies causal and padding masks in token order after FP4 interleaving, restores the omitted causal key block, and initializes the softmax and output accumulators. It supports native GQA/MQA, pads head widths up to 128, preserves the caller’s K, and chunks long non-causal queries when the correction tensor would exceed the TMA stride limit. Explicit masks and ragged causal lengths with different Q and K padding use SDPA. [#408](https://github.com/thu-ml/SageAttention/pull/408) · [#410](https://github.com/thu-ml/SageAttention/issues/410) · [#406](https://github.com/thu-ml/SageAttention/pull/406) · [#401](https://github.com/thu-ml/SageAttention/pull/401) · [#409](https://github.com/thu-ml/SageAttention/pull/409) · [#394](https://github.com/thu-ml/SageAttention/pull/394) · [#407](https://github.com/thu-ml/SageAttention/pull/407)
+
+## Optimizations in this fork
+
+- **SageAttention 2.2** uses standard E4M3 conversion and, where supported, normalizes attention with row sums from the rounded FP8 probabilities. Paths that return log-sum-exp retain FP32 row sums. On SM120, the V transpose pads shared-memory rows to reduce bank conflicts. [VC-Attention](https://arxiv.org/abs/2609.15810)
+- **SageAttention 3** fuses 128-token Q block centering with FP4 quantization for aligned inputs. Each 16-element Q and K block evaluates five E4M3 scales derived from `amax / {6, 5.5, 5, 4.5, 4}`. Each V channel evaluates `amax / 6` and its neighboring finite E4M3 encodings over 16 consecutive tokens. The quantizers pick the candidates with the lowest reconstruction error. [#411](https://github.com/thu-ml/SageAttention/pull/411) · [Four Over Six](https://arxiv.org/abs/2512.02010) · [ScaleSweep](https://arxiv.org/abs/2606.07618)
+- The Sage3 V quantizer reads aligned strided views directly and pads the final token block in the kernel. On Windows SM120, Sage3 also fuses the BF16 mean-correction matmul, rounding, and FP32 writeback. Each Windows launch retains its own TMA parameters during CUDA Graph replay.
+- **Shape routing** lets the Sage3 entry point choose Sage 2.2 on Windows RTX 5090 with PyTorch 2.12.1+cu130 and a compatible Sage 2.2 installation. The cutoff covers every sequence length from 255 through the inclusive limit for the head count, head width, and Q/K/V strides. Eligible calls use eager, non-causal BF16 self-attention with batch size 1, equal Q/K/V shapes, per-block means, and no mask or explicit chunk size.
+- **Windows builds** use the PyTorch dispatcher and the CPython stable ABI, with FakeTensor support for `torch.compile`. CUDA 13.x builds handle the Windows SAL and CCCL header conflict. CUDA 13.2 and later use MSVC’s conforming preprocessor.
+
+## Windows wheels
+
+Download `sageattention` for SageAttention 2.2 or `sageattn3` for SageAttention 3. Match the `cu…torch…` tag to your installed PyTorch build. Both packages use `cp310-abi3-win_amd64`, so the same wheel can load on CPython 3.10 and later if the matching PyTorch build supports that Python version. [Windows releases](https://github.com/mengqin/SageAttention/releases)
+
+The current wheel matrix includes CUDA 13.0, 13.2, and 13.4 with PyTorch releases through 2.15.0.
+
+| CUDA | PyTorch | SageAttention 2.2 | SageAttention 3 |
+| --- | --- | --- | --- |
+| 12.4 | 2.6.0 | ✓ | |
+| 12.6 | 2.7.1 | ✓ | |
+| 12.8 | 2.8.0, 2.9.1, 2.10.0 | ✓ | ✓ |
+| 13.0 | 2.11.0, 2.12.1, 2.13.0, 2.14.1 | ✓ | ✓ |
+| 13.2 | 2.14.1, 2.15.0 | ✓ | ✓ |
+| 13.4 | 2.15.0 | ✓ | ✓ |
+
+The SageAttention 2.2 wheels cover Ampere, Ada, Hopper, and Blackwell where the matching CUDA toolkit supports the architecture. The SageAttention 3 wheels target Blackwell `sm_120` on CUDA 12.8 and `sm_120`/`sm_121` on CUDA 13.x.
+
+The 20261123 release was built from `52c3115`. The attention benchmarks below use local `+cu130torch2121.tune2` wheels with the three-candidate V quantizer, shape routing, and SM120 kernel updates. [20261123 wheels](https://github.com/mengqin/SageAttention/releases/tag/20261123)
+
+Install the selected wheel with `python -m pip install <wheel-file.whl>` in the environment that runs your application. The [SageAttention 3 README](sageattention3_blackwell/README.md) and [upstream documentation](https://github.com/thu-ml/SageAttention/tree/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5#installation) cover source builds and additional API options.
+
+```python
+from sageattention import sageattn
+from sageattn3 import sageattn3_blackwell
+
+# q, k, v have shape [batch, heads, tokens, head_dim] and use FP16 or BF16.
+out2 = sageattn(q, k, v, is_causal=False)
+out3 = sageattn3_blackwell(q, k, v, is_causal=False)
+```
+
+## Windows performance and accuracy
+
+The comparison uses the same BF16 Q/K/V for all three runs. Sage 2.2 and Sage3 call their backends directly. Sage3 shape routing calls the public Sage3 entry point and uses the backend shown after the arrow. The left column replays MiniMax H3 Image and H3 Video with all 56 heads. The right column uses Gaussian inputs with 24 heads and head widths of 64 and 128.
+
+![Sage 2.2, Sage3, and Sage3 shape routing latency and output error on RTX 5090](assets/windows-comparison/shape-routing-benchmark.png)
+
+Each cell reports attention P50 and relative L1 error.
+
+| H3 replay | Tokens | Routed backend | Our Sage 2.2 | Our Sage3 | Our Sage3 shape routing |
+| --- | ---: | --- | ---: | ---: | ---: |
+| Image 1024² | 3,097 | Sage 2.2 | 0.725 ms / 1.06% | 0.724 ms / 6.06% | 0.735 ms / 1.06% |
+| Video 768 × 448, 39 frames | 4,862 | Sage3 | 1.450 ms / 1.17% | 1.232 ms / 6.73% | 1.236 ms / 6.73% |
+| Image 2048² | 9,241 | Sage3 | 4.606 ms / 0.86% | 3.638 ms / 5.21% | 3.643 ms / 5.21% |
+| Video 768 × 448, 124 frames | 13,546 | Sage3 | 9.173 ms / 1.09% | 6.925 ms / 6.63% | 6.929 ms / 6.63% |
+
+At 3,097 tokens, shape routing selects Sage 2.2. Relative L1 drops from **6.06% to 1.06%** and P50 rises from 0.724 to 0.735 ms compared with direct Sage3. The other three H3 workloads exceed the 4,736-token cutoff and route to Sage3. Their routed P50 is **14.8%, 20.9%, and 24.5% lower** than direct Sage 2.2, respectively.
+
+Four Gaussian shapes route to Sage 2.2, reducing relative L1 from **17.5%–17.7% to about 3.9%** versus direct Sage3. Latency depends on the shape. At head width 64 and 12,288 tokens, routing lowers P50 by 5.1%. At head width 128 and 7,680 tokens, routing raises P50 by 26.5% (1.220 to 1.543 ms).
+
+The tests use CUDA events to time a single eager attention call, including online preprocessing, on Windows with RTX 5090 and PyTorch 2.12.1+cu130. Each arm has 18 warmups and 60 timed calls per sample. H3 uses three layer captures per workload, with Image captures from the public Comfy-Org checkpoint. Gaussian workloads use two seeds. The chart and table report medians across samples. Error uses 96 query positions against FP32 attention with the full K/V sequence and TF32 disabled. All 24 routed outputs matched their selected backends bitwise. Relative L1 and L2 matched the previous benchmark for all 72 measurements. WDDM sampling recorded a peak of **86 MiB** of shared GPU memory for the process and **4.87 GiB** of dedicated GPU memory for the adapter. [Per-sample P50, P95, L1, L2, and peak allocation](assets/windows-comparison/shape-routing-benchmark.csv)
+
+## MiniMax H3 Image examples
+
+The images and RGB metrics below come from the earlier rendering runs. Both resolutions use the same three prompts and seeds, the public Comfy-Org INT8 ConvRot checkpoint, a black reference image, six-step Euler sampling with CFG 1, and tiled VAE decoding. Within each resolution, the comparison varies the attention backend in the 50 diffusion transformer blocks. The upstream columns use attention logic from `d1a57a5` with the Windows build and launch compatibility changes from `06f8d49`.
+
+### 1024 × 1024
+
+| Scene | cuDNN SDPA | Upstream Sage 2.2 | Our Sage 2.2 | Upstream Sage3 | Our Sage3 | Our Sage3 Shape Routing |
+| --- | --- | --- | --- | --- | --- | --- |
+| Skin and hair, seed 42 | ![SDPA portrait](assets/windows-comparison/skin-hair-sdpa-1024.webp) | ![Upstream Sage 2.2 portrait](assets/windows-comparison/skin-hair-upstream-sage2-1024.webp) | ![Our Sage 2.2 portrait](assets/windows-comparison/skin-hair-sage2-1024.webp) | ![Upstream Sage3 portrait](assets/windows-comparison/skin-hair-upstream-sage3-1024.webp) | ![Our Sage3 portrait](assets/windows-comparison/skin-hair-sage3-fp4-1024.webp) | ![Our Sage3 Shape Routing portrait](assets/windows-comparison/skin-hair-sage2-1024.webp) |
+| Fine textiles, seed 1234 | ![SDPA textiles](assets/windows-comparison/textiles-sdpa-1024.webp) | ![Upstream Sage 2.2 textiles](assets/windows-comparison/textiles-upstream-sage2-1024.webp) | ![Our Sage 2.2 textiles](assets/windows-comparison/textiles-sage2-1024.webp) | ![Upstream Sage3 textiles](assets/windows-comparison/textiles-upstream-sage3-1024.webp) | ![Our Sage3 textiles](assets/windows-comparison/textiles-sage3-fp4-1024.webp) | ![Our Sage3 Shape Routing textiles](assets/windows-comparison/textiles-sage2-1024.webp) |
+| Architecture and geometry, seed 42 | ![SDPA architecture](assets/windows-comparison/architecture-sdpa-1024.webp) | ![Upstream Sage 2.2 architecture](assets/windows-comparison/architecture-upstream-sage2-1024.webp) | ![Our Sage 2.2 architecture](assets/windows-comparison/architecture-sage2-1024.webp) | ![Upstream Sage3 architecture](assets/windows-comparison/architecture-upstream-sage3-1024.webp) | ![Our Sage3 architecture](assets/windows-comparison/architecture-sage3-fp4-1024.webp) | ![Our Sage3 Shape Routing architecture](assets/windows-comparison/architecture-sage2-1024.webp) |
+
+Sage3 shape routing selected Sage 2.2 for all 300 attention calls per scene at 3,133–3,152 tokens. The routed renders matched the direct Sage 2.2 renders pixel for pixel, so the two columns share their previews. Relative to direct Sage3, shape routing reduced RGB MAE against cuDNN SDPA from **5.97 to 5.12**, **34.77 to 20.56**, and **25.06 to 13.65** on the 0–255 scale. [Per-image MAE, PSNR, and backend counts](assets/windows-comparison/shape-routing-image-metrics.csv)
+
+### 4096 × 4096
+
+The first five columns use the original full-frame renders from the upstream comparison. [RGB error for those renders](assets/windows-comparison/image-metrics.csv)
+
+| Scene | cuDNN SDPA | Upstream Sage 2.2 | Our Sage 2.2 | Upstream Sage3 | Our Sage3 | Our Sage3 Shape Routing |
+| --- | --- | --- | --- | --- | --- | --- |
+| Skin and hair, seed 42 | ![SDPA portrait](assets/windows-comparison/skin-hair-sdpa.webp) | ![Upstream Sage 2.2 portrait](assets/windows-comparison/skin-hair-upstream-sage2.webp) | ![Our Sage 2.2 portrait](assets/windows-comparison/skin-hair-fork-sage2.webp) | ![Upstream Sage3 portrait](assets/windows-comparison/skin-hair-upstream-sage3.webp) | ![Our Sage3 portrait](assets/windows-comparison/skin-hair-fork-sage3.webp) | ![Our Sage3 Shape Routing portrait](assets/windows-comparison/skin-hair-shape-routing-4096.webp) |
+| Fine textiles, seed 1234 | ![SDPA textiles](assets/windows-comparison/textiles-sdpa.webp) | ![Upstream Sage 2.2 textiles](assets/windows-comparison/textiles-upstream-sage2.webp) | ![Our Sage 2.2 textiles](assets/windows-comparison/textiles-fork-sage2.webp) | ![Upstream Sage3 textiles](assets/windows-comparison/textiles-upstream-sage3.webp) | ![Our Sage3 textiles](assets/windows-comparison/textiles-fork-sage3.webp) | ![Our Sage3 Shape Routing textiles](assets/windows-comparison/textiles-shape-routing-4096.webp) |
+| Architecture and geometry, seed 42 | ![SDPA architecture](assets/windows-comparison/architecture-sdpa.webp) | ![Upstream Sage 2.2 architecture](assets/windows-comparison/architecture-upstream-sage2.webp) | ![Our Sage 2.2 architecture](assets/windows-comparison/architecture-fork-sage2.webp) | ![Upstream Sage3 architecture](assets/windows-comparison/architecture-upstream-sage3.webp) | ![Our Sage3 architecture](assets/windows-comparison/architecture-fork-sage3.webp) | ![Our Sage3 Shape Routing architecture](assets/windows-comparison/architecture-shape-routing-4096.webp) |
+
+Against the cuDNN SDPA reference, our Sage3 lowers RGB MAE and raises PSNR in all three scenes compared with upstream Sage3. The largest MAE drop is in the architecture scene, from 20.98 to 15.92 on the 0–255 RGB scale. Our Sage2.2 lowers MAE for the portrait and raises it for the textiles and architecture scenes.
+
+Shape routing selected Sage3 for all 300 attention calls per scene at 21,565–21,584 tokens. Each routed PNG was byte-identical to a direct Sage3 PNG rendered in the same run.
+
+<details>
+<summary>Prompts and sampling settings</summary>
+
+We used `minimax_h3_image_pruned_int8_convrot.safetensors` in ComfyUI 0.45.0 with `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` and `minimax_h3_image_vae_fp16.safetensors`. All variants used `--reserve-vram 13 --disable-pinned-memory --disable-async-offload`.  The sigma schedule was `1.0, 0.9675236940383911, 0.8875485062599182, 0.75, 0.5327739119529724, 0.23200887441635132, 0.0`. [Comfy-Org checkpoint](https://huggingface.co/Comfy-Org/MiniMax-H3-Image/blob/0f41fb1c0aa51c560109139537e53ad0dae8ce5e/diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors)
+
+**Skin and hair**
+
+> A natural-light editorial portrait photograph of an adult woman, age 35, wearing a plain white cotton shirt. Close framing of her face and shoulders, realistic fine pores, subtle freckles, individual loose strands of dark wavy hair, gentle side lighting from a large window, neutral gray background, unretouched photographic texture, accurate anatomy, no text.
+
+**Fine textiles**
+
+> A carefully lit macro product photograph of fine woven linen, knitted wool and a folded silk scarf on a wooden table. Tiny crossing warp and weft threads, dense stitches, subtle fibers, physically plausible folds and soft shadows. Neutral daylight, natural colors, precise textile texture, no text.
+
+**Architecture and geometry**
+
+> A high-resolution architectural photograph of a modern stone library facade, straight vertical columns, evenly spaced rectangular windows, fine brick courses and a regular metal railing. Frontal perspective, crisp geometric alignment, overcast daylight, realistic stone grain, no people, no signs or text.
+
+</details>
+
+## Credits
+
+SageAttention is developed by the original [SageAttention team](https://github.com/thu-ml/SageAttention). Please cite the relevant work if you use these kernels. [SageAttention](https://arxiv.org/abs/2410.02367) · [SageAttention 2](https://arxiv.org/abs/2411.10958) · [SageAttention 2++](https://arxiv.org/abs/2505.21136) · [SageAttention 3](https://arxiv.org/abs/2505.11594)
+
+We thank [woct0rdho](https://github.com/woct0rdho/SageAttention) and [pamparamm](https://github.com/pamparamm) for the Windows build work that helped this fork get started. The examples use the [MiniMax H3 Image model](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) in [ComfyUI](https://github.com/Comfy-Org/ComfyUI). [Apache 2.0 license](LICENSE)
+
+---
+
+## Original SageAttention README
+
+[Upstream `d1a57a5`](https://github.com/thu-ml/SageAttention/blob/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5/README.md)
+
 # SageAttention
 <!-- We are continuously updating more features. You could **Star** and **Watch** our repository to stay updated.
 
@@ -67,7 +194,7 @@ Paper: https://arxiv.org/abs/2505.11594
 
 ## Installation
 ### Base environment
-+ `python>=3.9`   , `torch>=2.3.0`  , `triton>=3.0.0` 
++ `python>=3.9`   , `torch>=2.3.0`  , `triton>=3.0.0`
 - `CUDA`:
   + `>=12.8` for Blackwell or SageAttention2++
   + `>=12.4` for fp8 support on Ada

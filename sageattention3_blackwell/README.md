@@ -23,7 +23,9 @@ This hybrid approach may achieve **lossless acceleration**.
 
 ## Installation
 ### Base environment
-+ `python>=3.13`   , `torch>=2.8.0`, `CUDA >=12.8`
++ CPython 3.10 or newer. The `cp310-abi3` wheels require a compatible PyTorch and CUDA build.
++ CUDA 12.8 or newer and a supported Blackwell GPU.
++ See the [Windows build matrix](../README.md#windows-wheels) for the supported CUDA and PyTorch combinations.
 
 ### Install Package
 
@@ -41,14 +43,37 @@ from sageattn3 import sageattn3_blackwell
 attn_output = sageattn3_blackwell(q, k, v, is_causal=False)
 ```
 + `q, k, v` are **FP16/BF16** dtype with the shape `(batch_size, head_num, seq_len, head_dim)` 
-+ `is_causal` determines the use of a causal mask.
++ `is_causal` uses a right-aligned causal mask. Causal sequences require `q_len <= kv_len`.
++ Q may have more heads than K/V when its head count is a multiple of theirs (GQA/MQA).
++ Head widths up to 128 are padded to the next supported FP4 width (64 or 128). The default `sm_scale` uses the original width. `scale` is an alias for `sm_scale`.
++ Explicit `attn_mask` values are passed to PyTorch SDPA. Q and K with different amounts of causal sequence padding also use SDPA with a right-aligned mask.
++ Preprocessing leaves the caller's K tensor intact.
+
+On Windows with RTX 5090 and PyTorch 2.12.1+cu130, eligible eager calls use the compatible SageAttention 2.2 wheel from this fork. The calibrated range includes all token lengths from 255 through the cutoff for the head count, head width, and tensor strides. Eligible calls use non-causal BF16 self-attention with batch size 1, per-block means, equal Q/K/V shapes, and no mask or explicit chunk size.
+
+For long non-causal attention with `per_block_mean=True`, the FP4 path automatically chunks Q when the full correction tensor exceeds the TMA stride limit. You can also set `q_chunk_size` to a positive multiple of 128 to bound the size of that tensor. The chunks reuse the quantized K and V tensors. See [#394](https://github.com/thu-ml/SageAttention/pull/394).
+
+For each 16-element Q and K block, the CUDA quantizer tries `amax / t` with
+`t` in `{6, 5.5, 5, 4.5, 4}`. It selects the E4M3 scale with the lowest NVFP4
+reconstruction error. The approach extends [Four Over Six](https://arxiv.org/abs/2512.02010).
+
+For each channel of V, the quantizer scores the E4M3 representation of `amax / 6`
+and its two adjacent finite encodings over 16 consecutive tokens. It stores the
+scale with the lowest NVFP4 reconstruction error. This search is inspired by
+[ScaleSweep](https://arxiv.org/abs/2606.07618).
 
 ## Performance
-### Speed of Kernels
-![Speed on RTX5090](../assets/sage3_speed.png)
 
-### Video and Image Generation Examples
-![Image Examples](../assets/sage3_result.png)
+See the [Windows latency and accuracy comparison](../README.md#windows-performance-and-accuracy) and the [MiniMax H3 Image examples](../README.md#minimax-h3-image-examples) for measurements and generated images from the routing build.
+
+<details>
+<summary>Upstream SageAttention 3 figures</summary>
+
+![Upstream Sage3 speed on RTX 5090](../assets/sage3_speed.png)
+
+![Upstream Sage3 image and video examples](../assets/sage3_result.png)
+
+</details>
 
 
 

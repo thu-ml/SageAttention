@@ -50,6 +50,7 @@ struct SoftmaxFused{
             fill(row_max, -INFINITY);
             clear(row_sum);
             fill(scores_scale, 1.f);
+            fill(AbsMaxP, -INFINITY);
 
             CUTLASS_PRAGMA_UNROLL
             for (int mi = 0; mi < size<0>(acc_reduction_view); mi++) {

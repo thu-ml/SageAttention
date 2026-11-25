@@ -471,8 +471,9 @@ struct CollectiveMainloopFwd {
         constexpr uint32_t cluster_shape_x = get<0>(ClusterShape());
         uint2 cluster_local_block_id = {block_rank_in_cluster % cluster_shape_x, block_rank_in_cluster / cluster_shape_x};
         Tensor gQ = local_tile(mQ(_, _, bidh, bidb), select<0, 2>(TileShape_MNK{}), make_coord(m_block, _0{}));  // (M, K)
-        Tensor gK = local_tile(mK(_, _, bidh, bidb), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}));  // (N, K, _)
-        Tensor gVt = local_tile(mVt(_, _, bidh, bidb), make_shape(shape<2>(TileShape_MNK{}), shape<1>(TileShape_MNK{})), make_coord(_0{}, _));  // (N, K, _)
+        int const kv_head = bidh / (get<2>(mainloop_params.shape_Q) / get<2>(mainloop_params.shape_K));
+        Tensor gK = local_tile(mK(_, _, kv_head, bidb), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}));  // (N, K, _)
+        Tensor gVt = local_tile(mVt(_, _, kv_head, bidb), make_shape(shape<2>(TileShape_MNK{}), shape<1>(TileShape_MNK{})), make_coord(_0{}, _));  // (N, K, _)
         Tensor gDS = [&] {
                         if constexpr (BlockMean) {
                             return local_tile(mDS(_, _, bidh, bidb), select<0, 1>(TileShape_MNK{}), make_coord(m_block, _));
@@ -481,8 +482,8 @@ struct CollectiveMainloopFwd {
                         }
                     }();
         Tensor gSFQ = local_tile(mSFQ(_, _, bidh, bidb), select<0, 2>(TileShape_MNK{}), make_coord(m_block, _0{}));
-        Tensor gSFK = local_tile(mSFK(_, _, bidh, bidb), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}));
-        Tensor gSFVt = local_tile(mSFVt(_, _, bidh, bidb), make_shape(shape<2>(TileShape_MNK{}), shape<1>(TileShape_MNK{})), make_coord(_0{}, _));
+        Tensor gSFK = local_tile(mSFK(_, _, kv_head, bidb), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}));
+        Tensor gSFVt = local_tile(mSFVt(_, _, kv_head, bidb), make_shape(shape<2>(TileShape_MNK{}), shape<1>(TileShape_MNK{})), make_coord(_0{}, _));
         auto block_tma_q = mainloop_params.tma_load_Q.get_slice(_0{});
         Tensor tQgQ = block_tma_q.partition_S(gQ);
         Tensor tQsQ = block_tma_q.partition_D(sQ);
@@ -732,15 +733,21 @@ struct CollectiveMainloopFwd {
         auto col_limit_causal = [&](int row, int n_block) {
             return row + 1 + seqlen_k - n_block * kBlockN - seqlen_q + m_block * kBlockM;
         };
+        // Match the 32-token K/V interleave used by the FP4 quantizer (upstream #410).
+        auto frag_to_token = [](int col) {
+            int const local = col & 31;
+            return (col & ~31) + 2 * (local >> 3) + 8 * ((local >> 1) & 3) + (local & 1);
+        };
         {
             Tensor cS = cute::make_identity_tensor(select<0, 1>(TileShape_MNK{}));
             Tensor tScS = thread_mma_qk.partition_C(cS);
             CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < size(tSrS); ++i) {
+                int const token_col = frag_to_token(int(get<1>(tScS(i))));
                 if constexpr (!Is_causal) {  // Just masking based on col
-                    if (int(get<1>(tScS(i))) >= int(unpadded_seqlen_k - n_block * kBlockN)) { tSrS(i) = -INFINITY; }
+                    if (token_col >= unpadded_seqlen_k - n_block * kBlockN) { tSrS(i) = -INFINITY; }
                 } else { 
-                    if (int(get<1>(tScS(i))) >= std::min(seqlen_k - n_block * kBlockN,
+                    if (token_col >= std::min(seqlen_k - n_block * kBlockN,
                                                         col_limit_causal(int(get<0>(tScS(i))), n_block))) {
                         tSrS(i) = -INFINITY;
                     }
@@ -838,12 +845,13 @@ struct CollectiveMainloopFwd {
             Tensor tScS = thread_mma_qk.partition_C(cS);
             #pragma unroll
             for (int i = 0; i < size(tSrS); ++i) {
-                if (int(get<1>(tScS(i))) >= col_limit_causal(int(get<0>(tScS(i))), n_block - 1)) {
+                if (frag_to_token(int(get<1>(tScS(i)))) >= col_limit_causal(int(get<0>(tScS(i))), n_block)) {
                     tSrS(i) = -INFINITY;
                 }
             }
             softmax_fused.template online_softmax_with_quant</*Is_first=*/false>(tSrS, AbsMaxP, mainloop_params.softmax_scale_log2);
             Tensor tOrO = make_fragment_like(tOrO_store);
+            clear(tOrO);
             consumer_wait(pipeline_v, smem_pipe_read_v);
             copy_v_block(_0{});
             quantize(_0{}, tSrS_converion_view);
@@ -858,7 +866,7 @@ struct CollectiveMainloopFwd {
             }
             pipeline_v.consumer_release(smem_pipe_read_v);
             ++smem_pipe_read_v;
-            if (masking_step > 0) { softmax_fused.rescale_o(tOrO_store, tOrO); }
+            softmax_fused.rescale_o(tOrO_store, tOrO);
         }
 
         #pragma unroll 1
@@ -881,6 +889,7 @@ struct CollectiveMainloopFwd {
             }
             softmax_fused.template online_softmax_with_quant</*Is_first=*/false>(tSrS, AbsMaxP, mainloop_params.softmax_scale_log2);
             Tensor tOrO = make_fragment_like(tOrO_store);
+            clear(tOrO);
             consumer_wait(pipeline_v, smem_pipe_read_v);
             copy_v_block(_0{});
             quantize(_0{}, tSrS_converion_view);

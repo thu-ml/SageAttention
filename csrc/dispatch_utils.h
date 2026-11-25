@@ -15,7 +15,7 @@
  */
 
 #pragma once
-#include <torch/extension.h>
+#include <torch/types.h>
 #include <cstdint>
 #include <sstream>
 #include <stdexcept>

@@ -17,6 +17,8 @@
 #pragma once
 
 #include <ATen/cuda/CUDAContext.h>
+#include <cstdint>
+#include <cstring>
 
 #include "cute/tensor.hpp"
 
@@ -28,6 +30,24 @@
 #include "kernel_ws.h"
 #include "kernel_traits.h"
 
+
+#if defined(_MSC_VER)
+namespace flash {
+
+// CUDA copies by-value arguments into the launch, including during graph capture.
+template <size_t Bytes>
+struct LaunchWords {
+    static_assert(Bytes % sizeof(uint4) == 0 && Bytes <= 4096);
+    uint4 words[Bytes / sizeof(uint4)];
+};
+
+template <size_t Bytes>
+__global__ void stage_attention_params(uint4* dst, const __grid_constant__ LaunchWords<Bytes> src) {
+    dst[threadIdx.x] = src.words[threadIdx.x];
+}
+
+}  // namespace flash
+#endif
 
 template<typename Kernel_traits, bool Is_causal>
 void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
@@ -59,7 +79,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
             static_cast<ElementSF const*>(params.sfv_ptr),
             {params.d, params.seqlen_k, params.h_k, params.b},  // shape_SFVt
             static_cast<float const*>(params.delta_s_ptr),
-            {params.seqlen_s, params.seqlen_k, params.h_k, params.b},
+            {params.seqlen_s, params.seqlen_k, params.h, params.b},
             {params.ds_row_stride, _1{}, params.ds_head_stride, params.ds_batch_stride},
             params.scale_softmax_log2
         });
@@ -86,11 +106,40 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
     static constexpr int ctaSize = Kernel_traits::kNWarps * 32;
     params.m_block_divmod = cutlass::FastDivmod(num_blocks_m);
     params.total_blocks = num_blocks_m * params.h * params.b;
-    dim3 grid_dims = Scheduler::get_grid_dim(scheduler_args, 170);
+    // Launch one persistent CTA per SM on the current device instead of a
+    // hardcoded count (170 = RTX 5090), which caused wave quantization on
+    // Blackwell SKUs with fewer SMs (e.g. RTX PRO 5000, RTX 5080).
+    int num_sm = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
+    dim3 grid_dims = Scheduler::get_grid_dim(scheduler_args, num_sm);
     dim3 block_dims(ctaSize);
     dim3 cluster_dims(size<0>(ClusterShape{}), size<1>(ClusterShape{}), size<2>(ClusterShape{}));
     cutlass::ClusterLaunchParams launch_params{grid_dims, block_dims, cluster_dims, smem_size, stream};
+
+#if defined(_MSC_VER)
+    struct Params {
+        Flash_fwd_params params;
+        typename CollectiveMainloop::Params mainloop;
+        typename CollectiveEpilogue::Params epilogue;
+        typename Scheduler::Params scheduler;
+    };
+    Params host_params{params, mainloop_params, epilogue_params, scheduler_params};
+    flash::LaunchWords<sizeof(Params)> words;
+    std::memcpy(&words, &host_params, sizeof(Params));
+
+    // The tensor maps need their native alignment, including with custom CUDA allocators.
+    auto storage = at::empty({int64_t(sizeof(Params) + alignof(Params) - 1)},
+                             at::TensorOptions().device(at::kCUDA).dtype(at::kByte));
+    auto address = reinterpret_cast<std::uintptr_t>(storage.data_ptr());
+    auto aligned = (address + alignof(Params) - 1) & ~(std::uintptr_t(alignof(Params)) - 1);
+    auto* device_params = reinterpret_cast<Params*>(aligned);
+    flash::stage_attention_params<<<1, sizeof(Params) / sizeof(uint4), 0, stream>>>(
+        reinterpret_cast<uint4*>(device_params), words);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    cutlass::launch_kernel_on_cluster(launch_params, kernel, &device_params->params,
+        &device_params->mainloop, &device_params->epilogue, &device_params->scheduler);
+#else
     cutlass::launch_kernel_on_cluster(launch_params, kernel, params, mainloop_params, epilogue_params, scheduler_params);
+#endif
     
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }

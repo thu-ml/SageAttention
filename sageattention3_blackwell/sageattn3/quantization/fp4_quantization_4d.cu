@@ -13,17 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <torch/all.h>
-#include <torch/python.h>
-#include <torch/nn/functional.h>
+#include <torch/library.h>
+#include <torch/types.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <cuda_runtime_api.h>
 #include <cuda_runtime.h>
 
-#include <ATen/cuda/CUDAContext.h>
-#include <c10/cuda/CUDAGuard.h>
-
+#include <cuda_fp4.h>
 #include <cuda_fp8.h>
 
 #include "cuda_utils.h"
@@ -63,7 +60,7 @@
   TORCH_CHECK(x.dim() == true_dim, \
               "Tensor " #x " must have dimension number (" #true_dim ")")
 #define CHECK_SHAPE(x, ...)                                   \
-  TORCH_CHECK(x.sizes() == torch::IntArrayRef({__VA_ARGS__}), \
+  TORCH_CHECK(x.sizes().equals(torch::IntArrayRef({__VA_ARGS__})), \
               "Tensor " #x " must have shape (" #__VA_ARGS__ ")")
 #define CHECK_CONTIGUOUS(x) \
   TORCH_CHECK(x.is_contiguous(), "Tensor " #x " must be contiguous")
@@ -130,13 +127,102 @@ struct PackedVec {
   typename TypeConverter<Type>::Type elts[8];
 };
 
-template <uint32_t head_dim, uint32_t BLOCK_SIZE, bool permute, typename T>
+inline __device__ void pack_scaled_fp4(const float2* values, float scale, uint32_t* packed) {
+  const float reciprocal = scale == 0.f ? 0.f : 1.f / scale;
+  #pragma unroll
+  for (int group = 0; group < CVT_FP4_ELTS_PER_THREAD / 8; ++group) {
+    float2 scaled[4];
+    #pragma unroll
+    for (int pair = 0; pair < 4; ++pair) {
+      const float2 value = values[group * 4 + pair];
+      scaled[pair] = make_float2(value.x * reciprocal, value.y * reciprocal);
+    }
+    packed[group] = fp32_vec_to_e2m1(scaled);
+  }
+}
+
+inline __device__ float fp4_squared_error(const float2* values, float scale, const uint32_t* packed) {
+  float error = 0.f;
+  #pragma unroll
+  for (int pair = 0; pair < CVT_FP4_ELTS_PER_THREAD / 2; ++pair) {
+    const auto codes = static_cast<uint8_t>(packed[pair / 4] >> (8 * (pair % 4)));
+    const auto restored = __half22float2(static_cast<half2>(__nv_cvt_fp4x2_to_halfraw2(codes, __NV_E2M1)));
+    const float dx = fmaf(restored.x, scale, -values[pair].x);
+    const float dy = fmaf(restored.y, scale, -values[pair].y);
+    error += dx * dx + dy * dy;
+  }
+  return error;
+}
+
+inline __device__ __nv_fp8_e4m3 quantize_fp4(const float2* values, float amax, uint32_t* packed) {
+  static_assert(CVT_FP4_ELTS_PER_THREAD == 16, "Each thread must own a complete NVFP4 block");
+  __nv_fp8_e4m3 best_scale(amax / 6.f);
+  pack_scaled_fp4(values, float(best_scale), packed);
+  float best_error = fp4_squared_error(values, float(best_scale), packed);
+  uint8_t last_scale = best_scale.__x;
+  // Score the actual stored E4M3 scales and keep the first candidate on ties.
+  #pragma unroll
+  for (int i = 1; i < 5; ++i) {
+    const __nv_fp8_e4m3 candidate_scale(amax / (6.f - 0.5f * i));
+    if (candidate_scale.__x == last_scale) {
+      continue;
+    }
+    last_scale = candidate_scale.__x;
+    uint32_t candidate[CVT_FP4_ELTS_PER_THREAD / 8];
+    const float scale = float(candidate_scale);
+    pack_scaled_fp4(values, scale, candidate);
+    const float error = fp4_squared_error(values, scale, candidate);
+    if (error < best_error) {
+      best_error = error;
+      best_scale = candidate_scale;
+      #pragma unroll
+      for (int group = 0; group < CVT_FP4_ELTS_PER_THREAD / 8; ++group) {
+        packed[group] = candidate[group];
+      }
+    }
+  }
+  return best_scale;
+}
+
+inline __device__ __nv_fp8_e4m3 quantize_v_fp4(const float2* values, float amax, uint32_t* packed) {
+  static_assert(CVT_FP4_ELTS_PER_THREAD == 16, "Each thread must own a complete NVFP4 block");
+  const __nv_fp8_e4m3 base_scale(amax / 6.f);
+  __nv_fp8_e4m3 best_scale = base_scale;
+  pack_scaled_fp4(values, float(base_scale), packed);
+  float best_error = fp4_squared_error(values, float(base_scale), packed);
+
+  // Check the two adjacent finite E4M3 scales in the stored format.
+  #pragma unroll
+  for (int offset = -1; offset <= 1; offset += 2) {
+    const int bits = int(base_scale.__x) + offset;
+    if (bits < 0 || bits > 0x7e) {
+      continue;
+    }
+    __nv_fp8_e4m3 candidate_scale;
+    candidate_scale.__x = static_cast<uint8_t>(bits);
+    uint32_t candidate[CVT_FP4_ELTS_PER_THREAD / 8];
+    const float scale = float(candidate_scale);
+    pack_scaled_fp4(values, scale, candidate);
+    const float error = fp4_squared_error(values, scale, candidate);
+    if (error < best_error) {
+      best_error = error;
+      best_scale = candidate_scale;
+      #pragma unroll
+      for (int group = 0; group < CVT_FP4_ELTS_PER_THREAD / 8; ++group) {
+        packed[group] = candidate[group];
+      }
+    }
+  }
+  return best_scale;
+}
+
+template <uint32_t head_dim, uint32_t BLOCK_SIZE, bool permute, typename T, bool fold_q = false>
 __global__ void scaled_fp4_quant_kernel(
     const T* input, uint8_t* output, uint8_t* output_sf,
     int batch_size, int num_heads, int num_tokens,
     int stride_bz_input, int stride_h_input, int stride_seq_input,
     int stride_bz_output, int stride_h_output, int stride_seq_output,
-    int stride_bz_output_sf, int stride_h_output_sf, int stride_seq_output_sf) {
+    int stride_bz_output_sf, int stride_h_output_sf, int stride_seq_output_sf, float* qmean) {
   static_assert(std::is_same<T, half>::value || std::is_same<T, nv_bfloat16>::value, "Only half and bfloat16 input are supported");
   using PackedVec = PackedVec<T>;
 
@@ -182,6 +268,73 @@ __global__ void scaled_fp4_quant_kernel(
                                           (threadIdx.x % NUM_THREADS_PER_TOKEN) * CVT_FP4_ELTS_PER_THREAD)[0]; // feature dim
   }
 
+  if constexpr (fold_q) {
+    constexpr uint32_t TOTAL_FEATURES = NUM_THREADS_PER_TOKEN * CVT_FP4_ELTS_PER_THREAD;
+    constexpr uint32_t NUM_WARPS = (BLOCK_SIZE * NUM_THREADS_PER_TOKEN) / 32;
+    // Reduce per warp before writing shared memory to avoid atomic contention.
+    __shared__ alignas(16) float smem_part[NUM_WARPS][TOTAL_FEATURES];
+    __shared__ alignas(16) float smem_mean[TOTAL_FEATURES];
+    const int slice = threadIdx.x % NUM_THREADS_PER_TOKEN;
+    float acc[CVT_FP4_ELTS_PER_THREAD];
+    #pragma unroll
+    for (int i = 0; i < CVT_FP4_ELTS_PER_THREAD / 2; i++) {
+      float2 v;
+      if constexpr (std::is_same<T, half>::value) { v = __half22float2(in_vec.elts[i]); }
+      else { v = __bfloat1622float2(in_vec.elts[i]); }
+      acc[2 * i] = v.x;
+      acc[2 * i + 1] = v.y;
+    }
+    // warp spans (32 / NUM_THREADS_PER_TOKEN) tokens: reduce them to the
+    // token-local-0 lanes (shfl_xor over the token bits keeps slice aligned).
+    #pragma unroll
+    for (int off = NUM_THREADS_PER_TOKEN; off < 32; off <<= 1) {
+      #pragma unroll
+      for (int j = 0; j < CVT_FP4_ELTS_PER_THREAD; j++) {
+        acc[j] += __shfl_xor_sync(0xffffffff, acc[j], off);
+      }
+    }
+    if ((threadIdx.x % 32) < NUM_THREADS_PER_TOKEN) {
+      float* dst = smem_part[threadIdx.x / 32];
+      #pragma unroll
+      for (int j = 0; j < CVT_FP4_ELTS_PER_THREAD; j++) {
+        dst[slice * CVT_FP4_ELTS_PER_THREAD + j] = acc[j];
+      }
+    }
+    __syncthreads();
+    // 128 features in parallel, serial over NUM_WARPS partials (bank-conflict
+    // free: consecutive features map to consecutive banks).
+    if (threadIdx.x < TOTAL_FEATURES) {
+      float s = 0.f;
+      #pragma unroll
+      for (uint32_t w = 0; w < NUM_WARPS; w++) { s += smem_part[w][threadIdx.x]; }
+      const float mean = s / float(BLOCK_SIZE);
+      smem_mean[threadIdx.x] = mean;
+    }
+    __syncthreads();
+    if (threadIdx.x < TOTAL_FEATURES / 4) {
+      const size_t qm_row = (size_t(batch_id) * num_heads + head_id) * gridDim.x + token_block_id;
+      float4* qm_dst = reinterpret_cast<float4*>(qmean + qm_row * head_dim);
+      qm_dst[threadIdx.x] = reinterpret_cast<const float4*>(smem_mean)[threadIdx.x];
+    }
+    // Subtract only for valid tokens: OOB rows of the tail block are written
+    // to the (128-padded) output as exact zeros (sf=0, packed=0), keeping the
+    // attention kernel's discarded pad rows clean.
+    if (load_token_id < num_tokens) {
+      #pragma unroll
+      for (int i = 0; i < CVT_FP4_ELTS_PER_THREAD / 2; i++) {
+        const int f0 = slice * CVT_FP4_ELTS_PER_THREAD + 2 * i;
+        const int f1 = f0 + 1;
+        if constexpr (std::is_same<T, half>::value) {
+          in_vec.elts[i].x = __float2half(__half2float(in_vec.elts[i].x) - smem_mean[f0]);
+          in_vec.elts[i].y = __float2half(__half2float(in_vec.elts[i].y) - smem_mean[f1]);
+        } else {
+          in_vec.elts[i].x = __float2bfloat16(__bfloat162float(in_vec.elts[i].x) - smem_mean[f0]);
+          in_vec.elts[i].y = __float2bfloat16(__bfloat162float(in_vec.elts[i].y) - smem_mean[f1]);
+        }
+      }
+    }
+  }
+
   // calculate max of every consecutive 16 elements
   auto localMax = __habs2(in_vec.elts[0]);
   #pragma unroll
@@ -195,15 +348,6 @@ __global__ void scaled_fp4_quant_kernel(
 
   float vecMax = float(__hmax(localMax.x, localMax.y));
 
-  // scaling factor
-  float SFValue = vecMax / 6.0f;
-  uint8_t SFValueFP8;
-  reinterpret_cast<__nv_fp8_e4m3&>(SFValueFP8) = __nv_fp8_e4m3(SFValue);
-  SFValue = float(reinterpret_cast<__nv_fp8_e4m3&>(SFValueFP8));
-
-  float SFValueInv = (SFValue == 0.0f) ? 0.0f : 1.0f / SFValue;
-
-  // convert input to float2 and apply scale
   float2 fp2Vals[CVT_FP4_ELTS_PER_THREAD / 2];
 
   #pragma unroll
@@ -213,16 +357,10 @@ __global__ void scaled_fp4_quant_kernel(
     } else {
       fp2Vals[i] = __bfloat1622float2(in_vec.elts[i]);
     }
-    fp2Vals[i].x = fp2Vals[i].x * SFValueInv;
-    fp2Vals[i].y = fp2Vals[i].y * SFValueInv;
   }
 
-  // convert to e2m1
   uint32_t e2m1Vals[CVT_FP4_ELTS_PER_THREAD / 8];
-  #pragma unroll
-  for (int i = 0; i < CVT_FP4_ELTS_PER_THREAD / 8; i++) {
-    e2m1Vals[i] = fp32_vec_to_e2m1(fp2Vals + i * 4);
-  }
+  const uint8_t SFValueFP8 = quantize_fp4(fp2Vals, vecMax, e2m1Vals).__x;
 
   // save, do not check range
   if constexpr (CVT_FP4_ELTS_PER_THREAD == 8) {
@@ -261,7 +399,7 @@ template <uint32_t head_dim, uint32_t BLOCK_SIZE, typename T>
 __global__ void scaled_fp4_quant_trans_kernel(
     const T* input, uint8_t* output, uint8_t* output_sf,
     int batch_size, int num_heads, int num_tokens,
-    int stride_bz_input, int stride_h_input, int stride_seq_input,
+    int64_t stride_bz_input, int64_t stride_h_input, int64_t stride_seq_input,
     int stride_bz_output, int stride_h_output, int stride_d_output,
     int stride_bz_output_sf, int stride_h_output_sf, int stride_d_output_sf) {
   static_assert(std::is_same<T, half>::value || std::is_same<T, nv_bfloat16>::value, "Only half and bfloat16 input are supported");
@@ -301,10 +439,18 @@ __global__ void scaled_fp4_quant_trans_kernel(
   __shared__ T shared_input[BLOCK_SIZE * head_dim];
   reinterpret_cast<PackedVec*>(shared_input)[threadIdx.x] = in_vec;
   __syncthreads();
+  // On SM120, adjacent lanes read adjacent channels from each transposed token group.
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 1200
+  constexpr bool channel_first = CVT_FP4_ELTS_PER_THREAD == 16;
+#else
+  constexpr bool channel_first = false;
+#endif
+  const uint32_t channel = channel_first ? threadIdx.x % head_dim : threadIdx.x / NUM_THREADS_PER_SEQ;
+  const uint32_t token_group = channel_first ? threadIdx.x / head_dim : threadIdx.x % NUM_THREADS_PER_SEQ;
   #pragma unroll
   for (int i = 0; i < CVT_FP4_ELTS_PER_THREAD / 2; i++) {
-    in_vec.elts[i].x = shared_input[(threadIdx.x / NUM_THREADS_PER_SEQ) + ((threadIdx.x % NUM_THREADS_PER_SEQ) * CVT_FP4_ELTS_PER_THREAD + 2 * i) * head_dim];
-    in_vec.elts[i].y = shared_input[(threadIdx.x / NUM_THREADS_PER_SEQ) + ((threadIdx.x % NUM_THREADS_PER_SEQ) * CVT_FP4_ELTS_PER_THREAD + 2 * i + 1) * head_dim];
+    in_vec.elts[i].x = shared_input[channel + (token_group * CVT_FP4_ELTS_PER_THREAD + 2 * i) * head_dim];
+    in_vec.elts[i].y = shared_input[channel + (token_group * CVT_FP4_ELTS_PER_THREAD + 2 * i + 1) * head_dim];
   }
 
   // calculate max of every consecutive 16 elements
@@ -320,15 +466,6 @@ __global__ void scaled_fp4_quant_trans_kernel(
 
   float vecMax = float(__hmax(localMax.x, localMax.y));
 
-  // scaling factor
-  float SFValue = vecMax / 6.0f;
-  uint8_t SFValueFP8;
-  reinterpret_cast<__nv_fp8_e4m3&>(SFValueFP8) = __nv_fp8_e4m3(SFValue);
-  SFValue = float(reinterpret_cast<__nv_fp8_e4m3&>(SFValueFP8));
-
-  float SFValueInv = (SFValue == 0.0f) ? 0.0f : 1.0f / SFValue;
-
-  // convert input to float2 and apply scale
   float2 fp2Vals[CVT_FP4_ELTS_PER_THREAD / 2];
 
   #pragma unroll
@@ -338,46 +475,40 @@ __global__ void scaled_fp4_quant_trans_kernel(
     } else {
       fp2Vals[i] = __bfloat1622float2(in_vec.elts[i]);
     }
-    fp2Vals[i].x = fp2Vals[i].x * SFValueInv;
-    fp2Vals[i].y = fp2Vals[i].y * SFValueInv;
   }
 
-  // convert to e2m1
   uint32_t e2m1Vals[CVT_FP4_ELTS_PER_THREAD / 8];
-  #pragma unroll
-  for (int i = 0; i < CVT_FP4_ELTS_PER_THREAD / 8; i++) {
-    e2m1Vals[i] = fp32_vec_to_e2m1(fp2Vals + i * 4);
-  }
+  const uint8_t SFValueFP8 = quantize_v_fp4(fp2Vals, vecMax, e2m1Vals).__x;
 
   // save
   if constexpr (CVT_FP4_ELTS_PER_THREAD == 8) {
     reinterpret_cast<uint32_t*>(output + 
                                 batch_id * stride_bz_output +
                                 head_id * stride_h_output +
-                                (threadIdx.x / NUM_THREADS_PER_SEQ) * stride_d_output +
-                                (token_block_id * BLOCK_SIZE + (threadIdx.x % NUM_THREADS_PER_SEQ) * CVT_FP4_ELTS_PER_THREAD) / 2)[0] = e2m1Vals[0];
+                                channel * stride_d_output +
+                                (token_block_id * BLOCK_SIZE + token_group * CVT_FP4_ELTS_PER_THREAD) / 2)[0] = e2m1Vals[0];
   } else {
     reinterpret_cast<uint64_t*>(output + 
                                 batch_id * stride_bz_output +
                                 head_id * stride_h_output +
-                                (threadIdx.x / NUM_THREADS_PER_SEQ) * stride_d_output +
-                                (token_block_id * BLOCK_SIZE + (threadIdx.x % NUM_THREADS_PER_SEQ) * CVT_FP4_ELTS_PER_THREAD) / 2)[0] = reinterpret_cast<uint64_t*>(e2m1Vals)[0];
+                                channel * stride_d_output +
+                                (token_block_id * BLOCK_SIZE + token_group * CVT_FP4_ELTS_PER_THREAD) / 2)[0] = reinterpret_cast<uint64_t*>(e2m1Vals)[0];
   }
 
   uint8_t *output_sf_save_base = output_sf + 
                                 batch_id * stride_bz_output_sf +
                                 head_id * stride_h_output_sf +
-                                (threadIdx.x / NUM_THREADS_PER_SEQ / 64) * 64 * stride_d_output_sf;
-  uint32_t row_id_local = (threadIdx.x / NUM_THREADS_PER_SEQ) % 64;
+                                (channel / 64) * 64 * stride_d_output_sf;
+  uint32_t row_id_local = channel % 64;
 
   if constexpr (CVT_FP4_ELTS_PER_THREAD == 16) {
-    uint32_t col_id_local = token_block_id * BLOCK_SIZE / CVT_FP4_ELTS_PER_THREAD + threadIdx.x % NUM_THREADS_PER_SEQ;
+    uint32_t col_id_local = token_block_id * BLOCK_SIZE / CVT_FP4_ELTS_PER_THREAD + token_group;
     uint32_t offset_local = (col_id_local / 4) * 256 + (col_id_local % 4) + 
                             (row_id_local / 16) * 4 + (row_id_local % 16) * 16;
     reinterpret_cast<uint8_t*>(output_sf_save_base + offset_local)[0] = SFValueFP8;
   } else {
     if (threadIdx.x % 2 == 0) {
-      uint32_t col_id_local = token_block_id * BLOCK_SIZE / CVT_FP4_ELTS_PER_THREAD + (threadIdx.x % NUM_THREADS_PER_SEQ) / 2;
+      uint32_t col_id_local = token_block_id * BLOCK_SIZE / CVT_FP4_ELTS_PER_THREAD + token_group / 2;
       uint32_t offset_local = (col_id_local / 4) * 256 + (col_id_local % 4) + 
                               (row_id_local / 16) * 4 + (row_id_local % 16) * 16;
       reinterpret_cast<uint8_t*>(output_sf_save_base + offset_local)[0] = SFValueFP8;
@@ -388,7 +519,7 @@ __global__ void scaled_fp4_quant_trans_kernel(
 void scaled_fp4_quant(torch::Tensor const& input,
                             torch::Tensor const& output,
                             torch::Tensor const& output_sf,
-                            int tensor_layout) {
+                            int64_t tensor_layout, c10::optional<torch::Tensor> qmean) {
   constexpr int BLOCK_SIZE = 128;
   
   CHECK_CUDA(input);
@@ -426,8 +557,9 @@ void scaled_fp4_quant(torch::Tensor const& input,
     stride_h_output = output.stride(2);
     stride_h_output_sf = output_sf.stride(2);
 
-    CHECK_SHAPE(output, batch_size, num_tokens, num_heads, head_dim / 2);
-    CHECK_SHAPE(output_sf, batch_size, num_tokens, num_heads, head_dim / 16);
+    const auto padded_tokens = ((num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE;
+    CHECK_SHAPE(output, batch_size, padded_tokens, num_heads, head_dim / 2);
+    CHECK_SHAPE(output_sf, batch_size, padded_tokens, num_heads, head_dim / 16);
   } else {
     num_tokens = input.size(2);
     num_heads = input.size(1);
@@ -438,10 +570,18 @@ void scaled_fp4_quant(torch::Tensor const& input,
     stride_h_output = output.stride(1);
     stride_h_output_sf = output_sf.stride(1);
 
-    CHECK_SHAPE(output, batch_size, num_heads, num_tokens, head_dim / 2);
-    CHECK_SHAPE(output_sf, batch_size, num_heads, num_tokens, head_dim / 16);
+    const auto padded_tokens = ((num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE;
+    CHECK_SHAPE(output, batch_size, num_heads, padded_tokens, head_dim / 2);
+    CHECK_SHAPE(output_sf, batch_size, num_heads, padded_tokens, head_dim / 16);
   }
 
+  if (qmean.has_value()) {
+    const auto& mean = qmean.value();
+    CHECK_SHAPE(mean, batch_size, num_heads, (num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE, head_dim);
+    TORCH_CHECK(mean.device() == input.device() && mean.scalar_type() == at::kFloat && mean.is_contiguous(),
+                "Expected a contiguous FP32 Q mean on the input device");
+  }
+  const at::cuda::CUDAGuard device_guard(input.device());
   auto input_dtype = input.scalar_type();
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device());
 
@@ -450,15 +590,16 @@ void scaled_fp4_quant(torch::Tensor const& input,
       dim3 block(BLOCK_SIZE * HEAD_DIM / CVT_FP4_ELTS_PER_THREAD, 1, 1);
       dim3 grid((num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE, batch_size, num_heads);
 
-      scaled_fp4_quant_kernel<HEAD_DIM, BLOCK_SIZE, false, c_type>
-          <<<grid, block, 0, stream>>>(
-              reinterpret_cast<c_type*>(input.data_ptr()),
-              reinterpret_cast<uint8_t*>(output.data_ptr()),
-              reinterpret_cast<uint8_t*>(output_sf.data_ptr()),
-              batch_size, num_heads, num_tokens,
-              stride_bz_input, stride_h_input, stride_seq_input,
-              stride_bz_output, stride_h_output, stride_seq_output,
-              stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf);
+      const auto kernel = qmean.has_value()
+          ? scaled_fp4_quant_kernel<HEAD_DIM, BLOCK_SIZE, false, c_type, true>
+          : scaled_fp4_quant_kernel<HEAD_DIM, BLOCK_SIZE, false, c_type, false>;
+      kernel<<<grid, block, 0, stream>>>(
+          reinterpret_cast<c_type*>(input.data_ptr()), output.data_ptr<uint8_t>(),
+          reinterpret_cast<uint8_t*>(output_sf.data_ptr()), batch_size, num_heads, num_tokens,
+          stride_bz_input, stride_h_input, stride_seq_input,
+          stride_bz_output, stride_h_output, stride_seq_output,
+          stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf,
+          qmean.has_value() ? qmean->data_ptr<float>() : nullptr);
     });
   });
 }
@@ -466,7 +607,7 @@ void scaled_fp4_quant(torch::Tensor const& input,
 void scaled_fp4_quant_permute(torch::Tensor const& input,
                             torch::Tensor const& output,
                             torch::Tensor const& output_sf,
-                            int tensor_layout) {
+                            int64_t tensor_layout) {
   constexpr int BLOCK_SIZE = 128;
 
   CHECK_CUDA(input);
@@ -520,6 +661,7 @@ void scaled_fp4_quant_permute(torch::Tensor const& input,
     CHECK_SHAPE(output_sf, batch_size, num_heads, ((num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE, head_dim / 16);
   }
 
+  const at::cuda::CUDAGuard device_guard(input.device());
   auto input_dtype = input.scalar_type();
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device());
 
@@ -530,50 +672,59 @@ void scaled_fp4_quant_permute(torch::Tensor const& input,
       dim3 grid((num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE, batch_size, num_heads);
 
       scaled_fp4_quant_kernel<HEAD_DIM, BLOCK_SIZE, true, c_type>
-          <<<grid, block, 0, stream>>>(
-              reinterpret_cast<c_type*>(input.data_ptr()),
-              reinterpret_cast<uint8_t*>(output.data_ptr()),
-              reinterpret_cast<uint8_t*>(output_sf.data_ptr()),
-              batch_size, num_heads, num_tokens,
-              stride_bz_input, stride_h_input, stride_seq_input,
-              stride_bz_output, stride_h_output, stride_seq_output,
-              stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf);
+        <<<grid, block, 0, stream>>>(
+            reinterpret_cast<c_type*>(input.data_ptr()),
+            reinterpret_cast<uint8_t*>(output.data_ptr()),
+            reinterpret_cast<uint8_t*>(output_sf.data_ptr()),
+            batch_size, num_heads, num_tokens,
+            stride_bz_input, stride_h_input, stride_seq_input,
+            stride_bz_output, stride_h_output, stride_seq_output,
+            stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf, nullptr);
     });
   });
 }
 
-void scaled_fp4_quant_trans(torch::Tensor const& input,
+void scaled_fp4_quant_trans(torch::Tensor const& source,
                             torch::Tensor const& output,
                             torch::Tensor const& output_sf,
-                            int tensor_layout) {
+                            int64_t tensor_layout) {
   constexpr int BLOCK_SIZE = 128;
   
-  CHECK_CUDA(input);
+  CHECK_CUDA(source);
+  const c10::cuda::CUDAGuard device_guard(source.device());
   CHECK_CUDA(output);
   CHECK_CUDA(output_sf);
 
-  CHECK_LASTDIM_CONTIGUOUS(input);
+  CHECK_DIMS(source, 4);
+  // Vector loads need an aligned address for every token, including views into fused QKV.
+  const bool aligned = reinterpret_cast<uintptr_t>(source.data_ptr()) %
+                           (CVT_FP4_ELTS_PER_THREAD * source.element_size()) == 0 &&
+                       source.stride(3) == 1 &&
+                       source.stride(0) % CVT_FP4_ELTS_PER_THREAD == 0 &&
+                       source.stride(1) % CVT_FP4_ELTS_PER_THREAD == 0 &&
+                       source.stride(2) % CVT_FP4_ELTS_PER_THREAD == 0;
+  const auto input = aligned ? source : source.clone(at::MemoryFormat::Contiguous);
   CHECK_LASTDIM_CONTIGUOUS(output);
   CHECK_LASTDIM_CONTIGUOUS(output_sf);
 
   CHECK_DTYPE(output, at::ScalarType::Byte);
   CHECK_DTYPE(output_sf, at::ScalarType::Float8_e4m3fn);
 
-  CHECK_DIMS(input, 4);
   CHECK_DIMS(output, 4);
   CHECK_DIMS(output_sf, 4);
 
   const int batch_size = input.size(0);
   const int head_dim = input.size(3);
 
-  const int stride_bz_input = input.stride(0);
+  const int64_t stride_bz_input = input.stride(0);
   const int stride_bz_output = output.stride(0);
   const int stride_bz_output_sf = output_sf.stride(0);
 
   int num_tokens, num_heads;
-  int stride_seq_input; 
+  int64_t stride_seq_input;
   int stride_d_output, stride_d_output_sf;
-  int stride_h_input, stride_h_output, stride_h_output_sf;
+  int64_t stride_h_input;
+  int stride_h_output, stride_h_output_sf;
   if (tensor_layout == 0) {
     num_tokens = input.size(1);
     num_heads = input.size(2);
@@ -621,8 +772,15 @@ void scaled_fp4_quant_trans(torch::Tensor const& input,
   });
 }
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("scaled_fp4_quant", &scaled_fp4_quant);
-  m.def("scaled_fp4_quant_permute", &scaled_fp4_quant_permute);
-  m.def("scaled_fp4_quant_trans", &scaled_fp4_quant_trans);
+TORCH_LIBRARY_FRAGMENT(sageattn3, m) {
+  m.def("scaled_fp4_quant(Tensor input, Tensor(a!) output, Tensor(b!) output_sf, int tensor_layout, "
+        "Tensor(c!)? qmean=None) -> ()");
+  m.def("scaled_fp4_quant_permute(Tensor input, Tensor(a!) output, Tensor(b!) output_sf, int tensor_layout) -> ()");
+  m.def("scaled_fp4_quant_trans(Tensor input, Tensor(a!) output, Tensor(b!) output_sf, int tensor_layout) -> ()");
+}
+
+TORCH_LIBRARY_IMPL(sageattn3, CUDA, m) {
+  m.impl("scaled_fp4_quant", &scaled_fp4_quant);
+  m.impl("scaled_fp4_quant_permute", &scaled_fp4_quant_permute);
+  m.impl("scaled_fp4_quant_trans", &scaled_fp4_quant_trans);
 }

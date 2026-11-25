@@ -34,7 +34,10 @@ cmdclass = {}
 
 if not SKIP_CUDA_BUILD:
     import torch
+    from torch.utils import cpp_extension
     from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
+
+    cpp_extension.min_supported_cpython = "0x030A0000"
 
     HAS_SM80 = False
     HAS_SM86 = False
@@ -47,28 +50,33 @@ if not SKIP_CUDA_BUILD:
     # Supported NVIDIA GPU architectures.
     SUPPORTED_ARCHS = {"8.0", "8.6", "8.9", "9.0", "10.0", "12.0", "12.1"}
 
-    # Compiler flags.
-    CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
-    NVCC_FLAGS = [
-        "-O3",
-        "-std=c++17",
-        "-U__CUDA_NO_HALF_OPERATORS__",
-        "-U__CUDA_NO_HALF_CONVERSIONS__",
-        "--use_fast_math",
-        "--threads=8",
-        "-Xptxas=-v",
-        "-diag-suppress=174",
-    ]
+    # Let PyTorch's BuildExtension select the matching C++ standard for CXX/NVCC.
+    if os.name == "nt":
+        CXX_FLAGS = ["/Zi", "/openmp", "/Zc:__cplusplus", "/DENABLE_BF16", "/MD", "/permissive-"]
+        NVCC_FLAGS = [
+            "-O3",
+            "-U__CUDA_NO_HALF_OPERATORS__",
+            "-U__CUDA_NO_HALF_CONVERSIONS__",
+            "--use_fast_math",
+            "--threads=8",
+            "-diag-suppress=174,3189",
+            "-D_WIN32=1",
+            "-DUSE_CUDA=1",
+        ]
+        NVCC_FLAGS += [f"-Xcompiler={flag}" for flag in CXX_FLAGS]
+        CXX_FLAGS += ["/O2"]
+    else:
+        CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-DENABLE_BF16"]
+        NVCC_FLAGS = [
+            "-O3",
+            "-U__CUDA_NO_HALF_OPERATORS__",
+            "-U__CUDA_NO_HALF_CONVERSIONS__",
+            "--use_fast_math",
+            "--threads=8",
+            "-diag-suppress=174,3189",
+        ]
 
-    # Append flags from env if provided
-    cxx_append = os.getenv("CXX_APPEND_FLAGS", "").strip()
-    if cxx_append:
-        CXX_FLAGS += cxx_append.split()
-    nvcc_append = os.getenv("NVCC_APPEND_FLAGS", "").strip()
-    if nvcc_append:
-        NVCC_FLAGS += nvcc_append.split()
-
-    ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
+    ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI and os.name != "nt" else 0
     CXX_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
     NVCC_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
 
@@ -120,6 +128,11 @@ if not SKIP_CUDA_BUILD:
 
     nvcc_cuda_version = get_nvcc_cuda_version(CUDA_HOME)
 
+    # CUDA 13.2+ CCCL headers require MSVC's conforming preprocessor.
+    if os.name == "nt" and nvcc_cuda_version >= Version("13.2"):
+        CXX_FLAGS.append("/Zc:preprocessor")
+        NVCC_FLAGS.append("-Xcompiler=/Zc:preprocessor")
+
     if not compute_capabilities:
         raise RuntimeError(
             "No target compute capabilities. Set TORCH_CUDA_ARCH_LIST or build on a machine with GPUs.")
@@ -140,6 +153,7 @@ if not SKIP_CUDA_BUILD:
             "CUDA 12.8 or higher is required for compute capability 12.0.")
 
     # Add target compute capabilities to NVCC flags.
+    NVCC_FLAGS_SM90 = list(NVCC_FLAGS)
     for capability in compute_capabilities:
         if capability.startswith("8.0"):
             HAS_SM80 = True
@@ -153,15 +167,18 @@ if not SKIP_CUDA_BUILD:
         elif capability.startswith("9.0"):
             HAS_SM90 = True
             num = "90a"
+            NVCC_FLAGS_SM90 += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
+            if capability.endswith("+PTX"):
+                NVCC_FLAGS_SM90 += ["-gencode", f"arch=compute_{num},code=compute_{num}"]
         elif capability.startswith("10.0"):
             HAS_SM100 = True
-            num = "100a"
+            num = "100a"            
         elif capability.startswith("12.0"):
             HAS_SM120 = True
-            num = "120a"
+            num = "120a"            
         elif capability.startswith("12.1"):
             HAS_SM121 = True
-            num = "121a"
+            num = "121a"            
         else:
             continue
         NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
@@ -175,8 +192,9 @@ if not SKIP_CUDA_BUILD:
         ext_modules.append(
             CUDAExtension(
                 name="sageattention._qattn_sm80",
+                py_limited_api=True,
                 sources=[
-                    "csrc/qattn/pybind_sm80.cpp",
+                    "csrc/qattn/ops_sm80.cpp",
                     "csrc/qattn/qk_int_sv_f16_cuda_sm80.cu",
                 ],
                 extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
@@ -187,8 +205,9 @@ if not SKIP_CUDA_BUILD:
         ext_modules.append(
             CUDAExtension(
                 name="sageattention._qattn_sm89",
+                py_limited_api=True,
                 sources=[
-                    "csrc/qattn/pybind_sm89.cpp",
+                    "csrc/qattn/ops_sm89.cpp",
                     "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_attn_inst_buf.cu",
                     "csrc/qattn/sm89_qk_int8_sv_f8_accum_f16_attn_inst_buf.cu",
                     "csrc/qattn/sm89_qk_int8_sv_f8_accum_f32_attn.cu",
@@ -201,23 +220,31 @@ if not SKIP_CUDA_BUILD:
             )
         )
 
+    cuda_lib = []
+    if os.name == "nt":
+        cuda_lib = ["cuda.lib"]
+    else:
+        cuda_lib = ["-lcuda"]
+
     if HAS_SM90:
         ext_modules.append(
             CUDAExtension(
                 name="sageattention._qattn_sm90",
+                py_limited_api=True,
                 sources=[
-                    "csrc/qattn/pybind_sm90.cpp",
+                    "csrc/qattn/ops_sm90.cpp",
                     "csrc/qattn/qk_int_sv_f8_cuda_sm90.cu",
                 ],
-                extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
-                extra_link_args=['-lcuda'],
+                extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS_SM90},
+                extra_link_args=cuda_lib,
             )
         )
 
     ext_modules.append(
         CUDAExtension(
             name="sageattention._fused",
-            sources=["csrc/fused/pybind.cpp", "csrc/fused/fused.cu"],
+            py_limited_api=True,
+            sources=["csrc/fused/ops.cpp", "csrc/fused/fused.cu"],
             extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
         )
     )
@@ -243,6 +270,10 @@ if not SKIP_CUDA_BUILD:
     class BuildExtensionSeparateDir(BuildExtension):
         build_extension_patch_lock = threading.Lock()
         thread_ext_name_map = {}
+
+        def get_export_symbols(self, ext):
+            # Dispatcher libraries have no PyInit symbol for MSVC to export.
+            return []
 
         def finalize_options(self):
             if parallel is not None:
@@ -279,7 +310,8 @@ setup(
     long_description_content_type='text/markdown',
     url='https://github.com/thu-ml/SageAttention',
     packages=find_packages(),
-    python_requires='>=3.9',
+    python_requires='>=3.10',
     ext_modules=ext_modules,
     cmdclass=cmdclass,
+    options={"bdist_wheel": {"py_limited_api": "cp310"}},
 )
