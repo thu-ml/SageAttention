@@ -283,7 +283,13 @@ __global__ void TransposePadPermuteKernel(T *__restrict__ input, T *__restrict__
   T *input_ptr_base = input + batch_id * stride_bz_input + head_id * stride_h_input + thread_base_token * stride_seq_input + thread_id % num_threads_per_token * pack_size;
   T* output_ptr_base = output + batch_id * stride_bz_output + head_id * stride_h_output + bx * CTA_SIZE + thread_id % num_threads_per_cta * pack_size + thread_id / num_threads_per_cta * stride_d_output;
 
-  __shared__ T shared_load[CTA_SIZE][head_dim];
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 1200
+  // Offset consecutive rows by one vector to reduce bank conflicts during transpose.
+  constexpr uint32_t load_stride = head_dim + pack_size;
+#else
+  constexpr uint32_t load_stride = head_dim;
+#endif
+  __shared__ T shared_load[CTA_SIZE][load_stride];
   __shared__ T shared_store[head_dim][CTA_SIZE];
 
   // 0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15

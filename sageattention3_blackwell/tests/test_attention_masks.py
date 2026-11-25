@@ -44,6 +44,37 @@ class AttentionMaskTest(unittest.TestCase):
             self.assertIs(route(q, q, q), direct.return_value)
 
     @torch.inference_mode()
+    def test_mean_correction_groups_query_heads_and_rounds_to_bf16(self):
+        for dim in (64, 128):
+            q = torch.randn(2, 6, 7, dim, device="cuda", dtype=torch.bfloat16)
+            k = torch.randn(2, 2, 131, dim, device="cuda", dtype=torch.bfloat16)
+            result = self.api._mean_correction(q, k)
+            reference = (q.reshape(2, 2, 21, dim) @ k.transpose(-2, -1)).reshape_as(result)
+            self.assertEqual(result.dtype, torch.float32)
+            self.assertTrue(result.is_contiguous())
+            torch.testing.assert_close(result, result.bfloat16().float(), rtol=0, atol=0)
+            torch.testing.assert_close(result, reference.float(), rtol=0.008, atol=0.0001)
+
+    @torch.inference_mode()
+    def test_graph_replay_keeps_each_launch_parameters(self):
+        graphs = []
+        for length, dim, causal in ((2048, 128, False), (257, 64, True)):
+            q, k, v = (torch.randn(1, 2, length, dim, device="cuda", dtype=torch.bfloat16)
+                       for _ in range(3))
+            self.api.sageattn3_blackwell(q, k, v, is_causal=causal)
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                output = self.api.sageattn3_blackwell(q, k, v, is_causal=causal)
+            graphs.append((graph, q, k, v, output, causal))
+
+        for _ in range(3):
+            for graph, q, k, v, output, causal in graphs:
+                v.normal_()
+                expected = self.api.sageattn3_blackwell(q, k, v, is_causal=causal)
+                graph.replay()
+                torch.testing.assert_close(output, expected, rtol=0, atol=0)
+
+    @torch.inference_mode()
     def test_causal_mask_keeps_the_previous_block(self):
         for dtype in (torch.float16, torch.bfloat16):
             for length, dim in ((259, 64), (512, 128)):
@@ -98,6 +129,24 @@ class AttentionMaskTest(unittest.TestCase):
                 )
                 torch.testing.assert_close(actual, expected, rtol=0, atol=0)
                 torch.testing.assert_close(k, original_k, rtol=0, atol=0)
+
+    @torch.inference_mode()
+    def test_v_quantizer_handles_strided_views_and_tail(self):
+        for dtype in (torch.float16, torch.bfloat16):
+            for dim in (64, 128):
+                packed = torch.randn(2, 131, 3, 4, dim, device="cuda", dtype=dtype)
+                fused = packed[:, :, 2].transpose(1, 2)
+                storage = torch.randn(2 * 4 * 128 * dim + 1, device="cuda", dtype=dtype)
+                offset = storage[1:].view(2, 4, 128, dim)
+                wide = torch.randn(2, 4, 131, 2 * dim, device="cuda", dtype=dtype)
+                for v in (fused, offset, wide[..., ::2]):
+                    with self.subTest(dtype=dtype, dim=dim, strides=v.stride()):
+                        ref = v.new_zeros((*v.shape[:2], (v.size(2) + 127) // 128 * 128, dim))
+                        ref[:, :, :v.size(2)].copy_(v)
+                        actual = self.api.scale_and_quant_fp4_transpose(v)
+                        expected = self.api.scale_and_quant_fp4_transpose(ref)
+                        for result, reference in zip(actual, expected):
+                            self.assertTrue(torch.equal(result.view(torch.uint8), reference.view(torch.uint8)))
 
     @torch.inference_mode()
     def test_ragged_chunking_matches_full_attention(self):

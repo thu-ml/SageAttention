@@ -17,6 +17,8 @@
 #pragma once
 
 #include <ATen/cuda/CUDAContext.h>
+#include <cstdint>
+#include <cstring>
 
 #include "cute/tensor.hpp"
 
@@ -28,6 +30,24 @@
 #include "kernel_ws.h"
 #include "kernel_traits.h"
 
+
+#if defined(_MSC_VER)
+namespace flash {
+
+// CUDA copies by-value arguments into the launch, including during graph capture.
+template <size_t Bytes>
+struct LaunchWords {
+    static_assert(Bytes % sizeof(uint4) == 0 && Bytes <= 4096);
+    uint4 words[Bytes / sizeof(uint4)];
+};
+
+template <size_t Bytes>
+__global__ void stage_attention_params(uint4* dst, const __grid_constant__ LaunchWords<Bytes> src) {
+    dst[threadIdx.x] = src.words[threadIdx.x];
+}
+
+}  // namespace flash
+#endif
 
 template<typename Kernel_traits, bool Is_causal>
 void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
@@ -96,45 +116,27 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
     cutlass::ClusterLaunchParams launch_params{grid_dims, block_dims, cluster_dims, smem_size, stream};
 
 #if defined(_MSC_VER)
-    // MSVC: Use parameter packing to pass parameters to avoid over-aligned parameters reporting a C2719 error.
-
-    struct DeviceParamsPack {
+    struct Params {
         Flash_fwd_params params;
         typename CollectiveMainloop::Params mainloop;
         typename CollectiveEpilogue::Params epilogue;
         typename Scheduler::Params scheduler;
     };
+    Params host_params{params, mainloop_params, epilogue_params, scheduler_params};
+    flash::LaunchWords<sizeof(Params)> words;
+    std::memcpy(&words, &host_params, sizeof(Params));
 
-    DeviceParamsPack h_pack{params, mainloop_params, epilogue_params, scheduler_params};
-
-    DeviceParamsPack *d_pack = nullptr;
-    C10_CUDA_CHECK(cudaMallocAsync(&d_pack, sizeof(DeviceParamsPack), stream));
-    C10_CUDA_CHECK(cudaMemcpyAsync(
-        d_pack, &h_pack, sizeof(DeviceParamsPack),
-        cudaMemcpyHostToDevice, stream));
-    
-    char *base_h = reinterpret_cast<char*>(&h_pack);
-    auto off_params   = reinterpret_cast<char*>(&h_pack.params)    - base_h;
-    auto off_mainloop = reinterpret_cast<char*>(&h_pack.mainloop)  - base_h;
-    auto off_epilogue = reinterpret_cast<char*>(&h_pack.epilogue)  - base_h;
-    auto off_sched    = reinterpret_cast<char*>(&h_pack.scheduler) - base_h;
-
-    char *base_d = reinterpret_cast<char*>(d_pack);
-
-    auto d_params = reinterpret_cast<Flash_fwd_params*>(base_d + off_params);
-    auto d_mainloop_params =
-        reinterpret_cast<typename CollectiveMainloop::Params *>(base_d + off_mainloop);
-    auto d_epilogue_params =
-        reinterpret_cast<typename CollectiveEpilogue::Params *>(base_d + off_epilogue);
-    auto d_scheduler_params =
-        reinterpret_cast<typename Scheduler::Params *>(base_d + off_sched);
-    
-    cutlass::launch_kernel_on_cluster(
-        launch_params, kernel,
-        d_params, d_mainloop_params, d_epilogue_params, d_scheduler_params);
-    
-    C10_CUDA_CHECK(cudaFreeAsync(d_pack, stream));
-
+    // The tensor maps need their native alignment, including with custom CUDA allocators.
+    auto storage = at::empty({int64_t(sizeof(Params) + alignof(Params) - 1)},
+                             at::TensorOptions().device(at::kCUDA).dtype(at::kByte));
+    auto address = reinterpret_cast<std::uintptr_t>(storage.data_ptr());
+    auto aligned = (address + alignof(Params) - 1) & ~(std::uintptr_t(alignof(Params)) - 1);
+    auto* device_params = reinterpret_cast<Params*>(aligned);
+    flash::stage_attention_params<<<1, sizeof(Params) / sizeof(uint4), 0, stream>>>(
+        reinterpret_cast<uint4*>(device_params), words);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    cutlass::launch_kernel_on_cluster(launch_params, kernel, &device_params->params,
+        &device_params->mainloop, &device_params->epilogue, &device_params->scheduler);
 #else
     cutlass::launch_kernel_on_cluster(launch_params, kernel, params, mainloop_params, epilogue_params, scheduler_params);
 #endif

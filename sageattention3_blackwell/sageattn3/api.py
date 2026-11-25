@@ -330,10 +330,45 @@ def _center_q(q, per_block_mean):
     return q - qm, qm
 
 
+@triton.jit
+def _mean_correction_kernel(
+    qm, k, out, rows: tl.constexpr, tokens: tl.constexpr, dim: tl.constexpr,
+    tile_m: tl.constexpr, tile_n: tl.constexpr,
+):
+    tiles_n = tl.cdiv(tokens, tile_n)
+    tiles_m = tl.cdiv(rows, tile_m)
+    pid = tl.program_id(0)
+    head = (pid // (tiles_m * tiles_n)).to(tl.int64)
+    m = (pid // tiles_n % tiles_m) * tile_m + tl.arange(0, tile_m)
+    n = (pid % tiles_n) * tile_n + tl.arange(0, tile_n)
+    d = tl.arange(0, dim)
+    q_block = tl.load(qm + (head * rows + m[:, None]) * dim + d[None, :],
+                      mask=m[:, None] < rows, other=0)
+    k_block = tl.load(k + (head * tokens + n[:, None]) * dim + d[None, :],
+                      mask=n[:, None] < tokens, other=0)
+    # Match the BF16 matmul rounding before storing the FP32 correction for TMA.
+    correction = tl.dot(q_block, tl.trans(k_block)).to(tl.bfloat16).to(tl.float32)
+    tl.store(out + (head * rows + m[:, None]) * tokens + n[None, :], correction,
+             mask=(m[:, None] < rows) & (n[None, :] < tokens))
+
+
 def _mean_correction(qm, k):
     batch, heads, blocks, dim = qm.shape
     # Group Q rows for each KV head so the matmul doesn't expand K.
     qm = qm.reshape(batch, k.size(1), -1, dim)
+    if (sys.platform == "win32" and qm.is_cuda and qm.device == k.device
+            and qm.dtype == k.dtype == torch.bfloat16 and dim in (64, 128)
+            and qm.numel() and k.numel() and qm.is_contiguous() and k.is_contiguous()
+            and not torch.is_autocast_enabled()
+            and not (torch.is_grad_enabled() and (qm.requires_grad or k.requires_grad))
+            and torch.cuda.get_device_capability(qm.device) == (12, 0)):
+        rows, tokens = qm.size(2), k.size(2)
+        out = torch.empty((batch, heads, blocks, tokens), device=qm.device, dtype=torch.float32)
+        tile_m, tile_n = 32, 64
+        grid = (batch * k.size(1) * triton.cdiv(rows, tile_m) * triton.cdiv(tokens, tile_n),)
+        with torch.cuda.device(qm.device):
+            _mean_correction_kernel[grid](qm, k, out, rows, tokens, dim, tile_m, tile_n, num_warps=4)
+        return out
     return (qm @ k.transpose(-2, -1)).reshape(batch, heads, blocks, k.size(2)).float().contiguous()
 
 
@@ -454,7 +489,7 @@ def _sageattn3_blackwell(q, k, v, attn_mask, is_causal, per_block_mean, sm_scale
 
     k = _center_k(k)
     packed_k = scale_and_quant_fp4_permute(k)
-    packed_v = scale_and_quant_fp4_transpose(pad_128(v))
+    packed_v = scale_and_quant_fp4_transpose(v)
 
     def attention(q_chunk):
         packed_q, qm = _prepare_q(q_chunk, per_block_mean)

@@ -9,8 +9,9 @@ This fork began as a small set of Windows build and packaging patches for [SageA
 
 ## Optimizations in this fork
 
-- **SageAttention 2.2** uses standard E4M3 conversion and, where supported, normalizes attention with row sums from the rounded FP8 probabilities. Paths that return log-sum-exp retain FP32 row sums. [VC-Attention](https://arxiv.org/abs/2609.15810)
+- **SageAttention 2.2** uses standard E4M3 conversion and, where supported, normalizes attention with row sums from the rounded FP8 probabilities. Paths that return log-sum-exp retain FP32 row sums. On SM120, the V transpose pads shared-memory rows to reduce bank conflicts. [VC-Attention](https://arxiv.org/abs/2609.15810)
 - **SageAttention 3** fuses 128-token Q block centering with FP4 quantization for aligned inputs. Each 16-element Q and K block evaluates five E4M3 scales derived from `amax / {6, 5.5, 5, 4.5, 4}`. Each V channel evaluates `amax / 6` and its neighboring finite E4M3 encodings over 16 consecutive tokens. The quantizers pick the candidates with the lowest reconstruction error. [#411](https://github.com/thu-ml/SageAttention/pull/411) · [Four Over Six](https://arxiv.org/abs/2512.02010) · [ScaleSweep](https://arxiv.org/abs/2606.07618)
+- The Sage3 V quantizer reads aligned strided views directly and pads the final token block in the kernel. On Windows SM120, Sage3 also fuses the BF16 mean-correction matmul, rounding, and FP32 writeback. Each Windows launch retains its own TMA parameters during CUDA Graph replay.
 - **Shape routing** lets the Sage3 entry point choose Sage 2.2 on Windows RTX 5090 with PyTorch 2.12.1+cu130 and a compatible Sage 2.2 installation. The cutoff covers every sequence length from 255 through the inclusive limit for the head count, head width, and Q/K/V strides. Eligible calls use eager, non-causal BF16 self-attention with batch size 1, equal Q/K/V shapes, per-block means, and no mask or explicit chunk size.
 - **Windows builds** use the PyTorch dispatcher and the CPython stable ABI, with FakeTensor support for `torch.compile`. CUDA 13.x builds handle the Windows SAL and CCCL header conflict. CUDA 13.2 and later use MSVC’s conforming preprocessor.
 
@@ -31,7 +32,7 @@ The current wheel matrix includes CUDA 13.0, 13.2, and 13.4 with PyTorch release
 
 The SageAttention 2.2 wheels cover Ampere, Ada, Hopper, and Blackwell where the matching CUDA toolkit supports the architecture. The SageAttention 3 wheels target Blackwell `sm_120` on CUDA 12.8 and `sm_120`/`sm_121` on CUDA 13.x.
 
-The published [20261123 wheels](https://github.com/mengqin/SageAttention/releases/tag/20261123) were built from `52c3115`. The V three-candidate quantizer and shape routing are on newer `main`. The current measurements below use the routing build from `9c8bd90`.
+The 20261123 release was built from `52c3115`. The attention benchmarks below use local `+cu130torch2121.tune2` wheels with the three-candidate V quantizer, shape routing, and SM120 kernel updates. [20261123 wheels](https://github.com/mengqin/SageAttention/releases/tag/20261123)
 
 Install the selected wheel with `python -m pip install <wheel-file.whl>` in the environment that runs your application. The [SageAttention 3 README](sageattention3_blackwell/README.md) and [upstream documentation](https://github.com/thu-ml/SageAttention/tree/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5#installation) cover source builds and additional API options.
 
@@ -54,18 +55,20 @@ Each cell reports attention P50 and relative L1 error.
 
 | H3 replay | Tokens | Routed backend | Our Sage 2.2 | Our Sage3 | Our Sage3 shape routing |
 | --- | ---: | --- | ---: | ---: | ---: |
-| Image 1024² | 3,097 | Sage 2.2 | 0.806 ms / 1.06% | 1.218 ms / 6.06% | 0.820 ms / 1.06% |
-| Video 768 × 448, 39 frames | 4,862 | Sage3 | 1.546 ms / 1.17% | 1.719 ms / 6.73% | 1.754 ms / 6.73% |
-| Image 2048² | 9,241 | Sage3 | 5.012 ms / 0.86% | 4.344 ms / 5.21% | 4.365 ms / 5.21% |
-| Video 768 × 448, 124 frames | 13,546 | Sage3 | 10.115 ms / 1.09% | 8.197 ms / 6.63% | 8.213 ms / 6.63% |
+| Image 1024² | 3,097 | Sage 2.2 | 0.725 ms / 1.06% | 0.724 ms / 6.06% | 0.735 ms / 1.06% |
+| Video 768 × 448, 39 frames | 4,862 | Sage3 | 1.450 ms / 1.17% | 1.232 ms / 6.73% | 1.236 ms / 6.73% |
+| Image 2048² | 9,241 | Sage3 | 4.606 ms / 0.86% | 3.638 ms / 5.21% | 3.643 ms / 5.21% |
+| Video 768 × 448, 124 frames | 13,546 | Sage3 | 9.173 ms / 1.09% | 6.925 ms / 6.63% | 6.929 ms / 6.63% |
 
-At 3,097 tokens, shape routing lowers P50 by **32.7%** and relative L1 from **6.06% to 1.06%** versus direct Sage3. The two longest H3 replays route to Sage3 and cut P50 by **12.9% and 18.8%** versus direct Sage 2.2. The 4,862-token video falls above the calibrated 4,736-token cutoff for fused Q/K/V with 56 heads and head width 128. Direct Sage 2.2 was faster on that replay. For the four Gaussian workloads routed to Sage 2.2, shape routing lowers P50 by **9.5%–23.3%** and relative L1 from about **17.5%–17.7% to 3.9%** versus direct Sage3.
+At 3,097 tokens, shape routing selects Sage 2.2. Relative L1 drops from **6.06% to 1.06%** and P50 rises from 0.724 to 0.735 ms compared with direct Sage3. The other three H3 workloads exceed the 4,736-token cutoff and route to Sage3. Their routed P50 is **14.8%, 20.9%, and 24.5% lower** than direct Sage 2.2, respectively.
 
-The tests use CUDA events to time the full attention call, including online preprocessing, on Windows with RTX 5090 and PyTorch 2.12.1+cu130. Each arm has 18 warmups and 60 timed calls per sample. H3 uses three layer captures per workload, with Image captures from the public Comfy-Org checkpoint. Gaussian workloads use two seeds. The chart and table report medians across samples. Error uses 96 query positions against FP32 attention with the full K/V sequence and TF32 disabled. All 24 routed outputs matched the outputs of their selected backends bitwise. The process used at most **88 MiB of shared GPU memory** in WDDM sampling. [Per-sample P50, P95, L1, L2, and peak allocation](assets/windows-comparison/shape-routing-benchmark.csv)
+Four Gaussian shapes route to Sage 2.2, reducing relative L1 from **17.5%–17.7% to about 3.9%** versus direct Sage3. Latency depends on the shape. At head width 64 and 12,288 tokens, routing lowers P50 by 5.1%. At head width 128 and 7,680 tokens, routing raises P50 by 26.5% (1.220 to 1.543 ms).
+
+The tests use CUDA events to time a single eager attention call, including online preprocessing, on Windows with RTX 5090 and PyTorch 2.12.1+cu130. Each arm has 18 warmups and 60 timed calls per sample. H3 uses three layer captures per workload, with Image captures from the public Comfy-Org checkpoint. Gaussian workloads use two seeds. The chart and table report medians across samples. Error uses 96 query positions against FP32 attention with the full K/V sequence and TF32 disabled. All 24 routed outputs matched their selected backends bitwise. Relative L1 and L2 matched the previous benchmark for all 72 measurements. WDDM sampling recorded a peak of **86 MiB** of shared GPU memory for the process and **4.87 GiB** of dedicated GPU memory for the adapter. [Per-sample P50, P95, L1, L2, and peak allocation](assets/windows-comparison/shape-routing-benchmark.csv)
 
 ## MiniMax H3 Image examples
 
-Both resolutions use the same three prompts and seeds, the public Comfy-Org INT8 ConvRot checkpoint, a black reference image, six-step Euler sampling with CFG 1, and tiled VAE decoding. Within each resolution, the comparison varies the attention backend in the 50 diffusion transformer blocks. The upstream columns use attention logic from `d1a57a5` with the Windows build and launch compatibility changes from `06f8d49`.
+The images and RGB metrics below come from the earlier rendering runs. Both resolutions use the same three prompts and seeds, the public Comfy-Org INT8 ConvRot checkpoint, a black reference image, six-step Euler sampling with CFG 1, and tiled VAE decoding. Within each resolution, the comparison varies the attention backend in the 50 diffusion transformer blocks. The upstream columns use attention logic from `d1a57a5` with the Windows build and launch compatibility changes from `06f8d49`.
 
 ### 1024 × 1024
 
@@ -89,7 +92,7 @@ The first five columns use the original full-frame renders from the upstream com
 
 Against the cuDNN SDPA reference, our Sage3 lowers RGB MAE and raises PSNR in all three scenes compared with upstream Sage3. The largest MAE drop is in the architecture scene, from 20.98 to 15.92 on the 0–255 RGB scale. Our Sage2.2 lowers MAE for the portrait and raises it for the textiles and architecture scenes.
 
-The new shape routing runs selected Sage3 for all 300 attention calls per scene at 21,565–21,584 tokens. Each routed PNG was byte-identical to a direct Sage3 PNG rendered in the same run.
+Shape routing selected Sage3 for all 300 attention calls per scene at 21,565–21,584 tokens. Each routed PNG was byte-identical to a direct Sage3 PNG rendered in the same run.
 
 <details>
 <summary>Prompts and sampling settings</summary>
